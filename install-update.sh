@@ -40,13 +40,43 @@ VERSION_MARKER=".installed_version.json"
 SOURCE="${TOOLKIT_SOURCE:-}"
 FORCE=0
 DRYRUN=0
+ACTION=""            # "", install, repair, uninstall  (empty = ask, if we can)
 for a in "$@"; do
   case "$a" in
-    --force)   FORCE=1 ;;
-    --dry-run) DRYRUN=1 ;;
-    --source=*) SOURCE="${a#--source=}" ;;
+    --force)     FORCE=1 ;;
+    --dry-run)   DRYRUN=1 ;;
+    --source=*)  SOURCE="${a#--source=}" ;;
+    --install)   ACTION="install" ;;
+    --repair)    ACTION="repair"; FORCE=1 ;;
+    --uninstall) ACTION="uninstall" ;;
   esac
 done
+
+# --- Asking a question when stdin is not available --------------------------
+# Under `curl … | bash` the SCRIPT arrives on stdin, so `read` would consume the
+# script's own next line as the answer - silently, eating the rest of itself.
+# The terminal is still reachable as /dev/tty, so that is where questions go.
+#
+# `[ -r /dev/tty ]` is not a usable test for this: on a machine with no
+# controlling terminal it returns true and the read then fails with "Device not
+# configured". Measured. So the file is actually opened, and failing to open it
+# is what means "nobody is there".
+ask() {  # $1 = prompt; echoes the answer, returns 1 when there is no terminal
+  if [ -t 0 ]; then
+    printf '%s' "$1" >&2
+    IFS= read -r __ans || return 1
+    printf '%s' "$__ans"; return 0
+  fi
+  # The redirection must be inside the group. `exec 3</dev/tty 2>/dev/null`
+  # does not work: redirections are applied left to right, so opening /dev/tty
+  # fails and prints "Device not configured" BEFORE the 2>/dev/null that was
+  # meant to hide it takes effect. Measured - the error reached the user on a
+  # machine with no controlling terminal.
+  { exec 3</dev/tty; } 2>/dev/null || return 1
+  printf '%s' "$1" >&2
+  if IFS= read -r __ans <&3; then exec 3<&-; printf '%s' "$__ans"; return 0; fi
+  { exec 3<&-; } 2>/dev/null; return 1
+}
 
 WORK=""
 cleanup() { [ -n "$WORK" ] && [ -d "$WORK" ] && rm -rf "$WORK" || true; }
@@ -140,6 +170,23 @@ install_into() {  # $1 = panel dir, $2 = payload dir, $3 = version ; echo result
   echo "installed"
 }
 
+# --- 4c. 卸载 ----------------------------------------------------------------
+# Same guard as installing, for the same reason: a link here is a development
+# bridge, and removing it takes away someone's connection to their working tree.
+# An uninstall that quietly did that would look like it worked.
+uninstall_from() {  # $1 = panel dir ; echoes result
+  local dst="$1/$INSTALL_FOLDER"
+  if [ -L "$dst" ]; then echo "blocked"; return 0; fi
+  [ -d "$dst" ] || { echo "absent"; return 0; }
+  if [ "$DRYRUN" = "1" ]; then echo "would-remove"; return 0; fi
+  rm -rf "$dst" && echo "removed" || echo "failed"
+}
+
+installed_version_at() {  # $1 = panel dir
+  local mk="$1/$INSTALL_FOLDER/$VERSION_MARKER"
+  [ -f "$mk" ] && read_version "$mk" 2>/dev/null || true
+}
+
 # --- 4b. 清理旧名字下的安装 (仅当确实是我们装的) -----------------------------
 # Runs only AFTER a successful install, so a failure never leaves the panel with
 # neither folder.
@@ -188,6 +235,102 @@ PANELS="$(find_panels)"
 if [ -z "$PANELS" ]; then
   say "No InDesign installation found. Install and launch InDesign once, then run this again."
   exit 3
+fi
+
+# --- 状态 + 菜单 --------------------------------------------------------------
+# Only when no action was given on the command line AND a terminal is reachable.
+# Everything scripted - automation, CI, the bootstraps' own --source hand-off -
+# keeps the old behaviour of just installing, so adding a menu cannot silently
+# turn an unattended run into one that waits forever for an answer.
+RVER=""
+if [ -z "$SOURCE" ]; then
+  MURL0="${TOOLKIT_MANIFEST_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/$REF/$MANIFEST_NAME}"
+  pa0=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && pa0=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
+  RM0="$(curl -fsSL ${pa0[@]+"${pa0[@]}"} "$MURL0" 2>/dev/null || true)"
+  [ -n "$RM0" ] && RVER="$(printf '%s' "$RM0" | { grep -m1 '"version"' || true; } \
+    | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+fi
+
+# Is there anyone to ask? Checked BEFORE printing anything, so an unattended run
+# does not emit a menu nobody can answer - which is just noise in a CI log, and
+# worse, reads like it stopped and waited.
+has_tty() {
+  [ -t 0 ] && return 0
+  { exec 4</dev/tty; } 2>/dev/null || return 1
+  { exec 4<&-; } 2>/dev/null; return 0
+}
+if [ -z "$ACTION" ] && ! has_tty; then ACTION="install"; fi
+
+if [ -z "$ACTION" ]; then
+  INSTALLED_ANY=0; ALL_CURRENT=1
+  say ""
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    lv="$(installed_version_at "$p")"
+    label="$(printf '%s' "$p" | sed -E 's#.*/Adobe InDesign/([^/]*)/([^/]*)/.*#\1 (\2)#')"
+    if [ -L "$p/$INSTALL_FOLDER" ]; then
+      say "  ${label}: a link is in the way (development bridge) - see DEV-BRIDGE.md"
+    elif [ -n "$lv" ]; then
+      INSTALLED_ANY=1
+      if [ -n "$RVER" ] && [ "$lv" != "$RVER" ]; then
+        ALL_CURRENT=0; say "  ${label}: installed v${lv} - v${RVER} available"
+      else
+        say "  ${label}: installed v${lv}"
+      fi
+    else
+      ALL_CURRENT=0; say "  ${label}: not installed"
+    fi
+  done <<< "$PANELS"
+
+  say ""
+  if [ "$INSTALLED_ANY" = "1" ] && [ "$ALL_CURRENT" = "1" ]; then
+    say "  1) Reinstall (repair)"
+  elif [ "$INSTALLED_ANY" = "1" ]; then
+    say "  1) Update"
+  else
+    say "  1) Install"
+  fi
+  say "  2) Repair    - reinstall, replacing whatever is there"
+  say "  3) Uninstall - remove the installed scripts"
+  say "  q) Quit"
+  say ""
+  CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
+  case "$CHOICE" in
+    __NOTTY__) ACTION="install" ;;              # nobody to ask - behave as before
+    ""|1)      ACTION="install" ;;
+    2)         ACTION="repair"; FORCE=1 ;;
+    3)         ACTION="uninstall" ;;
+    q|Q)       say ""; say "Nothing was changed."; exit 0 ;;
+    *)         say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
+  esac
+  say ""
+fi
+
+if [ "$ACTION" = "uninstall" ]; then
+  REMOVED=0; BLOCKED_U=0; ABSENT=0; UFAILED=0
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    case "$(uninstall_from "$p")" in
+      removed)      REMOVED=$((REMOVED+1)) ;;
+      would-remove) REMOVED=$((REMOVED+1)) ;;
+      blocked)      BLOCKED_U=$((BLOCKED_U+1)) ;;
+      absent)       ABSENT=$((ABSENT+1)) ;;
+      *)            UFAILED=$((UFAILED+1)) ;;
+    esac
+  done <<< "$PANELS"
+  say ""
+  [ "$BLOCKED_U" -gt 0 ] && say "Skipped ${BLOCKED_U} location(s): ${INSTALL_FOLDER} there is a link, not a folder."
+  if [ "$DRYRUN" = "1" ]; then
+    say "[dry run] Would remove ${REMOVED} installation(s). Nothing was written."
+  elif [ "$UFAILED" -gt 0 ]; then
+    say "Removed ${REMOVED}, failed ${UFAILED} - InDesign may have the files open. Close it and try again."
+    exit 1
+  elif [ "$REMOVED" -gt 0 ]; then
+    say "Removed ${REMOVED} installation(s). Restart InDesign for the panel to catch up."
+  else
+    say "Nothing to remove - no installation was found."
+  fi
+  exit 0
 fi
 
 # 远端预检 (设计 §2.2): 只取小 manifest, 若所有面板已是该版本则直接收工, 不下整包。
@@ -265,7 +408,14 @@ if [ "$BLOCKED" -gt 0 ]; then
   say ""
 fi
 if [ "$DRYRUN" = "1" ]; then
-  say "[dry run] Would install into ${WOULD} location(s) (v${VERSION}). Nothing was written."
+  # Report both numbers. "Would install into 0 locations" on its own reads as a
+  # failure to find anything, when the actual reason is that every location is
+  # already current - two very different things behind the same sentence.
+  if [ "$WOULD" -eq 0 ] && [ "$SKIPPED" -gt 0 ]; then
+    say "[dry run] Nothing to do: ${SKIPPED} location(s) already have v${VERSION}."
+  else
+    say "[dry run] Would install into ${WOULD} location(s) (v${VERSION}); ${SKIPPED} already current. Nothing was written."
+  fi
 elif [ "$FAILED" -gt 0 ] && [ "$INSTALLED" -gt 0 ]; then
   say "Updated to v${VERSION} in some locations, but ${FAILED} failed - InDesign may have the files open. Close InDesign and run again."
   exit 1

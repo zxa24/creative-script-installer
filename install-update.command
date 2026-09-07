@@ -4,5 +4,5 @@
 cd "$(dirname "$0")"
 bash ./install-update.sh "$@"
 echo ""
-echo "按回车键关闭此窗口。"
+echo "Press Enter to close this window."
 read -r _

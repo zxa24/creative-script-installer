@@ -44,6 +44,12 @@ DIR="$(find "$TMP/x" -maxdepth 1 -mindepth 1 -type d | head -n1)"
 }
 
 # --source points at what was just downloaded, so the payload is not fetched
-# twice. </dev/null keeps the installer from inheriting this script's stdin,
-# which under `curl | bash` is the remainder of this file.
-bash "$DIR/install-update.sh" --source="$DIR" </dev/null
+# twice.
+#
+# </dev/null is deliberate and is NOT what silences the menu. Under `curl | bash`
+# this script's stdin is the remainder of the script itself, and handing that to
+# the installer would let a `read` swallow it. Closing it instead makes the
+# installer see "stdin is not a terminal", which is exactly the condition that
+# sends its questions to /dev/tty - so the menu still works, and still reads
+# from the person rather than from the file.
+bash "$DIR/install-update.sh" --source="$DIR" "$@" </dev/null
