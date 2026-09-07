@@ -1,14 +1,14 @@
 {
   "name": "indesign-toolkit",
   "version": "1.0.0",
-  "generatedAt": "2026-09-07T14:06:51.850Z",
+  "generatedAt": "2026-09-07T14:16:23.567Z",
   "payloadDir": "toolkit",
   "fileCount": 126,
   "files": [
     {
       "path": "4.2 Apply Brand Preset.idjs",
-      "sha256": "79d364a935b1378a402b048e76530f90615b31e992922c6b8555a2c108f20365",
-      "bytes": 13632
+      "sha256": "0679902429a15e648183c02857eba05655fda2ec58fecfd4dec173255c1d529a",
+      "bytes": 13362
     },
     {
       "path": "2.2 Apply CJK Styles.idjs",
@@ -22,23 +22,23 @@
     },
     {
       "path": "dev/font_apply_panel/app.jsx",
-      "sha256": "16f32c733d9394bbadb1e4d5833a2e80bf4e1eaf11f3d8d7f3cbd2a95b432b67",
-      "bytes": 147109
+      "sha256": "9feb2c030849cca0166b6d06a321b067c2f84b0745546e9f8f3f71137aadb88b",
+      "bytes": 144458
     },
     {
       "path": "dev/font_apply_panel/components.jsx",
-      "sha256": "0303abb64998818737dc54d02ed4bd6dc27148a8f5b50a482a67ddfbc6919b9f",
-      "bytes": 92380
+      "sha256": "c361c7b3dc2a2a3e484268901ddb239d07e24be7b9299022a1ed28cfa01c655f",
+      "bytes": 90730
     },
     {
       "path": "dev/font_apply_panel/data.jsx",
-      "sha256": "d944bfc6b90507a5ccf4597f192f4a9bb984d106b2ea446334d04bdfb03b6ba8",
-      "bytes": 25776
+      "sha256": "b0e4c4cab3886d1384296ef69cadb586250fefb74157f99bdd550149c69f27f3",
+      "bytes": 25468
     },
     {
       "path": "dev/font_apply_panel/panel.css",
-      "sha256": "142a4992c356b90c4dd1641e14ea83e2fc2c1f72787ba42aead9798c4157d3cb",
-      "bytes": 64142
+      "sha256": "8f99d7f2d2240d10d57e4bfb236f77176c88948f821bfaa17ad2d103a57f91a8",
+      "bytes": 62918
     },
     {
       "path": "4.1 Export Brand Preset.idjs",
@@ -47,13 +47,13 @@
     },
     {
       "path": "1.1 Export Translation Package.idjs",
-      "sha256": "31feb5d7f456af9553305c9e7a8744fe48941ab1919935c47f39915ca2842b58",
-      "bytes": 171677
+      "sha256": "db97c3ffb29d542218ae8e6f1157b965e7bd749358417a74f887563cd99d667e",
+      "bytes": 167594
     },
     {
       "path": "2.1 Apply Font Pairing.idjs",
-      "sha256": "b8727f66e2a74065dde95b2646778e3c45816e3d8f9fbf509eff803d548984f6",
-      "bytes": 44771
+      "sha256": "edf2dcb134ca74ed675c32a40e8dce23deaf6c30b2a0efdff0e29559f834f383",
+      "bytes": 43960
     },
     {
       "path": "1.2 Import Translation Package.idjs",
@@ -62,13 +62,13 @@
     },
     {
       "path": "lib/annot_italic_demand.js",
-      "sha256": "5dbff1736c705445bc6a576a62efb33f70cbcb335104e9bed3917497dce5e546",
-      "bytes": 5385
+      "sha256": "f469836b7fb40af659af59d552195597286bd6639c98ff385058d7e59c02a9d2",
+      "bytes": 5261
     },
     {
       "path": "lib/auto_format_gate.js",
-      "sha256": "1b024c04982a0deb680128806f8f781201a4d9a468ac0f0f2fad6864e56f702f",
-      "bytes": 4498
+      "sha256": "adf8106e257c69112c4feaeb897ed1c964682902a1c47ab56d6e143e3fb97036",
+      "bytes": 4396
     },
     {
       "path": "lib/automation_bridge.js",
@@ -77,8 +77,8 @@
     },
     {
       "path": "lib/brand_preset_apply_glue.js",
-      "sha256": "37894f2b4d4e7520957484f1a4c776541e6eb9511c2d574e07d30bfa1a57e948",
-      "bytes": 26259
+      "sha256": "6972b6bb27dd49f9b905a7fd57a66bae83bacd4e70483d86c46082dc5f825d1c",
+      "bytes": 25774
     },
     {
       "path": "lib/brand_preset_apply_runner.js",
@@ -92,23 +92,23 @@
     },
     {
       "path": "lib/byPair_char_sweep.js",
-      "sha256": "ad732c436f702b995edc55f385606356750918a7b422e74be1476cea67c585ae",
-      "bytes": 20874
+      "sha256": "f90241a6dcb3cb72f219a89da93814147bb996000138e0b9e1ab81f7a6f648a3",
+      "bytes": 20502
     },
     {
       "path": "lib/byPair_script_coverage.js",
-      "sha256": "4fcb79919e4eec378c823ef6bdf8c5aaa1ca7754484f7e512cb63f34983d8626",
-      "bytes": 16195
+      "sha256": "1b0ea27b3cea97a7bccbb33e547d6b4c1187b99220687949177100cf3e37a747",
+      "bytes": 15885
     },
     {
       "path": "lib/canvas_pan.js",
-      "sha256": "cc1aa9b38e009f5f2df299e9e56bfcbc0c496ecdcb32e3554a137a75105e784c",
-      "bytes": 9150
+      "sha256": "ce54c4186129d6c5cddd57547544e731a1b8aebf7dacb109c32baa10683411a9",
+      "bytes": 8941
     },
     {
       "path": "lib/cjk_field_check.js",
-      "sha256": "2bfbb235a757a549cf313909db2daba63708616bc42555b39425a9a591d73bc2",
-      "bytes": 3999
+      "sha256": "af650d13ad748df9a465251425abfff63baffe564723baca26f31d2b169d18f5",
+      "bytes": 3899
     },
     {
       "path": "lib/cjk_preference.js",
@@ -117,8 +117,8 @@
     },
     {
       "path": "lib/cjk_space_cleanup.js",
-      "sha256": "5af1475d9e3f0fa62c912b433807140760a906e9a50a7a65d9264b4ecd916d32",
-      "bytes": 6804
+      "sha256": "8f2007427b9eb837c05c81487f39d7cf78381f0fec19540d3a915dfa7684ede0",
+      "bytes": 6661
     },
     {
       "path": "lib/CJK.idml",
@@ -127,8 +127,8 @@
     },
     {
       "path": "lib/cluster_grep_repair.js",
-      "sha256": "e32b14f5e3559a410167fbb9cbe3e11c6dde515e4721dc7b5908eef7d7c06809",
-      "bytes": 6675
+      "sha256": "e3e4f9d9dc7ad8d207f32996531aae78809473c85610a48a3a94a1f3b6befadd",
+      "bytes": 6549
     },
     {
       "path": "lib/dialog_helpers.js",
@@ -142,23 +142,23 @@
     },
     {
       "path": "lib/doc_provenance.js",
-      "sha256": "0652c0077f5994767525cd6be9d069b40afcc4735c6e5aa8ec3162682ea09458",
-      "bytes": 8247
+      "sha256": "4e818fba0b086d171402805650d9315679f2086347d0481be782b60ffd135e51",
+      "bytes": 8037
     },
     {
       "path": "lib/edge_autopan.js",
-      "sha256": "ecef22e6f94b05a4a41a9d6098c1f6c2c7b7499532f4fc3e4bc7e8e6d4efca9f",
-      "bytes": 3361
+      "sha256": "a155067d5a7a08a2fcdd5af3624db3119fe70b2cbf4ca1a45047e412b453f501",
+      "bytes": 3304
     },
     {
       "path": "lib/emphasis_codec.js",
-      "sha256": "193ffdc83290b0be97fd5a0e6023dfdf7cee44b02e7fd49c8e76f03b91036e9b",
-      "bytes": 18153
+      "sha256": "c17a942b02a589c591170aa27c4263cb5b6d77a6fb6d1f77d7a67484d40ff95c",
+      "bytes": 17709
     },
     {
       "path": "lib/emphasis_extractor.js",
-      "sha256": "1c52bd68df6acd0664cab407ae2e7b68f57dac9375750d9a3ed5b77aa6485751",
-      "bytes": 57218
+      "sha256": "b77d0ba170622ec4c6838f66c1faa97203626866c87876befce97f6330d9141f",
+      "bytes": 56092
     },
     {
       "path": "lib/emphasis_report.js",
@@ -167,18 +167,18 @@
     },
     {
       "path": "lib/export_dialog.js",
-      "sha256": "c42dba070ba079324490e30d856e29de7061715d38b173d07ca0959ee75de294",
-      "bytes": 21720
+      "sha256": "34efc67868536042d0063901ebab3aae77a50483c293fd8d4046a54dcdd06b0e",
+      "bytes": 21300
     },
     {
       "path": "lib/faux_italic.js",
-      "sha256": "7fb20d589f53f44fdad1b57ed06fa6cd0debe466288da4adaf86f453a94a6935",
-      "bytes": 3408
+      "sha256": "3a867dd7124e1405b5e6af6ac4e4d78cd7abab7eaddc2378a308509323017b03",
+      "bytes": 3334
     },
     {
       "path": "lib/file_utils.js",
-      "sha256": "deaa9046b2d27f6308c586a14df06660d6166e03b2e219cbd7a6755747c5a6bb",
-      "bytes": 21536
+      "sha256": "dd92c5a1ed51ccdcf0be3939210f95bd6c34780bcd13f7d517992c024129f833",
+      "bytes": 21037
     },
     {
       "path": "lib/font_axes_query.js",
@@ -187,13 +187,13 @@
     },
     {
       "path": "lib/font_face_missing.js",
-      "sha256": "a526dd65c7fa73c92d4af2b23d3eeba8f7423965042a6a454a63b31e59c5d793",
-      "bytes": 13521
+      "sha256": "f34359440d8938f6fd41e01355b5c02ec9414d5f8ec2228a1198ec6bccf4bc27",
+      "bytes": 13260
     },
     {
       "path": "lib/font_identity_groups.js",
-      "sha256": "6e2ae1c21d25d01d139ac31c634f036b610de387632a574dd3c0b5f6b8c82e8b",
-      "bytes": 47096
+      "sha256": "b899b8198fca29fa72a5e4e194ba7c37e0086016720fe4936ecd381da44a3511",
+      "bytes": 46248
     },
     {
       "path": "lib/font_italic_probe.js",
@@ -202,8 +202,8 @@
     },
     {
       "path": "lib/font_mapping_apply_to_doc.js",
-      "sha256": "5cb9d4bb1fe6699f403cd149512230d6b21ea3ec4758484bc3235589d4578c8b",
-      "bytes": 13036
+      "sha256": "ce50ffbd6f273545f400f1a59384687622a5187b693fa509e5523b271ebd068b",
+      "bytes": 12787
     },
     {
       "path": "lib/font_mapping_apply.js",
@@ -212,33 +212,33 @@
     },
     {
       "path": "lib/font_mapping_doc_scan.js",
-      "sha256": "6591957179b21b8f891602608fab48307e1bbede58841b400ab033c8d1226b55",
-      "bytes": 59193
+      "sha256": "6d610eb51a4a9a5cff1b887228f31279dfe51ce5e0593a188b825e978ed0ab42",
+      "bytes": 58416
     },
     {
       "path": "lib/font_mapping_ops.js",
-      "sha256": "9bc6eb681934791e368228c09d7a91da3e733286fc1a61927f2f5aa053086d88",
-      "bytes": 20616
+      "sha256": "c970b38718c492a4b8ad297417bbcc1c961ea05c90ec20e8bd09552bb4a1343d",
+      "bytes": 20170
     },
     {
       "path": "lib/font_mapping_pairs.js",
-      "sha256": "c72118c908b7db61d2321130da97bbcc9c24eb27270f7b2dd9c4cb68ca8c35bc",
-      "bytes": 59400
+      "sha256": "d123c8f0958ed549c159fe0cbefe50db2c54f5a3202e03b9fa209f59cdd49428",
+      "bytes": 58363
     },
     {
       "path": "lib/font_mapping_panel_adapter.js",
-      "sha256": "4ce5c148da1cb405254544762f31e0f364232934ee0b3ecee6fe604d69478082",
-      "bytes": 54931
+      "sha256": "417e2db00f36ff432a065db17889fed3d3e8dcabd33a543ed24f2b3641f1fad2",
+      "bytes": 54069
     },
     {
       "path": "lib/font_mapping_panel_ui.js",
-      "sha256": "71089e2558b43a9d68394e1c4366af0a139ae653e5c181269fa88559513502bf",
-      "bytes": 18861
+      "sha256": "0e33e68e7c4ff796366331224fe40c11775e77441d2fc0a93966bf779974020d",
+      "bytes": 18563
     },
     {
       "path": "lib/font_mapping_resolve.js",
-      "sha256": "34084e24c4e4923261fe032cb82517df4074b2a3f483a5f397c24b8745ff336b",
-      "bytes": 56970
+      "sha256": "0cce3994292c8324593b4a0bc90909d014c2893766fc5fde62817dd0711a9a94",
+      "bytes": 55888
     },
     {
       "path": "lib/font_mapping.js",
@@ -247,38 +247,38 @@
     },
     {
       "path": "lib/font_panel_env.js",
-      "sha256": "c61630ab5611640ae3c54e7654a3638de6a142526b17020004ce9c4a5f8d3561",
-      "bytes": 12783
+      "sha256": "2126c7c2e58da3845a2881016fd7920056b6bb48c07ef67de408015c4ed2143d",
+      "bytes": 12578
     },
     {
       "path": "lib/font_recombination.js",
-      "sha256": "833e11b6b5c8cd438fdbbcdd022b72e4197f1f01797b35c4f35819988794f3e8",
-      "bytes": 15046
+      "sha256": "0a79d46e60a08e6edfce3c151bdd5a7496b0d53f4c5ee601c0000c188b96250c",
+      "bytes": 14725
     },
     {
       "path": "lib/frame_host_adapter.js",
-      "sha256": "7f379a0bc9003a3766f920b6caee74003d2ad0d236080c1b329b0ad03f5251f3",
-      "bytes": 5846
+      "sha256": "4f90a9cd7e39ac72d24647ef5925a67366ff2c18b3f07774dcec83c2f03bcc2c",
+      "bytes": 5653
     },
     {
       "path": "lib/frame_partition.js",
-      "sha256": "e6fb2d99d066a3e5429b2cead3239aa892847fecd4816c1fe55273f088f920b3",
-      "bytes": 6597
+      "sha256": "fcf4ae651d35146dbd12737247649b47c64d2da7f9d250f32dcbbc64357e138a",
+      "bytes": 6400
     },
     {
       "path": "lib/frame_repair_contract.js",
-      "sha256": "54d6ef1f3ef9888c5da873f1f20067a19f4be5c011f30f3971cb2e15f1b59287",
-      "bytes": 4323
+      "sha256": "eaf9ee7df80b9aba8038ece2a7957087c06419ca13224ce9c0e868b180025fa0",
+      "bytes": 4201
     },
     {
       "path": "lib/frame_repair.js",
-      "sha256": "f29d5710168b08ddbcb1cee2e96df90818a7e44a3272911710a7a94670b2e8b0",
-      "bytes": 44634
+      "sha256": "25210dd23fb423629c88f35219ca1b4696457dc1aa4e074cf5d764e44f444c22",
+      "bytes": 43559
     },
     {
       "path": "lib/hard_errors.js",
-      "sha256": "648eac8c20771df9e6c3e85297fc9564c2fefb528087da99ccbb0b5a5f0824e2",
-      "bytes": 19110
+      "sha256": "9253ca5f72294da91148f9d0e55a15a94648569c9ea8e3119db904e12791b647",
+      "bytes": 18641
     },
     {
       "path": "lib/host_env_guard.js",
@@ -292,133 +292,133 @@
     },
     {
       "path": "lib/import_byPair_wiring.js",
-      "sha256": "4811c5ea80c8bd8a2716c62860fc9c1cfa844b895a20ce76a79ae26fb805b529",
-      "bytes": 40305
+      "sha256": "56b848213607d6ce41d7a25a468d1b1551e80f0ca66859432c8b96d6df921ecf",
+      "bytes": 39566
     },
     {
       "path": "lib/import_diff_classify.js",
-      "sha256": "7d227c0c1798b968587e361e02c857979d2294ca3fec7bbaa43845a6b49f81a4",
-      "bytes": 17958
+      "sha256": "78ef52cf4c8620f06ecfe5fdac39e4b24cacdb6c6c34ff6b0768ee8b43698813",
+      "bytes": 17548
     },
     {
       "path": "lib/import_state_store.js",
-      "sha256": "848a5c218784d6e4f315e53062c65c4dec28411a6dc61d90b4409270eeaa6750",
-      "bytes": 15382
+      "sha256": "50676e7266fb2f75ceea62a31246edb635962ef8a8476b717c20569140a0bc6b",
+      "bytes": 15015
     },
     {
       "path": "lib/italic_apply.js",
-      "sha256": "1822532841c7d211dd55d306b759257e6a5064d0f54919f6947bcced5fe1b800",
-      "bytes": 12863
+      "sha256": "2946ea9f5a78cbf20e60c1a542367c968fc675172099f3962b0acc60a32ecac1",
+      "bytes": 12632
     },
     {
       "path": "lib/italic_config.js",
-      "sha256": "34671a359c106727f03308a026b99717b537e0f1a58af499ae8ccb928fc33d76",
-      "bytes": 9338
+      "sha256": "a1047c46376fae90ea1a162abfc7a095a5ec1ad2a5ee568bdd0df418bbe5f85f",
+      "bytes": 9178
     },
     {
       "path": "lib/italic_variant_keys.js",
-      "sha256": "bb2692913c19a16a913e2dd825313febc8b0f0087e5d00193c9dfff7c451133e",
-      "bytes": 22685
+      "sha256": "b612fd81066db2b57feefce42f9544ffff4a03ae0d960265d6179d269425048f",
+      "bytes": 22238
     },
     {
       "path": "lib/lang_script_table.js",
-      "sha256": "f4987dbab3426d3ef1d03c08e594a1ebfe28573c091891f8011c4299de766651",
-      "bytes": 6994
+      "sha256": "c6750833c38cd8c73557e30bbcd246f5b177e4058f62ec789e2e4493a69d572e",
+      "bytes": 6857
     },
     {
       "path": "lib/picker_outcome.js",
-      "sha256": "fc21f16059b26d8c997aadea504dec8c5bc67118360534375906fc52f2dca207",
-      "bytes": 6906
+      "sha256": "819d5fef08ae964535cb2c06db9a9cace784354acefb0031a32a3fd4850c2526",
+      "bytes": 6787
     },
     {
       "path": "lib/pre_overwrite_backup.js",
-      "sha256": "150b2c7033fd5e0d47445ddbdcb1f5cd59a7527d077ebaa4be90239bc4a8789c",
-      "bytes": 7999
+      "sha256": "162cd4a5f16b1aa067bce67fc31bdb2de7e52d7853234b424295b0d7ebca0033",
+      "bytes": 7832
     },
     {
       "path": "lib/processing_dialog.js",
-      "sha256": "99a14baebfcec115347708e54d7d10e4b109cec54b3bae829ed5669b66b1799a",
-      "bytes": 7029
+      "sha256": "03f27cde25d708be3992789f2b0e6a885549429527e707d5524d7a333a3d5b8b",
+      "bytes": 6874
     },
     {
       "path": "lib/project_meta_assemble.js",
-      "sha256": "ff9b8d8cc4e1e48708a030a90509103adc27296771a667bbdc839d6faee2caae",
-      "bytes": 10460
+      "sha256": "fe6bbae3b8ef71898b66f8cd6a2155ec08a880d80cbdcc74a24a937807fc823e",
+      "bytes": 10259
     },
     {
       "path": "lib/project_meta_label.js",
-      "sha256": "10ea3cef8af786b54be8eb7cf45a8d18cfbcc8d5f3e6774b632d74a86b78a313",
-      "bytes": 7510
+      "sha256": "f7a3f3de4a78f60c126d459f69066287d049477fb20e355f2c44f06c69b8d5de",
+      "bytes": 7354
     },
     {
       "path": "lib/project_meta_uxp.js",
-      "sha256": "8f0c251ac141cf68502c8a48e55451b8cd5688dc1eb7d71a7012d78c5424b333",
-      "bytes": 6242
+      "sha256": "1087f44974c59b2dcdc19ddcfbbe08849377fb59b9b3f49d6c1699739cc18709",
+      "bytes": 6115
     },
     {
       "path": "lib/project_uid.js",
-      "sha256": "b5a26abb158edc4b04caf9281fea5e832d466efb71af2ccdcbbb245f7730cd85",
-      "bytes": 3679
+      "sha256": "68f4c80190325a880a6bedef5d001f6ac82f83bcf4e9fcef3ef4c0a31ff2b45c",
+      "bytes": 3592
     },
     {
       "path": "lib/reorganize_dialog_v2.js",
-      "sha256": "eacac5b65736c7081d688d1c59244e89a36eb339a795169dcdb34c487b95817c",
-      "bytes": 33641
+      "sha256": "d3dc9252d231ec72b6805ef6a2facefb03a10df4e11f8bfe2e2f400b1b2a0ea7",
+      "bytes": 32953
     },
     {
       "path": "lib/reorganize_dialog.js",
-      "sha256": "d87b19ca0351ae11f73eb0f0d64fcdc86e9684d61d223a50e64ded4fec0c8502",
-      "bytes": 17920
+      "sha256": "d27e9a0e98c76e4aa768928aec7c5c65e2d6cb3432a4424b06f06d4f65a366e2",
+      "bytes": 17562
     },
     {
       "path": "lib/reorganize_doc_ops.js",
-      "sha256": "8da15faa85727f9c2b67042ba3d9a4090c94ed5618ac3353b04cce68c83baf9b",
-      "bytes": 29282
+      "sha256": "7e1f2d9b761cecbfe7ef114b34ed5afb9cf6ff2679eaa8f25f32d3f723893943",
+      "bytes": 28702
     },
     {
       "path": "lib/reorganize_inplace_core.js",
-      "sha256": "daee82a86a008d7e9a910b66dc999a28b0d94b3869775ed787541be43a2b95fa",
-      "bytes": 101641
+      "sha256": "225684064fa902acbbcf6f502ee1114fff521d9dc9612436eb516e0fae3e5436",
+      "bytes": 99943
     },
     {
       "path": "lib/repair_after_apply.js",
-      "sha256": "21d949980ac468542de2b47db5bb3285754e6cdf70c702275841fd7adc6a8d73",
-      "bytes": 42699
+      "sha256": "69816fb6f121fff8ff387c39bb2cdb73693246eae8a401e16a7e5542d25456b9",
+      "bytes": 41731
     },
     {
       "path": "lib/resolve_core.js",
-      "sha256": "dfa7ec588d229d9d13018c8fb160e20894d2baca6284b0fdacbeeeb9e16bdf54",
-      "bytes": 19224
+      "sha256": "55a8b739ec70466122bc6ff7e70818481845e110f1af3f8a94e0d9b866bed386",
+      "bytes": 18864
     },
     {
       "path": "lib/runtime_paths.js",
-      "sha256": "f800430003dbdd569473ae1e2b99a4a2861458b270cb8118e918bd3399e22951",
-      "bytes": 10082
+      "sha256": "a59ccb3e09a3b7c0823ca51abf1d2099d20c016badc8726319ed514ca727b1d3",
+      "bytes": 9836
     },
     {
       "path": "lib/script_classifier.js",
-      "sha256": "07fefd0e5bdb125d581ca9bcf538b3cd05ffdb0ab943af9900a1045bfe5bec19",
-      "bytes": 20813
+      "sha256": "2306abf4456b17cbe4d05ffdaca79816d887b5f91fee63981699805e1feb9525",
+      "bytes": 20342
     },
     {
       "path": "lib/script_font_enforcer.js",
-      "sha256": "b72acf733ff3fe3f75a5bd209c39b85b15ffee8336cd885216627229ef285608",
-      "bytes": 37297
+      "sha256": "b52f9083a0bdd096157606de4c5c8d58510778fd665c97158f41e0d205da13bb",
+      "bytes": 36530
     },
     {
       "path": "lib/script_log_paths.js",
-      "sha256": "a297467a32fc355574682691b2d215b8cc89c0f46d9a8ef83e8412cfad46e582",
-      "bytes": 9680
+      "sha256": "796d07ab493428a535bba267820886bfd328321b6598d162948f10737ea1d3d3",
+      "bytes": 9458
     },
     {
       "path": "lib/script_split.js",
-      "sha256": "01009527084d8c8f28484eebe0177ced0efb226dba670518205ff21ff0e580be",
-      "bytes": 2823
+      "sha256": "c1640f9e8e623cfad1df17ecf3e2cd089b295f4c2678b16a977fde9a0c8e283a",
+      "bytes": 2762
     },
     {
       "path": "lib/segment_locator.js",
-      "sha256": "05777693534c24ca817f4c3b58cce2d6e4197397556f8c34ee4206d775367ef8",
-      "bytes": 29617
+      "sha256": "977d44132928bf3b8b1b4b49d6503f111a8befc93c3e49823f7a370801760e28",
+      "bytes": 29004
     },
     {
       "path": "lib/smoke_runner_config.js",
@@ -427,8 +427,8 @@
     },
     {
       "path": "lib/snapshot_utils.js",
-      "sha256": "f3100448fb26fb2e9de96cdc5b17817b709506457d52b245b86ecb62fa04787b",
-      "bytes": 9534
+      "sha256": "28490f7830c66aec28e54c36c53c4f0b07492caf326abdf2820a2a0fba64551c",
+      "bytes": 9291
     },
     {
       "path": "lib/snapshot_writer.js",
@@ -437,23 +437,23 @@
     },
     {
       "path": "lib/soft_break_plan.js",
-      "sha256": "c97fefd1dddeb4e3a0b9501a73339f93662a3a0e2ac47e2f587e2529e48b2fe3",
-      "bytes": 8871
+      "sha256": "3e09ebaf0f6e734c50d0e4be8e6d358006d3b1a389ed4dbce563022e66be9c06",
+      "bytes": 8703
     },
     {
       "path": "lib/storage_uxp.js",
-      "sha256": "9e7e419e754562eff0490f39922c18e7635f2b56b92e49df964f54f248611836",
-      "bytes": 27162
+      "sha256": "eacf9924a82f599fb601dd01acc3da012a648dfbd6efd61e2c8bab038366d854",
+      "bytes": 26718
     },
     {
       "path": "lib/story_utils.js",
-      "sha256": "ae8c321d320a9a86f32409239b2beef3e28238edd94de37f98f61837c368bcdc",
-      "bytes": 3582
+      "sha256": "4bbcd0eddd45e0729b6d05c0b35074ecb2ba8bb87e27d2a014058fed9e120121",
+      "bytes": 3482
     },
     {
       "path": "lib/style_applier.js",
-      "sha256": "ddd55a5f769b70d64cf0b0f99e366f0bac9de9827b881153701be93cddf63bfd",
-      "bytes": 157184
+      "sha256": "9bd48e1e892ff66f2ca88290cf75b499f9f90fee6aa8b4cba17afb918c61fd2b",
+      "bytes": 154314
     },
     {
       "path": "lib/style_config_io.js",
@@ -467,18 +467,18 @@
     },
     {
       "path": "lib/style_merge_advisor.js",
-      "sha256": "cecc6560a0998c77832bc4512b41ee6340d6ecf589eb848e0676e0b2d98fd161",
-      "bytes": 43220
+      "sha256": "819efe9d82f10f59703a5e246402b4988c7db81b6f23cf9e8f192328a4378665",
+      "bytes": 42360
     },
     {
       "path": "lib/style_sheet_builder.js",
-      "sha256": "89133fc941854eb719cf278125c548619fd1b5f5bb59d7d305f71df0178c19b4",
-      "bytes": 205957
+      "sha256": "d91e345043b1f81a7af1f89631c4a9440568d3418b2414d767536a0e31544dde",
+      "bytes": 202241
     },
     {
       "path": "lib/text_cleanup.js",
-      "sha256": "fd5ac57e0926b92cb05d20d41f947a47c72daf57ccd90ec2ff91a272fce4bfbb",
-      "bytes": 6228
+      "sha256": "fc4e71f5f0ed22e795753de6fdaf00c9bd404cc93f833d9ed5963bf0e9458280",
+      "bytes": 6032
     },
     {
       "path": "lib/translation_common.js",
@@ -492,13 +492,13 @@
     },
     {
       "path": "lib/utils.js",
-      "sha256": "234fe1201442ada28a4f12846b0c1bbe5328bb852a7e56238c6c6387aa44b85a",
-      "bytes": 1620
+      "sha256": "0ef27a049182d60cc80134fe3da3ed3bb93b676e93236c5ca4a992e0b43544b6",
+      "bytes": 1562
     },
     {
       "path": "lib/v2_pipeline.js",
-      "sha256": "58fb83da0ff23c4e708e9bb0d3ad52dd6dbea14fc64e164f3d9a07e97c81189c",
-      "bytes": 268966
+      "sha256": "cda5e50595912eaccc488cd90da8deab4aefe5dfa99688002e5dceccdf5735d9",
+      "bytes": 264291
     },
     {
       "path": "lib/vendor/babel.min.js",
@@ -512,43 +512,43 @@
     },
     {
       "path": "lib/vendor/project_meta/adapter_conformance.js",
-      "sha256": "187d8cd4526626eb122b03c9663c6f2b5d6516c3b0c2646fc7d27820de015267",
-      "bytes": 17760
+      "sha256": "b4a654f92957a28850ecb6903d9530867c9171b51bbb2b2d99acfe0603111302",
+      "bytes": 17483
     },
     {
       "path": "lib/vendor/project_meta/bcp47_validate.js",
-      "sha256": "4a34326601c48847fe3d2621eaa55b82717cf224df3c25edd0b1a8297016c051",
-      "bytes": 10520
+      "sha256": "d993efc05c99d4d2fd515bc714d2ac57d101140cc3d0b954e2388ee3678d3a51",
+      "bytes": 10290
     },
     {
       "path": "lib/vendor/project_meta/frozen_manifest.json",
-      "sha256": "b7d498009d16e6fb6e1670897f34668c32c33593c79962057ac8f33107048d89",
-      "bytes": 5943
+      "sha256": "5539faa91af780536b9c389a99e9a93ff381e9472e0d607015bbebc1f383555d",
+      "bytes": 5820
     },
     {
       "path": "lib/vendor/project_meta/json_schema_minimal.js",
-      "sha256": "4b950cb346766a672fece071064c02e3cb0b46c8daeb53b84b5e49836b45fd19",
-      "bytes": 13196
+      "sha256": "4e9f17f1060966a2642a89f9c20a581fface874335cbd1157bae9ebda360169c",
+      "bytes": 12890
     },
     {
       "path": "lib/vendor/project_meta/path_resolver.js",
-      "sha256": "7fdf15d9cdf7aed8c5bd5c1de7b79506c26c6576299933dc4de936c5117fe12a",
-      "bytes": 10438
+      "sha256": "178c1075bd0047deee4deed9892d14bcc8324947040a4e445a6804899e3ba8f3",
+      "bytes": 10213
     },
     {
       "path": "lib/vendor/project_meta/project_meta.js",
-      "sha256": "c5805fcb610a8b31ead05896815680e145836592d10feb4df723c59626d515e7",
-      "bytes": 35691
+      "sha256": "21a5db503689888feaf87d650cdc9001eabc325076ea5fab734a0d2ba427468d",
+      "bytes": 34957
     },
     {
       "path": "lib/vendor/project_meta/project_meta.schema.json",
-      "sha256": "0b0233aa95af35267fedbd99afca60b65e478657bda9655a31593c98d1514bc8",
-      "bytes": 4676
+      "sha256": "0c66e72e4cd3c83508c656a8008f92b76ffcd0c85c72c31429f5d906519efe16",
+      "bytes": 4571
     },
     {
       "path": "lib/vendor/project_meta/sha256_pure.js",
-      "sha256": "907716178aaf4129d4a5aa930b85735506a9b50264b4e19411fef1b67d753919",
-      "bytes": 7508
+      "sha256": "231dfb6cfa5d2277f0ae9ce56563d073cd1f8d41aae77f4b3805fc3350490e72",
+      "bytes": 7334
     },
     {
       "path": "lib/vendor/react-dom.patched.umd.js",
@@ -567,8 +567,8 @@
     },
     {
       "path": "lib/version_carry.js",
-      "sha256": "753f3bba01e3939e4f169a6ee69f873dc0a7ba91a3b7416489234048b710b7a2",
-      "bytes": 10361
+      "sha256": "27f4cb971935aada05558ab84a2e226995d62d694eb9fda36688cb3b0e6904e9",
+      "bytes": 10135
     },
     {
       "path": "lib/version_manifest.js",
@@ -577,8 +577,8 @@
     },
     {
       "path": "lib/visual_snapshot.js",
-      "sha256": "4671b13f24e087585d18a1a90965620d95548f24960feb0e2b0d55ece2ca8962",
-      "bytes": 31216
+      "sha256": "ab2b97aeceac7a9e1177b4da99ac33ccc776d5d6c8165fd9a50669368fe926ae",
+      "bytes": 30540
     },
     {
       "path": "lib/wire_hit_test.js",
@@ -607,13 +607,13 @@
     },
     {
       "path": "3.2 Repair After Apply.idjs",
-      "sha256": "aa68721592b3ceb470093b31f02ef445e93d44af9074f8a4536a85cede7659dc",
-      "bytes": 661
+      "sha256": "808e5833420db11c16bc630e7de0a64a5a780eace3c4dfe5fc4c997670d643f7",
+      "bytes": 646
     },
     {
       "path": "2.5 Repair Cluster GREP.idjs",
-      "sha256": "67682ba6d803556fc372a96e3e08052d33b61a06dbaac111bc47a3344db71689",
-      "bytes": 8909
+      "sha256": "afb7384ec1848d46936a944e94675f1f3ae1726e5b8b9a09711ddbfd7f0ab9ea",
+      "bytes": 8737
     },
     {
       "path": "3.5 Save and Reveal.idjs",
@@ -622,13 +622,13 @@
     },
     {
       "path": "2.3 Set Selection Weight.idjs",
-      "sha256": "aa91bb48683d65d0e5ec42294220afd91849661994e4ebdc86035ac218319b90",
-      "bytes": 25819
+      "sha256": "9d4bcd40fce8ed72d45a734db600448d7e3006a21fe0c9620685b8d08ba899a7",
+      "bytes": 25340
     },
     {
       "path": "3.1 Snapshot Before Apply.idjs",
-      "sha256": "d38e985be3c427a08e0616064e9b829c924e5f81aec88f8cdec8ce3917730e36",
-      "bytes": 6094
+      "sha256": "4fb7f443454ed1888c1b42931dc0ec01d4d7cd0fc74864b006f717b4c25c7db9",
+      "bytes": 5926
     },
     {
       "path": "3.4 Highlight Translation Changes.idjs",

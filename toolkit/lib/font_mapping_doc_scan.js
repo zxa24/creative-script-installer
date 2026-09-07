@@ -118,6 +118,9 @@ function makeIdentityLookup(appRef) {
 // ---------------------------------------------------------------------------
 var LANG_PRESETS_BY_CODE = {
     'en':    { name: 'English',              script: 'Ag', family: "'Hanken Grotesk'" },
+    // The `script` values below are specimen GLYPHS, not text: they are rendered
+    // in a CJK face to preview it. '永' is the conventional Han specimen. Do NOT
+    // translate them - a Latin letter previews nothing about a CJK font.
     'zh-CN': { name: 'Simplified Chinese',   script: '永', family: "'Noto Sans SC'" },
     'zh-TW': { name: 'Traditional Chinese',  script: '繁', family: "'Noto Sans TC'" },
     'ja':    { name: 'Japanese',             script: 'あ', family: "'Noto Sans JP'" },
@@ -248,6 +251,8 @@ var CJK_NAME_ALLOWLIST = [
 // Native-script CJK family names whose Han characters would otherwise read as
 // zh-CN under the generic script fallback but are actually JA. Explicit, checked
 // before the fallback. (Hangul/Kana native names self-identify by script.)
+// Matched against Japanese font NAMES as they actually appear. Data, not UI.
+// Do NOT translate: the names on the system are these strings.
 var CJK_NATIVE_JA = ['明朝', '丸ゴシック', '角ゴシック'];
 
 // Generic fallback: classify by the family NAME's own codepoints. Kana → ja,

@@ -22,6 +22,8 @@ const uid = (p = 'id') => `${p}_${(_idn++).toString(36)}${Date.now().toString(36
 // `isValidBcp47` below) for niche locales not in this list.
 const LANG_PRESETS = [
   // CJKV
+  // `script` is a specimen GLYPH rendered to preview a CJK face, not readable
+  // text. Do NOT translate - a Latin letter previews nothing about the font.
   { code: 'zh-CN',  name: 'Simplified Chinese',           script: '永',  family: "'Noto Sans SC'" },
   { code: 'zh-TW',  name: 'Traditional Chinese (Taiwan)', script: '繁',  family: "'Noto Sans TC'" },
   { code: 'zh-HK',  name: 'Traditional Chinese (HK)',     script: '港',  family: "'Noto Sans HK'" },

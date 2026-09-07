@@ -587,6 +587,8 @@ function configToPanelData(config, scanResult, opts) {
 
     var LANG_PRESETS = {
         'en':    { name: 'English',             script: 'Ag', family: "'Hanken Grotesk'" },
+        // `script` is a specimen GLYPH rendered to preview a CJK face, not readable
+        // text. Do NOT translate.
         'zh-CN': { name: 'Simplified Chinese',  script: '永', family: "'Noto Sans SC'" },
         'zh-TW': { name: 'Traditional Chinese', script: '繁', family: "'Noto Sans TC'" },
         'ja':    { name: 'Japanese',            script: 'あ', family: "'Noto Sans JP'" },
