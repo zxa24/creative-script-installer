@@ -283,14 +283,20 @@ if [ -z "$ACTION" ]; then
   done <<< "$PANELS"
 
   say ""
+  # Option 1 does NOT force. When everything is already current it therefore
+  # does nothing, and must not be labelled as if it did: it was previously
+  # "Reinstall (repair)", which promised a reinstall and delivered a no-op —
+  # silently, so someone trying to fix a problem would think they had.
+  # Repair is the option that actually rewrites the files, and is the only
+  # difference between the two.
   if [ "$INSTALLED_ANY" = "1" ] && [ "$ALL_CURRENT" = "1" ]; then
-    say "  1) Reinstall (repair)"
+    say "  1) Check again - already on the latest version, so this changes nothing"
   elif [ "$INSTALLED_ANY" = "1" ]; then
-    say "  1) Update"
+    say "  1) Update     - install the newer version"
   else
     say "  1) Install"
   fi
-  say "  2) Repair    - reinstall, replacing whatever is there"
+  say "  2) Repair    - rewrite the files even if the version already matches"
   say "  3) Uninstall - remove the installed scripts"
   say "  q) Quit"
   say ""

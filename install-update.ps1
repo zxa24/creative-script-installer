@@ -348,10 +348,14 @@ try {
       } else { $allCurrent = $false; Say ("  {0}: not installed" -f $label) }
     }
     Say ''
-    if ($anyInstalled -and $allCurrent) { Say '  1) Reinstall (repair)' }
-    elseif ($anyInstalled)              { Say '  1) Update' }
+    # 选项 1 不带 Force。所以在"已是最新"时它什么都不做, 就不能起一个像是会做事
+    # 的名字: 它原先叫 "Reinstall (repair)" —— 承诺重装、实际空操作, 而且不报错,
+    # 于是想修问题的人会以为自己修过了。Repair 才是真正重写文件的那个, 这也是两者
+    # 唯一的区别。
+    if ($anyInstalled -and $allCurrent) { Say '  1) Check again - already on the latest version, so this changes nothing' }
+    elseif ($anyInstalled)              { Say '  1) Update     - install the newer version' }
     else                                { Say '  1) Install' }
-    Say '  2) Repair    - reinstall, replacing whatever is there'
+    Say '  2) Repair    - rewrite the files even if the version already matches'
     Say '  3) Uninstall - remove the installed scripts'
     Say '  q) Quit'
     Say ''
