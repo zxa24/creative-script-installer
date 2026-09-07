@@ -21,6 +21,11 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 $ZipUrl = 'https://codeload.github.com/zxa24/creative-script-installer/zip/refs/heads/main'
 $tmp = Join-Path $env:TEMP ('csi-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
+# Initialised here, not only inside try/catch. Under iex this runs in the
+# caller's session, where a variable of this name may already exist - an
+# uninitialised read would inherit whatever they had.
+$code = 0
+
 try {
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   $zip = Join-Path $tmp 'csi.zip'
@@ -46,13 +51,28 @@ try {
   # which only decode correctly when PowerShell reads it from disk. -Source
   # points at what we already downloaded, so the payload is not fetched twice.
   & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Source $dir.FullName
-  exit $LASTEXITCODE
+  $code = $LASTEXITCODE
 }
 catch {
   Write-Host ("Install failed: " + $_.Exception.Message) -ForegroundColor Red
   Write-Host 'Nothing was changed. Try again, or download the repository manually.'
-  exit 1
+  $code = 1
 }
 finally {
   Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# DO NOT call `exit` unconditionally here.
+#
+# `iex` evaluates this file as a STRING in the caller's own session, so a
+# top-level `exit` terminates THAT session - it closes the user's terminal tab
+# the instant the install finishes. Measured, with a control:
+#     'Write-Host BEFORE; exit 3' | iex ; Write-Host AFTER   -> only BEFORE, host exits 3
+#     'Write-Host BEFORE'        | iex ; Write-Host AFTER    -> BEFORE and AFTER
+#
+# Run as a FILE (`powershell -File install.ps1`) the opposite is true: without
+# `exit` the exit code is lost and a failed install reports success to whatever
+# invoked it. $MyInvocation.MyCommand.Path tells the two apart - it is the file
+# path when run as a file, and empty under iex. Measured both ways.
+$global:LASTEXITCODE = $code
+if ($MyInvocation.MyCommand.Path) { exit $code }
