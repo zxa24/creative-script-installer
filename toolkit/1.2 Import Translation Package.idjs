@@ -4417,7 +4417,7 @@ async function __showTofuResolutionDialog(opts) {
     var rowsHtml = "";
     for (var r = 0; r < unowned.length; r++) {
         var u = unowned[r];
-        var used = (typeof u.count === "number" && u.count > 0) ? (" — 用于 " + u.count + " 处") : "";
+        var used = (typeof u.count === "number" && u.count > 0) ? (" — used by " + u.count + " run(s)") : "";
         rowsHtml += '<div class="tf-row" data-idx="' + r + '" data-skip="0"'
             + ' data-srcfont="' + __bpEscHtml(u.sourceFont) + '"'
             + ' data-srcweight="' + __bpEscHtml(u.sourceWeight) + '">'
@@ -4425,8 +4425,8 @@ async function __showTofuResolutionDialog(opts) {
             + (hasRoster
                 ? '  <div class="tf-act"><span class="tf-arrow">&rarr;</span>'
                     + '<select class="tf-sel">' + __optsHtml(u.sourceWeight) + '</select>'
-                    + '<div class="tf-skip" role="button" tabindex="0">接受豆腐</div></div>'
-                : '  <div class="tf-act"><span class="tf-noroster">无目标 CJK 字体可选 → 只能接受豆腐</span></div>')
+                    + '<div class="tf-skip" role="button" tabindex="0">Accept tofu</div></div>'
+                : '  <div class="tf-act"><span class="tf-noroster">No target CJK font available — tofu is the only option</span></div>')
             + '</div>';
     }
     var extraCss = [
@@ -4448,13 +4448,13 @@ async function __showTofuResolutionDialog(opts) {
     dlg.className = "bp-dlg";
     dlg.innerHTML = '<style>' + __BP_DIALOG_STYLES + "\n" + extraCss + '</style>'
         + '<div class="bp-shell"><div class="bp-body">'
-        + '  <h2>字体豆腐风险（' + __bpEscHtml(srcLang) + ' &rarr; ' + __bpEscHtml(tgtLang) + '）</h2>'
-        + '  <p>以下字体承载 CJK 文本但不属于任何配对，存盘会显示为豆腐方块。为每个字体加一个目标 CJK 字体，或接受豆腐。</p>'
+        + '  <h2>Tofu risk (' + __bpEscHtml(srcLang) + ' &rarr; ' + __bpEscHtml(tgtLang) + ')</h2>'
+        + '  <p>These fonts carry CJK text but belong to no pairing, so saving will render them as tofu boxes. Give each one a target CJK font, or accept tofu.</p>'
         + '  <div class="tf-list">' + rowsHtml + '</div>'
         + '  <div class="tf-footer">'
-        + '    <div id="tf-cancel" class="tf-divbtn" role="button" tabindex="0">取消导入</div>'
-        + '    <div id="tf-acceptall" class="tf-divbtn" role="button" tabindex="0">全部接受豆腐</div>'
-        + '    <div id="tf-apply" class="tf-divbtn primary" role="button" tabindex="0">应用并继续</div>'
+        + '    <div id="tf-cancel" class="tf-divbtn" role="button" tabindex="0">Cancel import</div>'
+        + '    <div id="tf-acceptall" class="tf-divbtn" role="button" tabindex="0">Accept tofu for all</div>'
+        + '    <div id="tf-apply" class="tf-divbtn primary" role="button" tabindex="0">Apply and continue</div>'
         + '  </div>'
         + '</div></div>';
     document.body.appendChild(dlg);

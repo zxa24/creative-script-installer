@@ -113,12 +113,12 @@ function formatJamReport(res) {
     if (!res || !res.jammed) return "";
     var ids = [];
     for (var i = 0; i < res.stuck.length; i++) ids.push(res.stuck[i].id);
-    return "InDesign 的后台任务队列已被卡死的字体激活堵住："
-        + res.stuck.length + " 个「" + FONT_TASK_NAME + "」任务停在 RUNNING（id "
-        + ids.join(", ") + "），队列共 " + res.sampleA.total + " 条。\n"
-        + "原因：某个文档缺字体 → InDesign 向 Adobe Fonts 请求自动激活 → 该字体不在 "
-        + "Adobe Fonts 上 → 请求永不返回。\n"
-        + "⚠ 脚本无法取消后台任务（DOM 没有 cancel 接口）——**请重启 InDesign 后再跑**。";
+    return "InDesign's background task queue is blocked by a stuck font activation: "
+        + res.stuck.length + " \"" + FONT_TASK_NAME + "\" task(s) stuck in RUNNING (id "
+        + ids.join(", ") + "), out of " + res.sampleA.total + " queued.\n"
+        + "Cause: a document is missing a font, InDesign asks Adobe Fonts to activate it, and the font is not on "
+        + "Adobe Fonts - so the request never returns.\n"
+        + "A script cannot cancel a background task (the DOM offers no cancel). **Restart InDesign and run this again.**";
 }
 
 /**

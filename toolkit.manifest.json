@@ -1,7 +1,7 @@
 {
   "name": "indesign-toolkit",
   "version": "1.0.0",
-  "generatedAt": "2026-09-07T13:39:25.226Z",
+  "generatedAt": "2026-09-07T14:06:51.850Z",
   "payloadDir": "toolkit",
   "fileCount": 126,
   "files": [
@@ -12,8 +12,8 @@
     },
     {
       "path": "2.2 Apply CJK Styles.idjs",
-      "sha256": "f3111fbebdb38d10936f5fbe11d8ad35af8e4b6a7e22843bb36f927456b47dba",
-      "bytes": 47693
+      "sha256": "570cd8114073884cebe05276726e8136e543e01cbf8d7cb4f79ee8a9f3b5502c",
+      "bytes": 46548
     },
     {
       "path": "2.6 Convert Underline to Rule.idjs",
@@ -57,8 +57,8 @@
     },
     {
       "path": "1.2 Import Translation Package.idjs",
-      "sha256": "66696686120428860387286a71a1378cad4a942c61f3d9515ac236d208453310",
-      "bytes": 284115
+      "sha256": "15b420406c4f308e490422893af33c98249131e6ed1ace284af6b0b8f468a8b7",
+      "bytes": 279516
     },
     {
       "path": "lib/annot_italic_demand.js",
@@ -282,8 +282,8 @@
     },
     {
       "path": "lib/host_env_guard.js",
-      "sha256": "8910d0cee687443bfd1395adb8c1c349f3215aecced2e417f64eced2d50bb49a",
-      "bytes": 8580
+      "sha256": "c5663ef9ecd5167a1e390e1b48a699fede40ce4903a2a9fc9f5e8ecbf3c381ba",
+      "bytes": 8589
     },
     {
       "path": "lib/hyperlink_preserver.js",
@@ -597,8 +597,8 @@
     },
     {
       "path": "3.3 Relink Missing Links.idjs",
-      "sha256": "7f0b73e614bcb5bd2f07fffd825882506d8f76b09fea975f980a459dab156efe",
-      "bytes": 13624
+      "sha256": "209da92d8239b4c45695a5ea93a543453d4ad3a3c5d5e4ab3c2ed640e5703bb8",
+      "bytes": 13614
     },
     {
       "path": "2.4 Reorganize Styles.idjs",
@@ -617,8 +617,8 @@
     },
     {
       "path": "3.5 Save and Reveal.idjs",
-      "sha256": "70a96528f08fd124f64a977acbffa756ead64b8ec1a94f95868829716b0b9a98",
-      "bytes": 11171
+      "sha256": "efc7562974fa8714012b92a1c78c789bb4f1a6935ce2f72346279031aa049c0d",
+      "bytes": 11159
     },
     {
       "path": "2.3 Set Selection Weight.idjs",
@@ -632,8 +632,8 @@
     },
     {
       "path": "3.4 Highlight Translation Changes.idjs",
-      "sha256": "2acc884cddc321793d84aea7baac66567c19f6a15ef5bab33296766bb42d21e6",
-      "bytes": 60155
+      "sha256": "1df6376c3359907a5624c98ad089475e9128fa39dc6a9ff5f15d9fbc30227e23",
+      "bytes": 58957
     }
   ]
 }

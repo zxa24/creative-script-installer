@@ -75,7 +75,7 @@ async function showResult(text) {
         var btn = document.createElement("div");
         btn.setAttribute("role", "button");
         btn.setAttribute("tabindex", "0");
-        btn.textContent = "关闭";
+        btn.textContent = "Close";
         btn.style.cssText = "display:inline-block;padding:6px 18px;background:#2b6cb0;color:#fff;border-radius:4px;cursor:pointer;";
         function close() {
             try { dlg.close(); } catch (e) {}
@@ -96,15 +96,15 @@ async function askSaveAs() {
     dlg.style.cssText = "padding:16px;min-width:320px;font-family:sans-serif;font-size:12px;color:#111;background:#fff;border:1px solid #888;";
     var title = document.createElement("div");
     title.style.cssText = "margin-bottom:10px;font-size:13px;font-weight:bold;";
-    title.textContent = "文档「" + String(doc.name) + "」尚未保存到磁盘";
+    title.textContent = "Document \"" + String(doc.name) + "\" has never been saved to disk";
     var msg = document.createElement("div");
     msg.style.cssText = "margin-bottom:14px;";
-    msg.textContent = "是否保存？（将弹出 Save As 对话框）";
+    msg.textContent = "Save it? A Save As dialog will open.";
     var btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:8px;";
     var btns = [
-        { label: "保存", color: "#2b6cb0", action: "save" },
-        { label: "不保存", color: "#666", action: "nosave" }
+        { label: "Save", color: "#2b6cb0", action: "save" },
+        { label: "Don't save", color: "#666", action: "nosave" }
     ];
     for (var i = 0; i < btns.length; i++) {
         var b = document.createElement("div");
@@ -143,15 +143,15 @@ async function askSave(doc) {
     dlg.style.cssText = "padding:16px;min-width:320px;font-family:sans-serif;font-size:12px;color:#111;background:#fff;border:1px solid #888;";
     var title = document.createElement("div");
     title.style.cssText = "margin-bottom:10px;font-size:13px;font-weight:bold;";
-    title.textContent = "文档「" + String(doc.name) + "」有未保存的改动";
+    title.textContent = "Document \"" + String(doc.name) + "\" has unsaved changes";
     var msg = document.createElement("div");
     msg.style.cssText = "margin-bottom:14px;";
-    msg.textContent = "是否保存？";
+    msg.textContent = "Save it?";
     var btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:8px;";
     var btns = [
-        { label: "保存", color: "#2b6cb0", action: "save" },
-        { label: "不保存", color: "#666", action: "nosave" }
+        { label: "Save", color: "#2b6cb0", action: "save" },
+        { label: "Don't save", color: "#666", action: "nosave" }
     ];
     for (var i = 0; i < btns.length; i++) {
         var b = document.createElement("div");
@@ -182,7 +182,7 @@ async function askSave(doc) {
     dlg.showModal();
     await new Promise(function (r) { dlg.addEventListener("close", r, { once: true }); });
     if (confirmMsg === "save") {
-        try { doc.save(); return true; } catch (e) { await showResult("保存失败: " + String(e && e.message || e)); }
+        try { doc.save(); return true; } catch (e) { await showResult("Save failed: " + String(e && e.message || e)); }
     }
     return false;
 }
@@ -205,7 +205,7 @@ async function main() {
 
     var doc = app.activeDocument;
     if (!doc) {
-        if (!isAutomation) await showResult("没有打开的文档。");
+        if (!isAutomation) await showResult("No document is open.");
         return { ok: false, reason: "no_document" };
     }
 
@@ -219,7 +219,7 @@ async function main() {
     if (!docDir) {
         // 从未保存到磁盘
         if (isAutomation) {
-            var m = "文档「" + docName + "」尚未保存到磁盘（automation 模式）。";
+            var m = "Document \"" + docName + "\" has never been saved to disk (automation mode).";
             if (!isAutomation) await showResult(m);
             return { ok: false, reason: "not_saved", doc: docName };
         }
@@ -233,7 +233,7 @@ async function main() {
         try { fn = await doc.fullName; } catch (e) {}
         docDir = fn ? parentDir(fn.nativePath) : null;
         if (!docDir) {
-            var m = "文档「" + docName + "」保存后仍无路径（可能用户取消了 Save As）。";
+            var m = "Document \"" + docName + "\" still has no path after saving - the Save As dialog was probably cancelled.";
             await showResult(m);
             return { ok: false, reason: "not_saved", doc: docName };
         }
@@ -253,7 +253,7 @@ async function main() {
     await revealFolderViaTempLink(docDir);
 
     if (!isAutomation) {
-        await showResult("文档目录已在资源管理器中打开:\n\n" + docDir);
+        await showResult("Opened the document's folder:\n\n" + docDir);
     }
 
     return { ok: true, doc: docName, docDir: docDir };
@@ -263,6 +263,6 @@ var __result = null;
 try { __result = await main(); }
 catch (eTop) {
     __result = { fatal: String(eTop && (eTop.stack || eTop.message) || eTop) };
-    try { if (typeof showResult === "function") await showResult("脚本出错: " + __result.fatal); } catch (e2) {}
+    try { if (typeof showResult === "function") await showResult("Script error: " + __result.fatal); } catch (e2) {}
 }
 module.exports = __result;

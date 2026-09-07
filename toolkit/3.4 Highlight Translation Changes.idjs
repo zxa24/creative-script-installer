@@ -265,24 +265,24 @@ try {
         // user can pick a file from anywhere on disk (path entered via a
         // follow-up text-input dialog — UXP idjs has no first-class file
         // picker that integrates with the ScriptUI dialog flow).
-        var OTHER_FILE_LABEL = "其他文件...";
+        var OTHER_FILE_LABEL = "Other file...";
 
         var dlg = null, chosen = null, chosenBaselineIdx = 0;
         try {
             dlg = app.dialogs.add({ name: "Track Translation Changes", canCancel: true });
             var col = dlg.dialogColumns.add();
-            col.staticTexts.add({ staticLabel: "选择要执行的操作：" });
+            col.staticTexts.add({ staticLabel: "Choose what to do:" });
             col.staticTexts.add({ staticLabel: " " });
             var rbGroup = col.radiobuttonGroups.add();
             var rbCapture = rbGroup.radiobuttonControls.add({
                 staticLabel: hasAnyBaseline
-                    ? "捕获 baseline  (在 script_outputs/baseline_snapshots/ 下新增带时间戳的文件)"
-                    : "捕获 baseline  (首次捕获，无可见变化)"
+                    ? "Capture baseline  (writes a timestamped file under script_outputs/baseline_snapshots/)"
+                    : "Capture baseline  (first capture - nothing visible changes)"
             });
             var rbHighlight = rbGroup.radiobuttonControls.add({
                 staticLabel: hasAnyBaseline
-                    ? "生成高亮     (diff 当前文本 vs 选中的 baseline)"
-                    : "生成高亮     (尚无 baseline — 不可用)"
+                    ? "Highlight changes  (compares the current text against the selected baseline)"
+                    : "Highlight changes  (no baseline yet - unavailable)"
             });
             try { rbGroup.selectedButton = hasAnyBaseline ? 1 : 0; } catch (eSB) {}
             col.staticTexts.add({ staticLabel: " " });
@@ -291,14 +291,14 @@ try {
             // that triggers a follow-up path-entry dialog. Capture mode
             // ignores this selection — it always writes a fresh timestamped
             // file into the folder.
-            col.staticTexts.add({ staticLabel: "选择 baseline 文件（仅生成高亮时使用）：" });
+            col.staticTexts.add({ staticLabel: "Baseline file (used only when highlighting):" });
             var ddNames = [];
             if (hasAnyBaseline) {
                 for (var __bi = 0; __bi < availableBaselines.length; __bi++) {
                     ddNames.push(availableBaselines[__bi].name);
                 }
             } else {
-                ddNames.push("(无)");
+                ddNames.push("(none)");
             }
             ddNames.push(OTHER_FILE_LABEL);
             var ddBaselineFile = col.dropdowns.add({ stringList: ddNames, selectedIndex: 0 });
@@ -307,13 +307,13 @@ try {
             // incl. whitespace-only). Checked = drop whitespace-only ranges
             // and gaps so the operator only sees content edits.
             var cbIgnoreWS = col.checkboxControls.add({
-                staticLabel: "忽略空格差异  (只对生成高亮模式有效；默认关闭)",
+                staticLabel: "Ignore whitespace differences  (highlighting only; off by default)",
                 checkedState: false
             });
             col.staticTexts.add({ staticLabel: " " });
-            col.staticTexts.add({ staticLabel: "baseline 文件夹: " + baselineDir });
+            col.staticTexts.add({ staticLabel: "Baseline folder: " + baselineDir });
             col.staticTexts.add({
-                staticLabel: "提示：清除高亮请删除「图层」面板中的 _T_translation_highlights 图层。"
+                staticLabel: "To clear the highlights, delete the _T_translation_highlights layer in the Layers panel."
             });
 
             if (dlg.show()) {
@@ -326,8 +326,8 @@ try {
                     try {
                         var warnDlg = app.dialogs.add({ name: "Track Translation Changes", canCancel: false });
                         var warnCol = warnDlg.dialogColumns.add();
-                        warnCol.staticTexts.add({ staticLabel: "尚无 baseline，无法生成高亮。" });
-                        warnCol.staticTexts.add({ staticLabel: "请先运行「捕获 baseline」或选择其他文件。" });
+                        warnCol.staticTexts.add({ staticLabel: "No baseline yet, so nothing can be highlighted." });
+                        warnCol.staticTexts.add({ staticLabel: "Run Capture baseline first, or choose another file." });
                         warnDlg.show();
                         try { warnDlg.destroy(); } catch (e) {}
                     } catch (eW) {}
@@ -354,9 +354,9 @@ try {
                 // "其他文件..." — collect an absolute path via a 2nd dialog.
                 var pathDlg = null, typedPath = "";
                 try {
-                    pathDlg = app.dialogs.add({ name: "选择 baseline 文件", canCancel: true });
+                    pathDlg = app.dialogs.add({ name: "Choose a baseline file", canCancel: true });
                     var pcol = pathDlg.dialogColumns.add();
-                    pcol.staticTexts.add({ staticLabel: "请输入 baseline JSON 文件的绝对路径：" });
+                    pcol.staticTexts.add({ staticLabel: "Full path to the baseline JSON file:" });
                     var pathField = pcol.textEditboxes.add({ editContents: "", minWidth: 480 });
                     if (pathDlg.show()) {
                         try { typedPath = String(pathField.editContents || "").replace(/^\s+|\s+$/g, ""); } catch (e) {}

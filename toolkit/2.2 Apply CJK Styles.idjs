@@ -706,7 +706,7 @@ function buildStatusText() {
     var preview = [];
     var i;
     if (cjkImportBroken) {
-        preview.push("⚠⚠ CJK IMPORT BROKEN — KINSOKU (避头尾) NOT APPLIED ⚠⚠");
+        preview.push("⚠⚠ CJK IMPORT BROKEN — KINSOKU (line-breaking rules) NOT APPLIED ⚠⚠");
         preview.push(cjkImportBrokenDetail);
         preview.push("Donor style lost its CJK config on import. Fix lib/CJK.idml: the donor");
         preview.push("paragraph style must self-define CJK fields LOCALLY (not via root inheritance).");
@@ -1070,7 +1070,7 @@ async function main() {
                         + " appliedLanguage=" + safe(__cjkDx.appliedLanguage);
                     log("CJK IMPORT BROKEN: donor style '" + safe(sourceStyleName)
                         + "' has NO kinsoku config after import (kinsokuSet=" + safe(__cjkDx.kinsokuSet)
-                        + "). Kinsoku (避头尾) will NOT take effect. Fix: ensure lib/CJK.idml's donor"
+                        + "). Kinsoku (line-breaking rules) will NOT take effect. Fix: ensure lib/CJK.idml's donor"
                         + " style self-defines CJK fields LOCALLY (not via root BasedOn inheritance).");
                     pushBundleIssue("CJK import broken: donor '" + safe(sourceStyleName)
                         + "' lost kinsoku config (kinsokuSet=" + safe(__cjkDx.kinsokuSet) + ")");
@@ -1164,7 +1164,7 @@ async function main() {
         // Operator-visible loud failure: the deepest layer of this bug is that
         // an empty merge passed silently behind a "merged N/0/0" fake-green.
         statusLine = "⚠ KINSOKU NOT APPLIED — donor CJK config lost on import ("
-            + cjkImportBrokenDetail + "). 避头尾未生效；修 lib/CJK.idml 让 donor 本地自定义 CJK 字段。 ["
+            + cjkImportBrokenDetail + "). Kinsoku (line-breaking rules) is not in effect; fix lib/CJK.idml so the donor style carries local CJK fields. ["
             + statusLine + "]";
     }
 }

@@ -166,7 +166,7 @@ async function showResult(text) {
         var btn = document.createElement("div");
         btn.setAttribute("role", "button");
         btn.setAttribute("tabindex", "0");
-        btn.textContent = "关闭";
+        btn.textContent = "Close";
         btn.style.cssText = "display:inline-block;padding:6px 18px;background:#2b6cb0;color:#fff;border-radius:4px;cursor:pointer;";
         function close() { try { dlg.close(); } catch (e) {} try { dlg.remove(); } catch (e) {} }
         btn.addEventListener("click", close);
@@ -199,21 +199,21 @@ async function writeReport(docDir, docName, summary) {
 
 function buildText(docName, docDir, scan, stats, rows, dryRun) {
     var lines = [];
-    lines.push("文档: " + docName);
-    lines.push("同目录: " + docDir);
-    lines.push("扫描目录树: 目录 " + scan.dirs + " · 文件 " + scan.files + " · 最深 " + scan.maxDepth + " 层"
-        + (scan.capped ? " · ⚠ 达 " + scan.maxDirs + " 目录上限已截断，部分子文件夹未扫" : ""));
-    lines.push("断链(LINK_MISSING): " + stats.missing + " / 总链接 " + stats.totalLinks);
+    lines.push("Document: " + docName);
+    lines.push("Folder: " + docDir);
+    lines.push("Scanned: " + scan.dirs + " folders, " + scan.files + " files, max depth " + scan.maxDepth + " levels"
+        + (scan.capped ? " · reached the " + scan.maxDirs + " folder limit, so some subfolders were not scanned" : ""));
+    lines.push("Missing links (LINK_MISSING): " + stats.missing + " of " + stats.totalLinks);
     for (var r = 0; r < rows.length; r++) {
         var row = rows[r];
-        if (row.result === "relinked") lines.push("  ✓ 已重链: " + row.name + "  →  " + row.target);
-        else if (row.result === "would_relink") lines.push("  ◌ (dry) 可重链: " + row.name + "  →  " + row.target);
-        else if (row.result === "not_found") lines.push("  ✗ 目录树未找到同名文件: " + row.name);
-        else if (row.result === "failed") lines.push("  ! 重链失败: " + row.name + " — " + row.error);
+        if (row.result === "relinked") lines.push("  ✓ relinked: " + row.name + "  →  " + row.target);
+        else if (row.result === "would_relink") lines.push("  ◌ (dry run) would relink: " + row.name + "  →  " + row.target);
+        else if (row.result === "not_found") lines.push("  ✗ no file with that name in the tree: " + row.name);
+        else if (row.result === "failed") lines.push("  ! relink failed: " + row.name + " — " + row.error);
     }
-    if (stats.missing === 0) lines.push("没有断链，无需处理。");
-    else if (dryRun) lines.push("[dry-run] 可重链 " + stats.wouldRelink + " · 未找到 " + stats.notFound + "(共断链 " + stats.missing + ")");
-    else lines.push("完成 — 重链 " + stats.relinked + " · 未找到 " + stats.notFound + " · 失败 " + stats.failed + "(共断链 " + stats.missing + ")");
+    if (stats.missing === 0) lines.push("No missing links. Nothing to do.");
+    else if (dryRun) lines.push("[dry run] would relink " + stats.wouldRelink + ", not found " + stats.notFound + " (of " + stats.missing + ")");
+    else lines.push("Done - relinked " + stats.relinked + ", not found " + stats.notFound + ", failed " + stats.failed + " (of " + stats.missing + ")");
     return lines.join("\n");
 }
 
@@ -230,7 +230,7 @@ async function main() {
 
     var doc = _resolveDoc(targetPath);
     if (!doc) {
-        var m0 = "没有打开的文档(或找不到 targetPath 指定的文档)。";
+        var m0 = "No document is open, and none matches targetPath.";
         if (!isAutomation) await showResult(m0);
         return { aborted: true, reason: "no_target_doc", message: m0 };
     }
@@ -239,7 +239,7 @@ async function main() {
     var docDir = null;
     try { docDir = await getDocDir(doc); } catch (e) {}
     if (!docDir) {
-        var m1 = "文档「" + docName + "」尚未保存到磁盘，无法确定同目录。请先保存后重试。";
+        var m1 = "Document \"" + docName + "\" has never been saved, so its folder is unknown. Save it and run this again.";
         if (!isAutomation) await showResult(m1);
         return { aborted: true, reason: "doc_not_saved", doc: docName, message: m1 };
     }
@@ -247,7 +247,7 @@ async function main() {
     var built;
     try { built = await buildFolderFileMap(docDir); }
     catch (e) {
-        var m2 = "扫描目录树失败: " + (e && e.message ? e.message : String(e));
+        var m2 = "Could not scan the folder tree: " + (e && e.message ? e.message : String(e));
         if (!isAutomation) await showResult(m2);
         return { aborted: true, reason: "scan_failed", doc: docName, message: m2 };
     }
@@ -262,7 +262,7 @@ async function main() {
             app.doScript(doRun, ScriptLanguage.JAVASCRIPT, undefined,
                 UndoModes.ENTIRE_SCRIPT, "Relink Missing From Doc Folder");
         } catch (eDS) {
-            var m3 = "doScript 失败: " + (eDS && eDS.message ? eDS.message : String(eDS));
+            var m3 = "doScript failed: " + (eDS && eDS.message ? eDS.message : String(eDS));
             if (!isAutomation) await showResult(m3);
             return { aborted: true, reason: "doscript_failed", doc: docName, message: m3 };
         }
@@ -294,6 +294,6 @@ var __result = null;
 try { __result = await main(); }
 catch (eTop) {
     __result = { fatal: String(eTop && (eTop.stack || eTop.message) || eTop) };
-    try { if (typeof showResult === "function") await showResult("脚本出错: " + __result.fatal); } catch (e2) {}
+    try { if (typeof showResult === "function") await showResult("Script error: " + __result.fatal); } catch (e2) {}
 }
 module.exports = __result;
