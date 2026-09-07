@@ -199,18 +199,18 @@ installed_version_at() {  # $1 = panel dir
 # Either would do on paper. Both are here because they fail differently: a link
 # with a stray marker file inside passes (2), a plain directory someone made by
 # hand passes (1).
+# Silent when it declines, which is almost always. Announcing that it did NOT
+# touch a folder the user never asked about is noise, and worse, it fires
+# precisely when nothing is wrong: on any development machine that folder is a
+# bridge, so a normal run ended with a line about a directory the installer has
+# no business discussing. Only the removal is reported, because only the removal
+# happened.
 migrate_legacy_folder() {  # $1 = panel dir
   local old="$1/$LEGACY_FOLDER"
   [ -e "$old" ] || return 0
-  if [ -L "$old" ]; then
-    say "(keeping ${LEGACY_FOLDER}: it is a link, not something this installer created)"
-    return 0
-  fi
-  if [ ! -f "$old/$VERSION_MARKER" ]; then
-    say "(keeping ${LEGACY_FOLDER}: no version marker, so something else put it there)"
-    return 0
-  fi
-  rm -rf "$old" && say "(removed previous installation ${LEGACY_FOLDER})"
+  [ -L "$old" ] && return 0                        # a bridge - not ours
+  [ -f "$old/$VERSION_MARKER" ] || return 0         # someone else put it there
+  rm -rf "$old" && say "(removed a previous installation under the old name ${LEGACY_FOLDER})"
 }
 
 # 任一探测到的面板未装 / 版本不符 → 需要更新 (return 0)。全部一致 → return 1。
@@ -343,7 +343,9 @@ if [ -z "$ACTION" ]; then
     say "  2) Uninstall - remove the installed scripts"
     say "  q) Quit"
     say ""
-    CHOICE="$(ask '  Choose [q]: ')" || CHOICE="__NOTTY__"
+    # No default shown. Both remaining options change something, so neither
+    # should be what Enter does - and hinting "[q]" reads as advice to leave.
+    CHOICE="$(ask '  Choose: ')" || CHOICE="__NOTTY__"
     case "$CHOICE" in
       __NOTTY__)  ACTION="install" ;;
       1)          ACTION="repair"; FORCE=1 ;;

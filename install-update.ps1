@@ -210,11 +210,14 @@ function Remove-LegacyFolder([string]$panelDir) {
   $old = Join-Path $panelDir $LEGACY_FOLDER
   if (-not (Test-Path -LiteralPath $old)) { return }
   $item = Get-Item -LiteralPath $old -Force
+  # 拒绝时保持沉默 —— 这两条本就只进日志, 不进控制台。宣布"它没有动一个用户没问起
+  # 的文件夹"是噪音, 而且恰好在一切正常时才出现: 开发机上那个文件夹就是桥接。
   if ($item.LinkType) { Log "keep $LEGACY_FOLDER (it is a $($item.LinkType), not ours)"; return }
   if (-not (Test-Path -LiteralPath (Join-Path $old $VERSION_MARKER))) {
     Log "keep $LEGACY_FOLDER (no version marker; not installed by us)"; return
   }
   Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+  Say ("(removed a previous installation under the old name {0})" -f $LEGACY_FOLDER)
   Log "removed previous install $LEGACY_FOLDER"
 }
 
@@ -401,7 +404,9 @@ try {
       Say '  q) Quit'
       Say ''
       $choice = ''
-      try { $choice = Read-Host '  Choose [q]' } catch { $choice = '' }
+      # 不显示默认值。剩下的两个选项都会改动东西, 哪个都不该是回车的结果; 而提示
+      # "[q]" 读起来像在建议你走开。
+      try { $choice = Read-Host '  Choose' } catch { $choice = '' }
       switch -Regex ($choice.Trim()) {
         '^1$'       { $action = 'repair'; $Force = $true }
         '^2$'       { $action = 'uninstall' }
