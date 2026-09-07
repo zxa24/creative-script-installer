@@ -477,6 +477,31 @@ function Uninstall-FromIllustrator([string]$scriptsDir) {
 function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   $dst = Join-Path $scriptsDir $AI_FOLDER
   $who = "$env:USERDOMAIN\$env:USERNAME"
+
+  # 已经以管理员身份在跑 → 不会有 UAC 弹窗, 也就没有什么要声明、要征求同意的。
+  # 下面那段说明存在的理由是"向你解释为什么要弹这个框"; 框不会出现时, 它只是挡在
+  # 人和结果之间的几行字, 讲一笔他并不需要付的代价。(仍会进诊断日志。)
+  $elevated = $false
+  try {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+                  [Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch { $elevated = $false }
+  if ($elevated) {
+    try {
+      New-Item -ItemType Directory -Force -Path $dst -ErrorAction Stop | Out-Null
+      & icacls $dst /grant "$($who):(OI)(CI)F" | Out-Null
+    } catch {
+      Log ("already elevated but the folder could not be created: " + $_.Exception.Message)
+      return $false
+    }
+    if (Test-IllustratorWritable $scriptsDir) {
+      Log "granted in-process (already running elevated): $dst"
+      return $true
+    }
+    return $false
+  }
+
   # 没人可问就别问。无人值守的运行不该停在一个没人会看到的提示上。
   if (-not (Test-CanAsk)) { return $false }
 

@@ -141,15 +141,21 @@ application itself**, which you do not have permission to write to — there is 
 user-level alternative; Illustrator reads only that one folder.
 
 So the first Illustrator install needs **one administrator step, once**. The
-installer shows you the exact command it is about to run, asks whether to do it,
-and then does it — on macOS you type your password in the same window, on
-Windows you approve the prompt Windows shows. It gives you a single folder of
-your own inside the application; it does not open the rest of it. After that,
-every install and every update runs with no password at all.
+installer explains what it will create and asks — on macOS you then type your
+password in the same window, on Windows you approve the prompt Windows shows. It
+gives you a single folder of your own inside the application; it does not open
+the rest of it. After that, every install and every update runs with no password
+at all.
 
-Saying no is an answer, not a failure: the run carries on with everything else
-and prints the command at the end, for you to run whenever you like. The
-installer itself never runs as an administrator — the one folder-creating
+If no password is needed — you used `sudo` a few minutes ago and macOS still
+remembers, or you are already running as an administrator on Windows — it does
+not explain and does not ask. There is nothing to warn you about, so the step
+passes in silence. (It is recorded in the diagnostic log either way; see
+[Collecting a log](/reference/advanced#collecting-a-log-when-something-goes-wrong).)
+
+Saying no is an answer, not a failure: the run carries on with everything else,
+and the exact command is printed at the end for you to run whenever you like.
+The installer itself never runs as an administrator — the one folder-creating
 command does.
 
 ::: warning An Illustrator upgrade removes it

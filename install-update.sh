@@ -440,6 +440,26 @@ ai_uninstall_from() {  # $1 = scripts dir; echoes result
 ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   local sdir="$1" dst="$1/$AI_FOLDER" me ans
   me="$(id -un)"
+
+  # If sudo will not ask for anything - credentials already cached in this
+  # terminal, or a NOPASSWD rule - then do it and say nothing.
+  #
+  # The explanation below exists to justify a password prompt. With no prompt
+  # coming, it is five lines standing between the person and their result, about
+  # a cost they are not being asked to pay. (It still reaches the diagnostic log,
+  # so "what did it do" remains answerable.)
+  if sudo -n true 2>/dev/null; then
+    if sudo -n sh -c 'mkdir -p "$1" && chown "$2" "$1"' _ "$dst" "$me" 2>/dev/null \
+       && ai_writable "$sdir"; then
+      log "granted without prompting (sudo already authorised): $dst"
+      return 0
+    fi
+    # Deliberately does NOT fall through to asking: sudo worked, so a password
+    # is not what was missing, and a prompt would only be a second way to fail.
+    log "sudo was authorised but the folder could not be created: $dst"
+    return 1
+  fi
+
   # Nobody to ask -> do not try. An unattended run must not stop at a password
   # prompt nobody will ever see.
   has_tty || return 1
