@@ -91,7 +91,12 @@ acquire_distribution() {
   local zipUrl="${TOOLKIT_ZIP_URL:-https://codeload.github.com/$OWNER/$REPO/zip/refs/heads/$REF}"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/indesign-toolkit-update.XXXXXX")"
   local auth=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && auth=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
-  if ! curl -fL "${auth[@]}" -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
+  # ${arr[@]+"${arr[@]}"} — not just "${arr[@]}". Under `set -u`, bash 3.2 (what
+  # macOS ships) treats expanding an EMPTY array as an unbound variable and
+  # aborts. auth is empty whenever no token is set, i.e. the normal case, so the
+  # plain form kills the download for everyone. Newer bash does not do this,
+  # which is why it survived every test on this side.
+  if ! curl -fL ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
   unzip -q "$WORK/dist.zip" -d "$WORK/extract"
   DIST_ROOT="$(find_dist_root "$WORK/extract")"
 }
@@ -190,7 +195,8 @@ fi
 if [ -z "$SOURCE" ] && [ "$DRYRUN" != "1" ]; then
   MURL="${TOOLKIT_MANIFEST_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/$REF/$MANIFEST_NAME}"
   pauth=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && pauth=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
-  RMANI="$(curl -fsSL "${pauth[@]}" "$MURL" 2>/dev/null || true)"
+  # Same bash 3.2 empty-array trap as in acquire_distribution — see the note there.
+  RMANI="$(curl -fsSL ${pauth[@]+"${pauth[@]}"} "$MURL" 2>/dev/null || true)"
   if [ -n "$RMANI" ]; then
     RVER="$(printf '%s' "$RMANI" | { grep -m1 '"version"' || true; } | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
     if [ -n "$RVER" ] && ! panels_need_update "$RVER"; then
