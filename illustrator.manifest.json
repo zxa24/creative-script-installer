@@ -1,0 +1,34 @@
+{
+  "name": "illustrator-toolkit",
+  "version": "1.0.0",
+  "generatedAt": "2026-09-07T18:40:54.159Z",
+  "payloadDir": "illustrator",
+  "fileCount": 5,
+  "files": [
+    {
+      "path": "Unembed All Images.jsx",
+      "sha256": "a9c383997e11c388387612535a1d301654d882982d32aa44476c2f5e893234b9",
+      "bytes": 7373
+    },
+    {
+      "path": "Export Artboard PDFs.jsx",
+      "sha256": "e16967ec6574037f763feaf8717d61a1b218a5998a94413ea57eab1d7f08e8a4",
+      "bytes": 29096
+    },
+    {
+      "path": "Export Small PDF.jsx",
+      "sha256": "0ceeaa131f7efd9ecbb2551d1b6786ac241c4a1e99556b0f22da72652315506a",
+      "bytes": 3046
+    },
+    {
+      "path": "Replace Fonts.jsx",
+      "sha256": "66840ea44c328d9beeffcd109f3ed093670b96d8d29b0b9742ec0f91c49767e5",
+      "bytes": 34893
+    },
+    {
+      "path": "CJK Composer and Mojikumi.jsx",
+      "sha256": "377ea8cb67c6df774719feea5a98ec447cb76b649d5caac241866a0ab6c91b68",
+      "bytes": 17870
+    }
+  ]
+}

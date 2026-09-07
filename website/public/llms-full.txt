@@ -280,6 +280,36 @@ See [Advanced](/reference/advanced).
 - **Running it again is safe.** If you are already on the latest version it does
   nothing.
 
+## Illustrator
+
+The installer handles Illustrator as well, and for InDesign users nothing about
+that is visible: if you have no Illustrator, nothing about it is mentioned.
+
+Illustrator is different from InDesign in one way that you will notice. InDesign
+keeps its Scripts panel folder in your own user folder, so installing needs no
+special permission. **Illustrator keeps its Scripts folder inside the
+application itself**, which you do not have permission to write to — there is no
+user-level alternative; Illustrator reads only that one folder.
+
+So the first Illustrator install needs **one administrator command, once**. The
+installer never asks for a password itself; it prints the exact command for your
+machine and you run it. It gives you a single folder of your own inside the
+application — it does not open the rest of it. After that, every install and
+every update runs with no password at all.
+
+> **An Illustrator upgrade removes it**
+Upgrading Illustrator replaces the whole application, and the folder goes with
+it. Run that same one command again afterwards, then run the installer.
+
+The scripts then appear under **File > Scripts**, in a submenu named
+`illustrator-toolkit-stable`. Illustrator builds that menu when it starts, so a
+newly installed script does not appear until you restart it.
+
+> **Uninstalling leaves an empty folder**
+Removing the folder itself needs the same administrator permission that creating
+it did, and the installer does not ask for one twice. `Uninstall` removes the
+scripts and leaves the empty folder behind. It does nothing.
+
 ## If something goes wrong
 
 The installer keeps no log file. If a run fails, it prints the one command that
