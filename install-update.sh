@@ -411,6 +411,48 @@ ai_uninstall_from() {  # $1 = scripts dir; echoes result
   if rmdir "$dst" 2>/dev/null; then echo "removed"; else echo "emptied"; fi
 }
 
+ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
+  local sdir="$1" dst="$1/$AI_FOLDER" me ans
+  me="$(id -un)"
+  # Nobody to ask -> do not try. An unattended run must not stop at a password
+  # prompt nobody will ever see.
+  has_tty || return 1
+
+  say ""
+  say "${2:-Illustrator} needs one administrator step, once. It will run:"
+  say ""
+  say "    sudo mkdir -p \"$dst\""
+  say "    sudo chown \"$me\" \"$dst\""
+  say ""
+  say "  That creates one folder inside the application and makes it yours."
+  say "  It changes nothing else, and it is the only time a password is needed."
+  ans="$(ask '  Do it now? [Y/n]: ')" || return 1
+  case "$ans" in n|N|no|NO|No) say "  Skipped."; return 1 ;; esac
+
+  # sudo reads its password from the TERMINAL, not from stdin - which is the
+  # whole reason this can work under `curl | bash`, where stdin is the script
+  # itself. </dev/tty is belt and braces for the same reason `ask` needs it.
+  #
+  # One sudo, one command, spelled out above before it runs. The installer is
+  # still not run as an administrator: only this mkdir+chown is.
+  if ! sudo -p "  Password for %u (used once, not stored): " sh -c \
+       'mkdir -p "$1" && chown "$2" "$1"' _ "$dst" "$me" </dev/tty; then
+    say ""
+    say "  That did not go through - nothing was changed."
+    return 1
+  fi
+
+  # Do not take the exit code as the answer. Check the thing actually needed:
+  # a folder we can write into. (A command can succeed and still not leave the
+  # state its caller assumed.)
+  if ai_writable "$sdir"; then
+    say "  Done. No password will be needed for this again."
+    return 0
+  fi
+  say "  The command reported success, but the folder still is not writable."
+  return 1
+}
+
 print_illustrator_setup() {  # $1 = scripts dir
   say ""
   say "  Illustrator keeps its Scripts folder inside the application itself, so it"
@@ -584,10 +626,11 @@ if [ -z "$ACTION" ]; then
     if [ -L "$p/$AI_FOLDER" ]; then
       say "  ${label}: a link is in the way (development bridge) - see DEV-BRIDGE.md"
     elif ! ai_writable "$p"; then
-      # Not an error, and not counted as "installed" or as "needs updating":
-      # it is a target the menu cannot act on, so it must not make Install
-      # appear to be the answer. The command that fixes it is printed later.
-      say "  ${label}: needs one-time setup (shown below)"
+      # Not an error, and not counted as "installed" or as "needs updating".
+      # Deliberately does NOT promise what happens next: the run may offer to
+      # do it, or print the command - saying "shown below" would be false in
+      # the first case, and the status line is written before either is known.
+      say "  ${label}: not set up yet"
     elif [ -n "$lv" ]; then
       INSTALLED_ANY=1
       if [ -n "$RVER" ] && [ "$lv" != "$RVER" ]; then
@@ -774,6 +817,24 @@ if [ -n "$AI_DIRS" ]; then
   else
     fail "The Illustrator files failed verification; nothing was written to Illustrator."
   fi
+fi
+
+# Offer the one administrator step here, in the main flow, BEFORE the install
+# loop. It cannot live inside ai_install_into: that is called as "$(...)", so
+# everything it prints is captured as its return value - a prompt in there would
+# be invisible and an answer would be read into the wrong place.
+#
+# Asked once, up front, only when there is a verified payload to install, and
+# only when there is a terminal to ask at. Declining is not a failure: the run
+# continues and the command is printed at the end as before.
+if [ "$AI_OK" = "1" ] && [ "$DRYRUN" != "1" ] && [ "$ACTION" != "uninstall" ]; then
+  while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    d="${t%%|*}"
+    [ -L "$d/$AI_FOLDER" ] && continue
+    ai_writable "$d" && continue
+    ai_try_grant "$d" "${t#*|}" || true
+  done <<< "$AI_DIRS"
 fi
 
 INSTALLED=0; SKIPPED=0; WOULD=0; FAILED=0; BLOCKED=0; BLOCKED_PANELS=""

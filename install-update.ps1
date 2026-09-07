@@ -450,6 +450,47 @@ function Uninstall-FromIllustrator([string]$scriptsDir) {
   } catch { return 'emptied' }
 }
 
+function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
+  $dst = Join-Path $scriptsDir $AI_FOLDER
+  $who = "$env:USERDOMAIN\$env:USERNAME"
+  # 没人可问就别问。无人值守的运行不该停在一个没人会看到的提示上。
+  if (-not (Test-CanAsk)) { return $false }
+
+  Say ''
+  Say ("{0} needs one administrator step, once. It will run, elevated:" -f $label)
+  Say ''
+  Say ("    New-Item -ItemType Directory -Force -Path '{0}'" -f $dst)
+  Say ("    icacls '{0}' /grant '{1}:(OI)(CI)F'" -f $dst, $who)
+  Say ''
+  Say '  That creates one folder inside the application and gives you access to it.'
+  Say '  It changes nothing else, and it is the only time this is needed.'
+  $ans = ''
+  try { $ans = Read-Host '  Do it now? [Y/n]' } catch { return $false }
+  if ($ans -match '^\s*[nN]') { Say '  Skipped.'; return $false }
+
+  $inner = "New-Item -ItemType Directory -Force -Path '$dst' | Out-Null; icacls '$dst' /grant '$($who):(OI)(CI)F' | Out-Null"
+  try {
+    # Windows 的"提权"是 UAC 弹窗, 不是终端里输密码。触发它并【等它结束】——
+    # 不等的话下面那句可写性检查会在授权发生之前就跑完, 然后报一个假的失败。
+    # 安装器本身仍然不是以管理员身份运行的: 被提权的只有这一条命令。
+    Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden `
+      -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner -ErrorAction Stop
+  } catch {
+    # 取消 UAC 也走这里 —— 那不是错误, 是一个回答。
+    Say ''
+    Say '  That did not go through - nothing was changed.'
+    return $false
+  }
+
+  # 不把退出码当答案。检查真正需要的东西: 一个写得进去的文件夹。
+  if (Test-IllustratorWritable $scriptsDir) {
+    Say '  Done. This will not be needed again.'
+    return $true
+  }
+  Say '  The command reported success, but the folder still is not writable.'
+  return $false
+}
+
 function Show-IllustratorSetup([string]$scriptsDir) {
   $dst = Join-Path $scriptsDir $AI_FOLDER
   $who = "$env:USERDOMAIN\$env:USERNAME"
@@ -603,9 +644,10 @@ try {
         continue
       }
       if (-not (Test-IllustratorWritable $t.Dir)) {
-        # 既不算"已安装"也不算"要更新": 这是菜单动不了的目标, 不能让 Install
-        # 看起来是它的答案。解决它的那条命令在后面打印。
-        Say ("  {0}: needs one-time setup (shown below)" -f $t.Label)
+        # 既不算"已安装"也不算"要更新"。刻意【不】承诺接下来会怎样: 这次运行
+        # 可能会问你要不要现在做, 也可能只打印命令 —— 写"见下方"在前一种情况下
+        # 就是假话, 而状态行是在两者都还未定之前打印的。
+        Say ("  {0}: not set up yet" -f $t.Label)
         continue
       }
       $lv = Get-IllustratorInstalledVersion $t.Dir
@@ -782,6 +824,18 @@ try {
   $aiInstalled = 0; $aiSkipped = 0; $aiWould = 0; $aiFailed = 0; $aiSetup = 0
   $aiPayloadDir = Join-Path $root $AI_PAYLOAD_SUBDIR
   $aiManifestPath = Join-Path $root $AI_MANIFEST_NAME
+
+  # 那一次性管理员步骤在这里问 —— 在安装循环【之前】, 只问一次, 且只在确实有
+  # 一份校验过的载荷要装、又确实有人可问的时候。拒绝不算失败: 运行照常继续,
+  # 那条命令仍会在末尾打印出来, 和以前一样。
+  if ($aiDirs.Count -gt 0 -and -not $DryRun -and (Test-Path $aiPayloadDir)) {
+    foreach ($t in $aiDirs) {
+      $d = Join-Path $t.Dir $AI_FOLDER
+      if ((Test-Path -LiteralPath $d) -and (Get-Item -LiteralPath $d -Force).LinkType) { continue }
+      if (Test-IllustratorWritable $t.Dir) { continue }
+      [void](Invoke-IllustratorGrant $t.Dir $t.Label)
+    }
+  }
   if ($aiDirs.Count -gt 0) {
     if (-not (Test-Path $aiPayloadDir) -or -not (Test-Path $aiManifestPath)) {
       # 旧分发包没有 Illustrator 那一半。说出来并继续做 InDesign, 而不是让一次
