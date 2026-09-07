@@ -8,9 +8,31 @@ the same button afterwards.
 
 ## Install
 
-**Windows** — double-click `install-update.bat`.
-**macOS** — right-click `install-update.command` and choose **Open** (not
-double-click) the first time.
+**Windows** — paste into PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
+
+**macOS** — paste into Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+```
+
+Running the same line again updates an existing installation, and does nothing
+if you are already current.
+
+<details>
+<summary>Prefer to download it instead?</summary>
+
+Download this repository as a ZIP, unpack it, and then:
+
+- **Windows** — double-click `install-update.bat`.
+- **macOS** — right-click `install-update.command` and choose **Open** (not
+  double-click) the first time, so Gatekeeper lets it through.
+
+</details>
 
 Then restart the application. The scripts appear under
 **Window → Utilities → Scripts** (InDesign) as a numbered list: `1.x` is the
