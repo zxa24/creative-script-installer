@@ -242,8 +242,20 @@ fi
 # Everything scripted - automation, CI, the bootstraps' own --source hand-off -
 # keeps the old behaviour of just installing, so adding a menu cannot silently
 # turn an unattended run into one that waits forever for an answer.
+# The version on offer. With a local --source it comes from that source's own
+# manifest, NOT from the network.
+#
+# Reading it only over the network was wrong in the case that matters most: the
+# one-line bootstraps always pass --source, having already downloaded. So the
+# available version was never known on that path, every installation looked
+# current, and the menu could never offer "Update" — on the route almost
+# everyone takes. Found by constructing the mismatch on purpose; a run where
+# things happen to be current looks identical.
 RVER=""
-if [ -z "$SOURCE" ]; then
+if [ -n "$SOURCE" ]; then
+  LM="$(find "$SOURCE" -maxdepth 5 -name "$MANIFEST_NAME" -type f 2>/dev/null | head -n1)"
+  [ -n "$LM" ] && RVER="$(read_version "$LM" 2>/dev/null || true)"
+else
   MURL0="${TOOLKIT_MANIFEST_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/$REF/$MANIFEST_NAME}"
   pa0=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && pa0=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
   RM0="$(curl -fsSL ${pa0[@]+"${pa0[@]}"} "$MURL0" 2>/dev/null || true)"
@@ -294,8 +306,39 @@ if [ -z "$ACTION" ]; then
   # there is never a gap for the reader to interpret. The default follows too:
   # with nothing to install, Enter means quit, because Repair rewrites files and
   # should be asked for rather than fallen into.
-  if [ "$INSTALLED_ANY" = "1" ] && [ "$ALL_CURRENT" = "1" ]; then
-    MENU_SHAPE="current"
+  # Only offer what there is something to do. Repair and Uninstall need an
+  # existing installation; Install needs the absence of one. An option that
+  # cannot apply still costs the reader something — it has to be read,
+  # understood and ruled out — and if chosen it can only report a non-event.
+  #
+  # Numbering and the default follow the options actually shown, so there is
+  # never a gap to interpret. Where nothing needs installing, Enter quits:
+  # Repair rewrites files and should be asked for, not fallen into.
+  if [ "$INSTALLED_ANY" = "0" ]; then
+    say "  1) Install"
+    say "  q) Quit"
+    say ""
+    CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
+    case "$CHOICE" in
+      __NOTTY__|""|1) ACTION="install" ;;
+      q|Q)            say ""; say "Nothing was changed."; exit 0 ;;
+      *)              say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
+    esac
+  elif [ "$ALL_CURRENT" = "0" ]; then
+    say "  1) Update    - install the newer version"
+    say "  2) Repair    - rewrite the files even if the version already matches"
+    say "  3) Uninstall - remove the installed scripts"
+    say "  q) Quit"
+    say ""
+    CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
+    case "$CHOICE" in
+      __NOTTY__|""|1) ACTION="install" ;;       # nobody to ask - behave as before
+      2)              ACTION="repair"; FORCE=1 ;;
+      3)              ACTION="uninstall" ;;
+      q|Q)            say ""; say "Nothing was changed."; exit 0 ;;
+      *)              say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
+    esac
+  else
     say "  1) Repair    - rewrite the files even if the version already matches"
     say "  2) Uninstall - remove the installed scripts"
     say "  q) Quit"
@@ -306,26 +349,6 @@ if [ -z "$ACTION" ]; then
       1)          ACTION="repair"; FORCE=1 ;;
       2)          ACTION="uninstall" ;;
       ""|q|Q)     say ""; say "Nothing was changed."; exit 0 ;;
-      *)          say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
-    esac
-  else
-    MENU_SHAPE="pending"
-    if [ "$INSTALLED_ANY" = "1" ]; then
-      say "  1) Update    - install the newer version"
-    else
-      say "  1) Install"
-    fi
-    say "  2) Repair    - rewrite the files even if the version already matches"
-    say "  3) Uninstall - remove the installed scripts"
-    say "  q) Quit"
-    say ""
-    CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
-    case "$CHOICE" in
-      __NOTTY__)  ACTION="install" ;;           # nobody to ask - behave as before
-      ""|1)       ACTION="install" ;;
-      2)          ACTION="repair"; FORCE=1 ;;
-      3)          ACTION="uninstall" ;;
-      q|Q)        say ""; say "Nothing was changed."; exit 0 ;;
       *)          say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
     esac
   fi

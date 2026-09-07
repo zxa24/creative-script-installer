@@ -327,8 +327,18 @@ try {
   if (-not $action -and -not (Test-CanAsk)) { $action = 'install' }
 
   if (-not $action) {
+    # 有本地 --source 时, 待装版本来自那个源自己的 manifest, 而不是网络。
+    # 只走网络是错的, 而且错在最要紧的那条路: 两个一行命令引导脚本都已经下载完再
+    # 传 --source, 于是那条路上永远读不到待装版本, 每个安装都显得是最新, 菜单永远
+    # 给不出 "Update" —— 而那是几乎所有人走的路。靠人为造出版本不一致才发现;
+    # 恰好本来就是最新的那种运行, 读数完全一样。
     $rver = $null
-    if (-not $Source) {
+    if ($Source) {
+      try {
+        $lm = Get-ChildItem -Path $Source -Recurse -Filter $MANIFEST_NAME -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($lm) { $rver = (Get-Content $lm.FullName -Raw | ConvertFrom-Json).version }
+      } catch { }
+    } else {
       try { $rver = (Fetch-RemoteManifest (Resolve-RemoteUrls).Manifest).version } catch { }
     }
     $anyInstalled = $false; $allCurrent = $true
@@ -355,23 +365,23 @@ try {
     #
     # 编号跟着实际显示的条目走, 不固定, 免得留下一个空号让读者去猜。默认值也跟着走:
     # 没有可安装项时回车 = 退出, 因为 Repair 会重写文件, 那应当是被主动选择的。
-    $shape = if ($anyInstalled -and $allCurrent) { 'current' } else { 'pending' }
-    if ($shape -eq 'current') {
-      Say '  1) Repair    - rewrite the files even if the version already matches'
-      Say '  2) Uninstall - remove the installed scripts'
+    # 只提供有事可做的项。Repair / Uninstall 需要已有安装, Install 需要没有安装。
+    # 一个用不上的条目仍然要被读、被理解、被排除, 而一旦被选中, 它只能报告一件没
+    # 发生的事。编号与默认值都跟着实际显示的条目走, 不留空号。无需安装时回车 =
+    # 退出: Repair 会重写文件, 应当被主动选择而不是回车掉进去。
+    if (-not $anyInstalled) {
+      Say '  1) Install'
       Say '  q) Quit'
       Say ''
       $choice = ''
-      try { $choice = Read-Host '  Choose [q]' } catch { $choice = '' }
+      try { $choice = Read-Host '  Choose [1]' } catch { $choice = '' }
       switch -Regex ($choice.Trim()) {
-        '^1$'       { $action = 'repair'; $Force = $true }
-        '^2$'       { $action = 'uninstall' }
-        '^$|^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
-        default     { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+        '^$|^1$' { $action = 'install' }
+        '^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
+        default  { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
       }
-    } else {
-      if ($anyInstalled) { Say '  1) Update    - install the newer version' }
-      else               { Say '  1) Install' }
+    } elseif (-not $allCurrent) {
+      Say '  1) Update    - install the newer version'
       Say '  2) Repair    - rewrite the files even if the version already matches'
       Say '  3) Uninstall - remove the installed scripts'
       Say '  q) Quit'
@@ -384,6 +394,19 @@ try {
         '^3$'    { $action = 'uninstall' }
         '^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
         default  { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+      }
+    } else {
+      Say '  1) Repair    - rewrite the files even if the version already matches'
+      Say '  2) Uninstall - remove the installed scripts'
+      Say '  q) Quit'
+      Say ''
+      $choice = ''
+      try { $choice = Read-Host '  Choose [q]' } catch { $choice = '' }
+      switch -Regex ($choice.Trim()) {
+        '^1$'       { $action = 'repair'; $Force = $true }
+        '^2$'       { $action = 'uninstall' }
+        '^$|^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
+        default     { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
       }
     }
     Say ''
