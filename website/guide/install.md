@@ -129,6 +129,13 @@ See [Advanced](/reference/advanced).
 - **Running it again is safe.** If you are already on the latest version it does
   nothing.
 
+## If something goes wrong
+
+The installer keeps no log file. If a run fails, it prints the one command that
+runs it again *and* saves a log to your Desktop — run that, and send the file
+it names. The command is in
+[Collecting a log](/reference/advanced#collecting-a-log-when-something-goes-wrong).
+
 ## Next
 
 - [The normal path](/guide/workflow) — what to run on an ordinary job.

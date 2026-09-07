@@ -11,6 +11,10 @@
 #   TOOLKIT_SOURCE=<本地 .zip 或目录>   离线 / 自测 (最高优先)
 #   TOOLKIT_ZIP_URL / TOOLKIT_MANIFEST_URL   完整 URL 覆盖
 #   TOOLKIT_AUTH_TOKEN=<PAT>            私有源退路 (加 Authorization header)
+#
+# 排障日志 (默认关闭, 开了才落盘, 落在桌面):
+#   --log   参数     |   CSI_LOG=1   环境变量
+#   一行命令下:  curl -fsSL <install.sh> | bash -s -- --log
 set -euo pipefail
 
 # ===== 可配置源 (发布时设定) =====
@@ -41,6 +45,15 @@ SOURCE="${TOOLKIT_SOURCE:-}"
 FORCE=0
 DRYRUN=0
 ACTION=""            # "", install, repair, uninstall  (empty = ask, if we can)
+
+# 诊断日志【默认不落盘】—— 绝大多数运行没人会去看它, 而一个每次追加、从不轮转的
+# 文件在机器上只增不减。出事时才开, 开了就落在【桌面】: 找得到, 也能直接拖出来发人。
+# 两个开关是因为一行命令的两个入口能传的东西不同:
+#   curl … | bash -s -- --log     ← 管道进来的 shell 可以收参数
+#   CSI_LOG=1 (环境变量)          ← 与 Windows 的 irm|iex 对称, 那边只能靠它
+LOGGING=0
+case "${CSI_LOG:-}" in 1|true|yes|on|TRUE|YES|ON) LOGGING=1 ;; esac
+
 for a in "$@"; do
   case "$a" in
     --force)     FORCE=1 ;;
@@ -49,6 +62,7 @@ for a in "$@"; do
     --install)   ACTION="install" ;;
     --repair)    ACTION="repair"; FORCE=1 ;;
     --uninstall) ACTION="uninstall" ;;
+    --log)       LOGGING=1 ;;
   esac
 done
 
@@ -78,12 +92,45 @@ ask() {  # $1 = prompt; echoes the answer, returns 1 when there is no terminal
   { exec 3<&-; } 2>/dev/null; return 1
 }
 
+LOGFILE=""
+if [ "$LOGGING" = "1" ]; then
+  __d="$HOME/Desktop"; [ -d "$__d" ] || __d="$HOME"
+  LOGFILE="$__d/creative-script-installer-log-$(date '+%Y%m%d-%H%M%S').txt"
+  if : > "$LOGFILE" 2>/dev/null; then
+    {
+      printf '%s\n' "creative-script-installer log  $(date '+%Y-%m-%d %H:%M:%S')"
+      printf '%s\n' "$(uname -srm)  bash ${BASH_VERSION:-?}"
+      printf '%s\n' "args: $*"
+      printf '\n'
+    } >> "$LOGFILE" 2>/dev/null || true
+  else
+    printf '%s\n' "Could not write a log to $__d - continuing without one." >&2
+    LOGFILE=""
+  fi
+fi
+log() {
+  [ -n "$LOGFILE" ] || return 0
+  printf '%s  %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null || true
+}
+
 WORK=""
-cleanup() { [ -n "$WORK" ] && [ -d "$WORK" ] && rm -rf "$WORK" || true; }
+cleanup() {
+  # 必须是第一行: 后面任何一条命令都会改写 $?, 而这里要的是【触发退出的那个】状态。
+  __rc=$?
+  [ -n "$WORK" ] && [ -d "$WORK" ] && rm -rf "$WORK" || true
+  if [ -n "$LOGFILE" ]; then
+    printf '\n%s\n' "Diagnostic log saved to: $LOGFILE"
+  elif [ "$__rc" -ne 0 ]; then
+    # 出事时才说怎么拿日志 —— 而不是让人事后去猜哪里有一个。
+    printf '\n%s\n' "To save a diagnostic log for troubleshooting, run:"
+    printf '%s\n'   "  curl -fsSL https://raw.githubusercontent.com/$OWNER/$REPO/$REF/install.sh | bash -s -- --log"
+  fi
+  return 0
+}
 trap cleanup EXIT
 
-say()  { printf '%s\n' "$*"; }
-fail() { printf '%s\n' "$*" >&2; }
+say()  { printf '%s\n' "$*"; log "$*"; }
+fail() { printf '%s\n' "$*" >&2; log "! $*"; }
 
 # --- 1. 探测 Scripts Panel 目录 (可能多版本 / 多 locale) -----------------------
 #   ~/Library/Preferences/Adobe InDesign/Version <N>/<locale>/Scripts/Scripts Panel
@@ -126,7 +173,12 @@ acquire_distribution() {
   # aborts. auth is empty whenever no token is set, i.e. the normal case, so the
   # plain form kills the download for everyone. Newer bash does not do this,
   # which is why it survived every test on this side.
-  if ! curl -fL ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
+  # --progress-bar, not curl's default meter: the default is a table of twelve
+  # numbers that redraws in place, and next to two lines of plain English it
+  # reads like something went wrong. A bar says the one thing worth saying here,
+  # which is that it is still moving. (Not -s: silence during a multi-megabyte
+  # download reads as a hang.)
+  if ! curl -fL --progress-bar ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
   unzip -q "$WORK/dist.zip" -d "$WORK/extract"
   DIST_ROOT="$(find_dist_root "$WORK/extract")"
 }

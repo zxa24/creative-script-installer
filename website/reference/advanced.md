@@ -26,6 +26,7 @@ variables:
 | `TOOLKIT_ZIP_URL` | Override the payload URL outright. |
 | `TOOLKIT_MANIFEST_URL` | Override the manifest URL outright. |
 | `TOOLKIT_AUTH_TOKEN` | Fallback for a private source: sends an `Authorization: token …` header with the request. |
+| `CSI_LOG` | Set to `1` to save a diagnostic log to the Desktop. See [Collecting a log](#collecting-a-log-when-something-goes-wrong). |
 
 ## Command-line flags
 
@@ -34,6 +35,36 @@ variables:
 | `-Force` | `--force` | Reinstall even when the installed version already matches. |
 | `-DryRun` | `--dry-run` | Detect and verify only — write no files. |
 | `-Source <path>` | `--source=<path>` | Install from a local source. |
+| `-Log` | `--log` | Save a diagnostic log to the Desktop. |
+
+## Collecting a log when something goes wrong
+
+The installer **writes no log file** on an ordinary run. Nothing accumulates on
+the machine, and there is no file to find later — which is the point: a log that
+is always written is one nobody reads and nobody cleans up.
+
+When something does go wrong, run it again asking for a log. The one-line
+installers cannot take a flag on Windows — `iex` receives the script as text,
+not as a command — so an environment variable is the switch there:
+
+::: code-group
+
+```powershell [Windows]
+$env:CSI_LOG='1'; irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
+
+```bash [macOS]
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash -s -- --log
+```
+
+:::
+
+The log lands on your **Desktop** as
+`creative-script-installer-log-<date>-<time>.txt`, and the installer prints the
+full path when it finishes. Each run writes its own file, so nothing is
+appended to and nothing grows. Send that file on; delete it when you are done.
+
+A failed run tells you this command itself, so nobody has to remember it.
 
 ## Building the distribution bundle
 

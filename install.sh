@@ -34,7 +34,10 @@ done
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/csi.XXXXXX")"
 printf '%s\n' "Downloading..."
-curl -fsSL -o "$TMP/csi.zip" "$ZIP_URL"
+# A bar rather than silence: this is the multi-megabyte download, and it is the
+# first thing that happens after the person pastes the one-liner. -f still means
+# an HTTP error is an exit code rather than a saved error page.
+curl -fL --progress-bar -o "$TMP/csi.zip" "$ZIP_URL"
 unzip -q "$TMP/csi.zip" -d "$TMP/x"
 
 DIR="$(find "$TMP/x" -maxdepth 1 -mindepth 1 -type d | head -n1)"

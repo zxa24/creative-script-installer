@@ -15,6 +15,10 @@
         $env:TOOLKIT_SOURCE   同 -Source
         $env:TOOLKIT_ZIP_URL + $env:TOOLKIT_MANIFEST_URL   完整 URL 覆盖
     - 私有源: 设 $env:TOOLKIT_AUTH_TOKEN → 加 Authorization header (选项 B 退路)
+
+  排障日志 (默认关闭, 开了才落盘, 落在桌面):
+    -Log 参数  |  $env:CSI_LOG='1' 环境变量
+    一行命令下: $env:CSI_LOG='1'; irm <install.ps1> | iex
   ------------------------------------------------------------------
 #>
 [CmdletBinding()]
@@ -24,7 +28,8 @@ param(
   [switch]$DryRun,                                # 只探测+校验, 不写任何文件
   [switch]$Install,                               # 跳过菜单, 直接装/更新
   [switch]$Repair,                                # 重装当前版本 (= Force)
-  [switch]$Uninstall                              # 移除已安装的脚本
+  [switch]$Uninstall,                             # 移除已安装的脚本
+  [switch]$Log                                    # 排障: 把诊断日志存到桌面 (默认不存)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +66,18 @@ $Script:LogLines = @()
 function Log([string]$m) {
   $Script:LogLines += ("{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $m)
 }
+
+# 诊断日志【默认不落盘】。此前每次运行都往 %TEMP% 追加同一个文件, 从不轮转 ——
+# 一台机器上它只增不减, 而绝大多数运行根本没人会去看它。
+#
+# 开关有两种, 因为一行命令的两个平台入口能传的东西不一样:
+#   $env:CSI_LOG='1'; irm …| iex   ← iex 收到的是一段字符串, 没法传参数, 只能靠环境变量
+#   install-update.ps1 -Log        ← 直接调用时用参数
+# 环境变量由子进程继承, 所以 install.ps1 引导层不需要改一个字就能透传。
+#
+# 落点是【桌面】而不是 %TEMP%: 要用户找得到、也能拖出来发给人。GetFolderPath 认
+# OneDrive 重定向后的桌面, 这在本机就是实情; 拿不到时退回用户目录。
+$Script:LogEnabled = $Log.IsPresent -or (@('1','true','yes','on') -contains ("" + $env:CSI_LOG).ToLower())
 
 # ------------------------------------------------------------------
 # 1. 探测 Scripts Panel 目录 (可能多版本 / 多 locale)
@@ -544,12 +561,35 @@ finally {
   if ($work -and (Test-Path $work)) {
     try { Remove-Item $work -Recurse -Force } catch {}
   }
-  # 落一份诊断日志到 temp (仅排障用)
-  try {
-    $logPath = Join-Path $env:TEMP 'indesign-toolkit-update.log'
-    ("=== " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " ===") | Out-File $logPath -Append -Encoding UTF8
-    $Script:LogLines | Out-File $logPath -Append -Encoding UTF8
-  } catch {}
+  # 诊断日志: 只在被要求时落盘, 落到桌面, 每次一个带时间戳的新文件 (不追加, 不增长)。
+  if ($Script:LogEnabled) {
+    try {
+      $dir = [Environment]::GetFolderPath('Desktop')
+      if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { $dir = $env:USERPROFILE }
+      $logPath = Join-Path $dir ('creative-script-installer-log-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.txt')
+      $head = @(
+        ('creative-script-installer log  ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
+        ('windows ' + [Environment]::OSVersion.Version + '  powershell ' + $PSVersionTable.PSVersion),
+        ('source=' + $Source + '  force=' + $Force + ' dryrun=' + $DryRun +
+         ' install=' + $Install + ' repair=' + $Repair + ' uninstall=' + $Uninstall),
+        ''
+      )
+      ($head + $Script:LogLines) | Out-File -LiteralPath $logPath -Encoding UTF8
+      Write-Host ''
+      Say ("Diagnostic log saved to: " + $logPath)
+    } catch {
+      Write-Host ''
+      Warn ("Could not write the diagnostic log: " + $_.Exception.Message)
+    }
+  }
+  elseif ($exitCode -ne 0) {
+    # 说清怎么拿到日志, 而不是让人事后去猜哪里有一个。这条只在真出事时出现。
+    Write-Host ''
+    Say 'To save a diagnostic log for troubleshooting, run:'
+    # 反引号是必须的: 双引号串里 $env:CSI_LOG 会被展开成空, 打印出来的命令就没了
+    # 那个变量 —— 一条看起来正常、照抄却不起作用的指令。
+    Say ("  `$env:CSI_LOG='1'; irm https://raw.githubusercontent.com/$Owner/$Repo/$Ref/install.ps1 | iex")
+  }
 }
 
 exit $exitCode
