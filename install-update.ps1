@@ -31,10 +31,17 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}  # 中
 
 # ===== 可配置源 (发布时设定) =====
 $Owner = 'zxa24'
-$Repo  = 'indesign-toolkit-dist'   # 占位: E-source 发布时定名
+$Repo  = 'creative-script-installer'   # the public distribution repo
 $Ref   = 'main'
 
-$INSTALL_FOLDER = 'indesign-toolkit'   # 装进 Scripts Panel 的子文件夹名
+# 认得出是这个仓, 后缀说明是哪个构建 (owner 2026-09-07 拍)。
+# 后缀放在【本侧】是有意的: 这里定的名字由安装器在每台机器上自动生效; 若把改名
+# 放在开发端, 就得有人一台一台手工改, 而没轮到的每台机器上冲突都还活着。
+$INSTALL_FOLDER = 'indesign-toolkit-stable'
+# 旧版本装在这个名字下, 而开发机的桥接也叫这个名字。安装成功后清理, 免得更新过的
+# 设计师面板里出现两套 —— 但仅限确实是旧安装, 见 Remove-LegacyFolder。同一个名字
+# 承担两种角色, 正是那个检查必须谨慎而不是图省事的原因。
+$LEGACY_FOLDER  = 'indesign-toolkit'
 $MANIFEST_NAME  = 'toolkit.manifest.json'
 $PAYLOAD_SUBDIR = 'toolkit'
 $VERSION_MARKER = '.installed_version.json'
@@ -126,11 +133,11 @@ function Test-PanelsNeedUpdate($panels, [string]$version) {
 function Acquire-Distribution {
   # (a) 本地 override: -Source / $env:TOOLKIT_SOURCE
   if ($Source) {
-    if (-not (Test-Path $Source)) { throw "指定的源不存在: $Source" }
+    if (-not (Test-Path $Source)) { throw "Source does not exist: $Source" }
     $item = Get-Item $Source
     if ($item.PSIsContainer) {
       $root = Find-DistRoot $item.FullName
-      if (-not $root) { throw "源目录里找不到 $MANIFEST_NAME : $Source" }
+      if (-not $root) { throw "No $MANIFEST_NAME in that folder: $Source" }
       Log "source=localdir root=$root"
       return @{ Root = $root; Work = $null }
     } else {
@@ -139,7 +146,7 @@ function Acquire-Distribution {
       New-Item -ItemType Directory -Path $ex -Force | Out-Null
       Expand-Archive -Path $item.FullName -DestinationPath $ex -Force
       $root = Find-DistRoot $ex
-      if (-not $root) { throw "源 zip 里找不到 $MANIFEST_NAME : $Source" }
+      if (-not $root) { throw "No $MANIFEST_NAME inside that zip: $Source" }
       Log "source=localzip root=$root"
       return @{ Root = $root; Work = $work }
     }
@@ -155,7 +162,7 @@ function Acquire-Distribution {
   New-Item -ItemType Directory -Path $ex -Force | Out-Null
   Expand-Archive -Path $zip -DestinationPath $ex -Force
   $root = Find-DistRoot $ex
-  if (-not $root) { throw "下载的包里找不到 $MANIFEST_NAME (源结构异常)" }
+  if (-not $root) { throw "No $MANIFEST_NAME in the downloaded package - unexpected layout" }
   Log "source=remote root=$root"
   return @{ Root = $root; Work = $work }
 }
@@ -188,8 +195,35 @@ function Verify-Payload([object]$manifest, [string]$payloadDir) {
 # ------------------------------------------------------------------
 # 4. 装入单个 Scripts Panel (原子 rename swap + 失败回滚)
 # ------------------------------------------------------------------
+# 仅在安装成功后调用, 失败时不会让面板两个文件夹都没有。
+#
+# LEGACY_FOLDER 同时也是开发机给桥接起的名字, 所以这里必须把「旧安装」和「指向
+# 别人工作树的链接」分开。删错是破坏性且静默的。两个互相独立的测试:
+#   1. 不能是重解析点 —— 桥接一定是, 安装出来的一定不是
+#   2. 必须带本安装器的版本标记 —— 手工建的目录或 checkout 都没有
+# 单看任一条纸面上都够; 两条都在是因为失效方式不同: 里面混了个杂散标记文件的链接
+# 骗得过第 2 条, 手工建的普通目录骗得过第 1 条。
+function Remove-LegacyFolder([string]$panelDir) {
+  $old = Join-Path $panelDir $LEGACY_FOLDER
+  if (-not (Test-Path -LiteralPath $old)) { return }
+  $item = Get-Item -LiteralPath $old -Force
+  if ($item.LinkType) { Log "keep $LEGACY_FOLDER (it is a $($item.LinkType), not ours)"; return }
+  if (-not (Test-Path -LiteralPath (Join-Path $old $VERSION_MARKER))) {
+    Log "keep $LEGACY_FOLDER (no version marker; not installed by us)"; return
+  }
+  Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+  Log "removed previous install $LEGACY_FOLDER"
+}
+
 function Install-Into([string]$panelDir, [string]$payloadDir, [string]$version) {
   $dst = Join-Path $panelDir $INSTALL_FOLDER
+
+  # 这里若是 Junction / 符号链接, 那就是开发桥接, 绝不是本安装器造的。写任何东西
+  # 之前先拒绝 —— 替掉它的安装会显得完全成功, 而开发者指向工作树的链接已经没了。
+  if (Test-Path -LiteralPath $dst) {
+    $existing = Get-Item -LiteralPath $dst -Force
+    if ($existing.LinkType) { return 'blocked' }
+  }
   $bak = "$dst.bak"
   $new = "$dst.new"
 
@@ -243,11 +277,11 @@ $exitCode = 0
 $work = $null
 try {
   Say ''
-  Say '正在检查更新…'
+  Say 'Checking for updates...'
 
   $panels = Find-ScriptsPanelDirs
   if ($panels.Count -eq 0) {
-    Warn '未找到已安装的 InDesign。请先安装 / 启动一次 InDesign 后重试。'
+    Warn 'No InDesign installation found. Install and launch InDesign once, then run this again.'
     exit 3
   }
   Log ("panels=" + ($panels -join ' | '))
@@ -261,7 +295,7 @@ try {
       $rm = Fetch-RemoteManifest (Resolve-RemoteUrls).Manifest
       if (-not (Test-PanelsNeedUpdate $panels $rm.version)) {
         Say ''
-        Ok ("已是最新版本 (v{0})。" -f $rm.version)
+        Ok ("Already up to date (v{0})." -f $rm.version)
         exit 0
       }
       Log "preflight: update needed -> v$($rm.version)"
@@ -278,12 +312,12 @@ try {
   $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
   $version = $manifest.version
   $payloadDir = Join-Path $root $PAYLOAD_SUBDIR
-  if (-not (Test-Path $payloadDir)) { throw "分发包缺 payload 目录 '$PAYLOAD_SUBDIR'" }
+  if (-not (Test-Path $payloadDir)) { throw "The distribution has no '$PAYLOAD_SUBDIR' folder" }
 
   # 校验完整性
   $bad = Verify-Payload $manifest $payloadDir
   if ($bad.Count -gt 0) {
-    Err '下载的文件校验失败, 未做任何改动。请重试或联系 IT。'
+    Err 'The downloaded files failed verification. Nothing was changed. Try again, or ask IT.'
     $bad | Select-Object -First 5 | ForEach-Object { Log "verify: $_" }
     exit 4
   }
@@ -293,11 +327,13 @@ try {
   # 占用某文件) 会在 Install-Into 内回滚到旧版, 不应中止其它面板, 也不应让主
   # catch 打印"什么都没改"(对已成功的面板是假话)。
   $installed = 0; $skipped = 0; $wouldInstall = 0; $failed = 0
+  $blocked = @()
   foreach ($p in $panels) {
     try {
       $r = Install-Into $p $payloadDir $version
       switch ($r) {
-        'installed'      { $installed++;    Log "installed -> $p" }
+        'blocked'        { $blocked += $p;  Log "blocked(bridge) -> $p" }
+        'installed'      { $installed++;    Log "installed -> $p"; Remove-LegacyFolder $p }
         'skip'           { $skipped++;      Log "skip(latest) -> $p" }
         'would-install'  { $wouldInstall++; Log "would-install -> $p" }
       }
@@ -308,23 +344,39 @@ try {
   }
 
   Say ''
+  if ($blocked.Count -gt 0) {
+    Warn ("Skipped {0} location(s): {1} there is a link, not a folder." -f $blocked.Count, $INSTALL_FOLDER)
+    Say  'Nothing was written there, so a link to a working copy cannot be destroyed.'
+    Say  ''
+    $blocked | ForEach-Object { Say ("  " + (Join-Path $_ $INSTALL_FOLDER)) }
+    Say  ''
+    Say  ("Rename or remove that link and run again." -f $INSTALL_FOLDER)
+    Say  'See DEV-BRIDGE.md in the repository.'
+    Say  ''
+  }
   if ($DryRun) {
-    Ok ("[试运行] 将安装到 {0} 个位置 (v{1})。未写入任何文件。" -f $wouldInstall, $version)
+    Ok ("[dry run] Would install into {0} location(s) (v{1}). Nothing was written." -f $wouldInstall, $version)
   } elseif ($failed -gt 0 -and $installed -gt 0) {
-    Warn ("部分位置已更新到 v{0}, 但有 {1} 处失败 (可能 InDesign 正占用文件)。请关闭 InDesign 后重试。" -f $version, $failed)
+    Warn ("Updated to v{0} in some locations, but {1} failed - InDesign may have the files open. Close InDesign and run again." -f $version, $failed)
     $exitCode = 1
   } elseif ($failed -gt 0) {
-    Err ("更新失败 ({0} 处), 未成功更新任何位置。已有的脚本未被改动。请关闭 InDesign 后重试或联系 IT。" -f $failed)
+    Err ("Update failed in {0} location(s); nothing was updated. Your existing scripts are unchanged. Close InDesign and run again, or ask IT." -f $failed)
     $exitCode = 1
   } elseif ($installed -gt 0) {
-    Ok ("已更新到 v{0} — 重启 InDesign 后在「脚本」面板可见。" -f $version)
-    if ($skipped -gt 0) { Say ("(其中 {0} 个位置本已是最新)" -f $skipped) }
+    Ok ("Updated to v{0}. Restart InDesign to see the scripts in the Scripts panel." -f $version)
+    if ($skipped -gt 0) { Say ("({0} location(s) were already up to date)" -f $skipped) }
+    if ($blocked.Count -gt 0) { Say ("({0} location(s) were skipped, see above)" -f $blocked.Count) }
+  } elseif ($blocked.Count -gt 0) {
+    # 说发生了什么, 不说打算发生什么。这里原先落进下面的 else, 于是在一个字都没
+    # 写入的情况下打印"已是最新版本" —— 用户会据此认为脚本已经装好了。
+    Warn ("Nothing was installed: all {0} location(s) were skipped, see above." -f $blocked.Count)
+    $exitCode = 1
   } else {
-    Ok ("已是最新版本 (v{0})。" -f $version)
+    Ok ("Already up to date (v{0})." -f $version)
   }
 }
 catch {
-  Err '网络或安装出错, 未完成更新。已有的脚本未被改动。请重试或联系 IT。'
+  Err 'A network or installation error stopped the update. Your existing scripts are unchanged. Try again, or ask IT.'
   Log ("ERROR: " + $_.Exception.Message)
   $exitCode = 1
 }

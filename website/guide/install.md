@@ -86,8 +86,23 @@ installs one copy per version:
 
 | Platform | Install path |
 | --- | --- |
-| Windows | `%APPDATA%\Adobe\InDesign\Version <N>\<language>\Scripts\Scripts Panel\indesign-toolkit\` |
-| macOS | `~/Library/Preferences/Adobe InDesign/Version <N>/<language>/Scripts/Scripts Panel/indesign-toolkit/` |
+| Windows | `%APPDATA%\Adobe\InDesign\Version <N>\<language>\Scripts\Scripts Panel\indesign-toolkit-stable\` |
+| macOS | `~/Library/Preferences/Adobe InDesign/Version <N>/<language>/Scripts/Scripts Panel/indesign-toolkit-stable/` |
+
+In the Scripts panel that folder is what you open — **indesign-toolkit-stable** —
+with the numbered scripts inside it.
+
+::: tip If you also develop these scripts
+The `-stable` suffix keeps an installation from colliding with a link to a
+working copy, so both can sit in the panel at once. The suffix is on the
+installer's side on purpose: a name chosen there applies itself everywhere,
+whereas one that had to change on each development machine would leave the
+collision live on every machine nobody got to.
+
+If a plain `indesign-toolkit` folder is present, the installer removes it only
+when it is one of its own earlier installations — recognised by the version
+marker it writes. A link, or a folder someone else put there, is left alone.
+:::
 
 What it installs:
 
