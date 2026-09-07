@@ -1,0 +1,1126 @@
+# indesign-toolkit — full documentation
+
+> Adobe InDesign scripts for a translation and localization workflow: export a translation package, import the translated text back into the layout, and repair typography afterwards.
+
+This file is the concatenated full text of all 11 pages of https://zxa24.github.io/creative-script-installer/. It is generated from the site's Markdown sources; do not edit it by hand.
+
+Contents:
+- indesign-toolkit — https://zxa24.github.io/creative-script-installer/
+- What this toolkit is — https://zxa24.github.io/creative-script-installer/guide/
+- Install and update — https://zxa24.github.io/creative-script-installer/guide/install
+- The normal path — https://zxa24.github.io/creative-script-installer/guide/workflow
+- Files and folders — https://zxa24.github.io/creative-script-installer/guide/folders
+- All scripts — https://zxa24.github.io/creative-script-installer/scripts/
+- Group 1 — Workflow — https://zxa24.github.io/creative-script-installer/scripts/workflow
+- Group 2 — Type & Styles — https://zxa24.github.io/creative-script-installer/scripts/type-and-styles
+- Group 3 — Check & Repair — https://zxa24.github.io/creative-script-installer/scripts/check-and-repair
+- Group 4 — Brand Presets — https://zxa24.github.io/creative-script-installer/scripts/brand-presets
+- Advanced install and distribution — https://zxa24.github.io/creative-script-installer/reference/advanced
+
+---
+
+<!-- page: index.md -->
+# indesign-toolkit
+
+Source: https://zxa24.github.io/creative-script-installer/
+
+Summary: Adobe InDesign scripts for a translation and localization workflow — export a translation package, import the translated text back into the layout, and repair typography afterwards.
+
+indesign-toolkit
+
+Translation, back into the layout.
+
+A set of Adobe InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke.
+
+Two scripts for the normal day
+
+1.1 Export Translation Package, then 1.2 Import Translation Package. That is the whole path. Everything else is a tool you reach for when something needs fixing.
+
+Tools when you need them
+
+Font pairing, CJK styles, style consolidation, missing-link repair, change highlighting, brand presets. Not part of the normal path — reached for deliberately.
+
+Installs and updates itself
+
+One double-click on Windows or macOS. No GitHub account, no git, no password. Updates replace the whole folder atomically and keep the previous version for rollback.
+
+## What this is
+
+`indesign-toolkit` is a folder of Adobe InDesign scripts that live in the
+**Scripts panel**. You install it once, and from then on the same double-click
+updates it.
+
+The scripts serve one job: taking an InDesign document that is already laid out
+in one language, getting its text translated somewhere else, and putting the
+translated text back into that same layout without rebuilding the design.
+
+## Who this is for
+
+- **Designers** who receive a translated document and have to make it fit.
+  Start with [Install and update](/guide/install), then
+  [The normal path](/guide/workflow). Two scripts cover most days.
+- **Anyone automating the pipeline.** The
+  [Advanced reference](/reference/advanced) covers installer flags, source
+  overrides, and how the distribution bundle is built.
+
+## Machine-readable copy of this site
+
+Every page on this site is also published as plain text so a language model can
+read the whole thing at once:
+
+- `llms.txt` — an index of the site, following the
+  [llms.txt](https://llmstxt.org) convention.
+- `llms-full.txt` — the full text of every page, concatenated.
+
+Both are generated from the same Markdown that builds this site, so they cannot
+drift out of date.
+
+---
+
+<!-- page: guide/index.md -->
+# What this toolkit is
+
+Source: https://zxa24.github.io/creative-script-installer/guide/
+
+Summary: The shape of the toolkit — one normal path made of two scripts, and three groups of tools you reach for when something needs fixing.
+
+# What this toolkit is
+
+`indesign-toolkit` is a set of scripts that appear inside InDesign's **Scripts
+panel**. Each one is a file you double-click. There is no plugin, no panel to
+dock, and nothing that changes InDesign's own settings.
+
+They exist for one job: a document is laid out in one language, the text has to
+be translated, and the translation has to come back into **that same layout** —
+same frames, same styles, same page geometry — instead of the document being
+rebuilt from scratch.
+
+## The two tracks
+
+The scripts are numbered, and the first digit tells you which track you are on.
+
+### Track 1 — the normal path
+
+Group `1.x` is what you run on an ordinary job, in order:
+
+| Script | What it does |
+| --- | --- |
+| `1.1 Export Translation Package` | Writes a translation package out of the open document. |
+| `1.2 Import Translation Package` | Reads the translated package back into a copy of that document. |
+
+That is the entire normal path. If nothing goes wrong, you never open the
+other groups.
+
+See [The normal path](/guide/workflow) for the step-by-step, and
+[Group 1 — Workflow](/scripts/workflow) for what each script actually writes.
+
+### Track 2 — tools you reach for
+
+Groups `2.x`, `3.x` and `4.x` are **not** part of the normal path. Each one is
+a deliberate act: you noticed a problem, or you want to move something between
+documents, and you pick the tool that addresses it.
+
+| Group | For when |
+| --- | --- |
+| [`2.x` Type & Styles](/scripts/type-and-styles) | The new language needs different fonts, different weights, or the style sheet has sprawled. |
+| [`3.x` Check & Repair](/scripts/check-and-repair) | Something broke — overset text, missing links — or you want to see what changed. |
+| [`4.x` Brand Presets](/scripts/brand-presets) | You tuned one document's paragraph styles and want a sibling document to match. |
+
+Running a `2.x`/`3.x`/`4.x` script when nothing is wrong is not harmful, but it
+is not part of the routine either. Reach for them on purpose.
+
+## What you need
+
+- Adobe InDesign, any recently installed version. The installer detects every
+  installed version and language on the machine and installs into each one.
+- Nothing else. No GitHub account, no git, no command line, no password.
+
+## Where things end up
+
+Scripts do not scatter files around your working folder. They write into a
+single `script_outputs/` folder next to the document — packages, archived
+versions, logs, reports. See [Files and folders](/guide/folders) for the
+convention and why it is shaped that way.
+
+## Next
+
+1. [Install and update](/guide/install) — get the Scripts panel folder onto the machine.
+2. [The normal path](/guide/workflow) — export, translate, import.
+3. [All scripts](/scripts/) — the numbered index, with one line each.
+
+---
+
+<!-- page: guide/install.md -->
+# Install and update
+
+Source: https://zxa24.github.io/creative-script-installer/guide/install
+
+Summary: One-click install and update of the InDesign toolkit on Windows and macOS, including the SmartScreen and Gatekeeper prompts, the install locations, and how updates roll back if anything fails.
+
+# Install and update
+
+One double-click installs the toolkit into your machine's InDesign **Scripts
+panel**. From then on, the *same* button updates it.
+
+You do **not** need a GitHub account, git, or any password.
+
+## Windows
+
+1. Double-click **`install-update.bat`**.
+2. A black console window opens and checks for, then installs or updates, the
+   toolkit. You are done when you see the green **"updated to vX"** or
+   **"already up to date"** line.
+3. **Restart InDesign.** Open `Window → Utilities → Scripts`, expand the
+   `indesign-toolkit` folder, and double-click any script to run it.
+
+> **First run may show SmartScreen**
+Windows may show a blue **"Windows protected your PC"** dialog. Click
+**More info → Run anyway**. See [Security prompts](#security-prompts) below.
+
+## macOS
+
+1. **The first time**, grant permission to run it: right-click
+   `install-update.command` and choose **Open** — do not double-click it.
+2. After that, double-click **`install-update.command`**. A Terminal window
+   opens and checks for, then installs or updates, the toolkit.
+3. **Restart InDesign.** Open `Window → Utilities → Scripts`, expand
+   `indesign-toolkit`, and run a script from there.
+
+> **First run may show Gatekeeper**
+macOS may say the file **"cannot be opened because it is from an unidentified
+developer"**. Right-click the file → **Open** → **Open** again in the dialog.
+See [Security prompts](#security-prompts) below.
+
+## Security prompts
+
+These scripts are not signed with a (costly) code-signing certificate, so the
+operating system flags them as coming from an unknown source the first time.
+This is **normal**. Allow it once and you will not be asked again.
+
+### Windows — SmartScreen
+
+- **What you see:** a blue box, *"Windows protected your PC"*, when you
+  double-click the `.bat`.
+- **To allow it:** click **More info** → **Run anyway**.
+- **If the files came from email or cloud storage,** Windows marks them as
+  "from the internet" (the `Zone.Identifier` mark). Right-click the file →
+  **Properties** → tick **Unblock** → **OK**, then run it again.
+- The `.bat` already invokes PowerShell with `-ExecutionPolicy Bypass`, so you
+  do **not** need to change your machine's script execution policy
+  (`Set-ExecutionPolicy`).
+- If your company's Group Policy disables PowerShell scripts entirely, contact
+  IT. That is a policy-level block; the toolkit cannot work around it, and it
+  should not try to.
+
+### macOS — Gatekeeper
+
+- **What you see:** *"cannot be opened because it is from an unidentified
+  developer"* when you double-click the `.command`.
+- **To allow it:** **right-click (or Control-click) the file → Open → Open**
+  in the dialog. Once is enough.
+- **If it says the `.command` is not executable,** run this once in Terminal:
+
+  ```bash
+  chmod +x "/path/to/install-update.command" "/path/to/install-update.sh"
+  ```
+
+- **Files downloaded from cloud storage or email** carry a quarantine
+  attribute. You can also clear it in Terminal:
+
+  ```bash
+  xattr -d com.apple.quarantine "/path/to/install-update.command"
+  ```
+
+## What gets installed, and where
+
+The installer detects every installed InDesign version on the machine and
+installs one copy per version:
+
+| Platform | Install path |
+| --- | --- |
+| Windows | `%APPDATA%\Adobe\InDesign\Version <N>\<language>\Scripts\Scripts Panel\indesign-toolkit\` |
+| macOS | `~/Library/Preferences/Adobe InDesign/Version <N>/<language>/Scripts/Scripts Panel/indesign-toolkit/` |
+
+What it installs:
+
+- **Scripts only** — the `.idjs` files plus their `lib/` folder.
+- It is **not** a UXP plugin, and it changes no other InDesign setting.
+
+## How updating behaves
+
+- An update is an **atomic replacement of the whole folder**. The new version is
+  downloaded and verified *first*; only then is the folder swapped in.
+- **If any step fails, nothing changes.** There is no half-installed state — if
+  the swap itself goes wrong, the old folder is put back.
+- **A successful update does not leave the old version behind.** The installer
+  does keep a temporary copy while it swaps, but it removes that copy once the
+  new folder is in place: InDesign scans the Scripts panel recursively, so a
+  leftover copy would show up as a duplicate set of scripts.
+
+> **Rolling back means reinstalling**
+There is no `.bak` folder to fall back on after a successful update. If you need
+to go back, install the older version again — keep the distribution you were on,
+and point the installer at it with `--source` (macOS) or `-Source` (Windows).
+See [Advanced](/reference/advanced).
+
+- **Running it again is safe.** If you are already on the latest version it does
+  nothing.
+
+## Next
+
+- [The normal path](/guide/workflow) — what to run on an ordinary job.
+- [All scripts](/scripts/) — the numbered index.
+- [Advanced install and distribution](/reference/advanced) — installer flags,
+  alternate sources, offline installs.
+
+---
+
+<!-- page: guide/workflow.md -->
+# The normal path
+
+Source: https://zxa24.github.io/creative-script-installer/guide/workflow
+
+Summary: Export a translation package from the laid-out document, have it translated, then import it back into a copy of that document. Two scripts, in order.
+
+# The normal path
+
+On an ordinary job you run **two** scripts, in this order:
+
+1. [`1.1 Export Translation Package`](/scripts/workflow#export-translation-package)
+2. …translation happens elsewhere…
+3. [`1.2 Import Translation Package`](/scripts/workflow#import-translation-package)
+
+Everything in groups `2.x`, `3.x` and `4.x` is a tool you reach for when
+something needs fixing. They are not steps.
+
+## Step 1 — Export the package
+
+Open the source `.indd` document in InDesign, then run
+**`1.1 Export Translation Package`** from the Scripts panel.
+
+It writes a package folder under your working folder:
+
+```text
+script_outputs/package/<doc>_translation_package_<timestamp>/
+```
+
+Inside it, among other files:
+
+| File | What it is |
+| --- | --- |
+| `preview.pdf` | A visual reference of the document as it stands. |
+| `segments.json` | Every translatable text segment, with its identity and context. |
+| `translations_template.json` | The file the translator fills in — the empty target side. |
+| `tid_map.json` | The mapping from segment ids back to positions in the document. |
+| `<doc>.idml` | An IDML copy of the document, carried with the package. |
+| `manifest.json` | What the package contains, for round-trip integrity. |
+
+Hand the package to whoever does the translation.
+
+## Step 2 — Translate
+
+The translator fills in the target side and returns a **`translations.json`**,
+either on its own or inside the package `.zip`.
+
+> **Formatting is opt-in**
+Formatting that the translator did not mark by hand is not carried over to the
+target automatically. If the translator did not mark it, the pipeline does not
+apply it.
+
+## Step 3 — Import the package back
+
+Open the **original** source `.indd` again — not a previous output — and run
+**`1.2 Import Translation Package`**.
+
+It will ask you for the `translations.json` (or the package `.zip`, which it
+extracts for you). Then it:
+
+1. Makes a copy of the source document as `<doc>.translated.indd` and opens it.
+   **The source document is never written to.**
+2. Pauses here so you can resolve missing fonts or missing links once.
+3. Analyses the document, builds the style plan, and locates every segment.
+4. Gates: if pre-flight finds a blocking problem, it stops before touching
+   anything.
+5. Writes the translated text and applies the style plan.
+6. Runs post-flight checks (overset text, failed style application, mixed runs)
+   and a repair pass.
+7. Saves `<doc>.translated.indd` and leaves it open on screen.
+
+If the import fails, it closes the working document and deletes the
+half-written `.translated.indd`. It does not leave you a partial result.
+
+> **Import from the original, not from an output**
+If the active document is already a `.translated` / `.aborted` / `.BLOCKED`
+output, the import refuses to run. Importing into an output would double-apply
+the pipeline and produce `<doc>.translated.translated.indd`. Open the original
+`.indd` instead.
+
+## Step 4 — Look at it
+
+Open `<doc>.translated.indd` and check the result. The report of what happened
+is in `script_outputs/report/`, and the run log is in `script_outputs/log/`.
+
+At this point you are either done, or you have a specific problem — and a
+specific problem is what the tool groups are for:
+
+| Symptom | Reach for |
+| --- | --- |
+| Wrong fonts for the new language | [`2.1 Apply Font Pairing`](/scripts/type-and-styles#apply-font-pairing) |
+| Chinese text is composing badly | [`2.2 Apply CJK Styles`](/scripts/type-and-styles#apply-cjk-styles) |
+| A run of text is the wrong weight | [`2.3 Set Selection Weight`](/scripts/type-and-styles#set-selection-weight) |
+| Hundreds of near-identical paragraph styles | [`2.4 Reorganize Styles`](/scripts/type-and-styles#reorganize-styles) |
+| Punctuation rendering on the wrong font | [`2.5 Repair Cluster GREP`](/scripts/type-and-styles#repair-cluster-grep) |
+| Underlines look broken under CJK glyphs | [`2.6 Convert Underline to Rule`](/scripts/type-and-styles#convert-underline-to-rule) |
+| Broken image links | [`3.3 Relink Missing Links`](/scripts/check-and-repair#relink-missing-links) |
+| "What actually changed since last round?" | [`3.4 Highlight Translation Changes`](/scripts/check-and-repair#highlight-translation-changes) |
+| Layout damage after a bulk apply | [`3.1`](/scripts/check-and-repair#snapshot-before-apply) + [`3.2`](/scripts/check-and-repair#repair-after-apply) |
+| A sibling document should match this one's type | [`4.1`](/scripts/brand-presets#export-brand-preset) + [`4.2`](/scripts/brand-presets#apply-brand-preset) |
+
+## Where the files live
+
+See [Files and folders](/guide/folders). Short version: the working folder holds
+`<doc>.indd` and `<doc>.translated.indd`, and everything else goes under
+`script_outputs/`.
+
+---
+
+<!-- page: guide/folders.md -->
+# Files and folders
+
+Source: https://zxa24.github.io/creative-script-installer/guide/folders
+
+Summary: The directory convention — the working folder stays simple, and everything the scripts produce goes into script_outputs/. Today, import copies the previous translated document into script_outputs/backup/ before overwriting it, and stops if that copy fails.
+
+# Files and folders
+
+**The principle: the working folder is yours; the structured folders are for
+the scripts.**
+
+You should not need to open the script-owned folders often. That is the point
+of them. The top of your working folder stays as simple as possible.
+
+## The layout
+
+```text
+<working folder>/                 ← yours, kept simple
+  <doc>.indd                      the source document
+  <doc>.translated.indd           the current live output — one stable name
+
+  script_outputs/                 ← the scripts' folder; you rarely open it
+    package/                      exported translation packages
+    log/                          run logs
+    report/                       import reports
+    backup/                       the copy import takes before overwriting
+```
+
+Two files sit at the top level, and they always have the same names:
+
+- `<doc>.indd` — the document you started from. Scripts open it read-only.
+- `<doc>.translated.indd` — the current output. Always this one name, never a
+  timestamped variant. Point your PDF export, your review loop and your muscle
+  memory at it.
+
+## What import does to the previous output
+
+**Import copies the old file to safety first, then overwrites it — and if that
+copy fails, the import stops rather than continuing.**
+
+When a `<doc>.translated.indd` already exists in the working folder and you
+import over it, `1.2 Import Translation Package` first copies that file into
+`script_outputs/backup/`. Only if the copy is confirmed on disk does the import
+go on to overwrite the original.
+
+If the backup cannot be made, **the import aborts and your document on disk is
+left untouched**. That is deliberate: the alternative is overwriting the one
+copy of a file you may not be able to reproduce. An aborted import is a
+recoverable annoyance; a lost output is not.
+
+### Where to find the previous version
+
+In `script_outputs/backup/`. The working folder itself only ever holds the
+current `<doc>.translated.indd`, so rolling back means going into that folder
+and copying the file back out.
+
+### A change is planned here
+
+The backup gate exists because the write is an **overwrite**, and an overwrite
+has to be protected. A different design removes the need for the gate entirely:
+move the previous output aside first, so the name is free and the write becomes
+a **create**.
+
+| | |
+| --- | --- |
+| **Backup** — what the scripts do today | "Save a copy before overwriting." Needs a mechanism that must work correctly every time; if the copy fails, the write has to be blocked. |
+| **Archive** — the intended design | "Move the previous one aside, then write." There is no overwrite, so there is no gate that can fail. |
+
+That change is decided but **not built yet**, so this page describes the backup
+behaviour — that is what will actually happen when you run an import today. The
+folder will be `script_outputs/versions/` when it lands.
+
+## Retired convention
+
+An older, manual-era convention used stage-numbered folders — `01_input/`,
+`02_source/`, `03_working/`, `04_review/`, `05_delivery/`, `logs/`. **That
+convention is retired.** It predates the export/import package chain and is not
+what the scripts write.
+
+Delivery-side handling (what the old `04_review/` and `05_delivery/` were for)
+is currently **not** covered by automation. If you need it, set it up
+separately — do not revive the old numbered folders as if they were part of
+this convention.
+
+---
+
+<!-- page: scripts/index.md -->
+# All scripts
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/
+
+Summary: The complete numbered index of every script the indesign-toolkit installer distributes, grouped into the normal workflow path and the tools reached for when needed.
+
+# All scripts
+
+Everything the installer puts into your Scripts panel, in one list.
+
+**Group 1 is the normal path.** Groups 2, 3 and 4 are tools — you open them
+because you have a specific problem, not because it is the next step.
+
+## Group 1 — Workflow
+
+The normal path. → [Details](/scripts/workflow)
+
+| # | Script | One line |
+| --- | --- | --- |
+| `1.1` | [Export Translation Package](/scripts/workflow#export-translation-package) | Exports an offline translation package from the open document — preview PDF, segments, an empty translation template, and the id map. |
+| `1.2` | [Import Translation Package](/scripts/workflow#import-translation-package) | Reads a translated package back into a fresh copy of the source document, applies the style plan, then runs post-flight checks and repair. |
+
+## Group 2 — Type & Styles
+
+Tools. Not part of the normal path. → [Details](/scripts/type-and-styles)
+
+| # | Script | One line |
+| --- | --- | --- |
+| `2.1` | [Apply Font Pairing](/scripts/type-and-styles#apply-font-pairing) | Scans the document's fonts, opens a panel to pick cross-language font pairings, and applies the swaps as direct formatting — no new styles. |
+| `2.2` | [Apply CJK Styles](/scripts/type-and-styles#apply-cjk-styles) | Imports the Simplified Chinese donor paragraph style and its composition settings into the document, after an optional text cleanup pass. |
+| `2.3` | [Set Selection Weight](/scripts/type-and-styles#set-selection-weight) | Sets the selected text to a named weight, taking the concrete font and weight from the brand config, and routing mixed Han + Latin selections per script. |
+| `2.4` | [Reorganize Styles](/scripts/type-and-styles#reorganize-styles) | Clusters every paragraph by its visual fingerprint and rebuilds the document on a small set of generated paragraph styles, in place. |
+| `2.5` | [Repair Cluster GREP](/scripts/type-and-styles#repair-cluster-grep) | Rewrites the nested GREP rules in already-built cluster styles so neutral punctuation stops rendering on the wrong script's font. |
+| `2.6` | [Convert Underline to Rule](/scripts/type-and-styles#convert-underline-to-rule) | Replaces fully-underlined paragraphs' character-level underline with a paragraph rule, so the line stays continuous across CJK and Latin. |
+
+## Group 3 — Check & Repair
+
+Tools. → [Details](/scripts/check-and-repair)
+
+| # | Script | One line |
+| --- | --- | --- |
+| `3.1` | [Snapshot Before Apply](/scripts/check-and-repair#snapshot-before-apply) | Captures a "before" snapshot of every repairable story and expands frames too short to hold CJK text. Pairs with `3.2`. |
+| `3.2` | [Repair After Apply](/scripts/check-and-repair#repair-after-apply) | Reads the snapshot from `3.1`, restores the layout state that the bulk change disturbed, and writes an acceptance report. Pairs with `3.1`. |
+| `3.3` | [Relink Missing Links](/scripts/check-and-repair#relink-missing-links) | Finds broken links by filename anywhere under the document's own folder and relinks them; reports the ones it cannot find instead of guessing. |
+| `3.4` | [Highlight Translation Changes](/scripts/check-and-repair#highlight-translation-changes) | Diffs the text against a saved baseline and marks changed characters with rectangles on a dedicated layer — no text properties touched. |
+| `3.5` | [Save and Reveal](/scripts/check-and-repair#save-and-reveal) | Offers to save the active document if it has unsaved changes, then opens its folder in the system file browser. |
+
+## Group 4 — Brand Presets
+
+Tools. → [Details](/scripts/brand-presets)
+
+| # | Script | One line |
+| --- | --- | --- |
+| `4.1` | [Export Brand Preset](/scripts/brand-presets#export-brand-preset) | Captures the tuned geometry of this document's generated paragraph styles into a brand preset file. Reads the document, never writes to it. |
+| `4.2` | [Apply Brand Preset](/scripts/brand-presets#apply-brand-preset) | Applies a brand preset's geometry onto a sibling document's matching paragraph styles. Never touches fonts. |
+
+## A note on undo
+
+Most of these scripts wrap their whole run in a single InDesign undo step, so
+one <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> reverts the entire batch rather
+than one edit at a time. Where that is the case, the script's page says so.
+
+---
+
+<!-- page: scripts/workflow.md -->
+# Group 1 — Workflow
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/workflow
+
+Summary: 1.1 Export Translation Package and 1.2 Import Translation Package — the two scripts that make up the normal translation path.
+
+# Group 1 — Workflow
+
+**This is the normal path.** On an ordinary job you run `1.1`, send the package
+out, and run `1.2` when it comes back. Nothing else is a step.
+
+For the walkthrough with the translator's half in it, see
+[The normal path](/guide/workflow).
+
+## 1.1 Export Translation Package 
+*Source: `export_translation_package.idjs`*
+
+**Exports an offline translation package from the open document.**
+
+Run it with the source `.indd` open. It writes a package folder at:
+
+```text
+<working folder>/script_outputs/package/<doc>_translation_package_<timestamp>/
+```
+
+The package carries, among other files:
+
+| File | What it is |
+| --- | --- |
+| `preview.pdf` | A PDF of the document as it currently stands, as visual reference for the translator. |
+| `segments.json` | Every translatable segment with its identity and context. |
+| `translations_template.json` | The empty target side — this is what gets filled in. |
+| `tid_map.json` | The segment-id ↔ document-position map used to put the text back. |
+| `<doc>.idml` | An IDML copy of the document, carried with the package. |
+| `manifest.json` | What the package contains, for round-trip integrity. |
+| `emphasis_report.json` | What emphasis (bold / italic / colour) was found in the source. |
+| `import_state.json` | State the matching import run reads back. |
+
+### Notes
+
+- The export opens a dialog first, so you can confirm what is being exported
+  and where.
+- The log lands in `script_outputs/log/`.
+
+## 1.2 Import Translation Package 
+*Source: `import_integrated.idjs`*
+
+**Reads a translated package back into a fresh copy of the source document.**
+
+Give it either the returned `translations.json` or the package `.zip` — a `.zip`
+is extracted for you and the `translations.json` inside is found automatically.
+
+What the run does, in order:
+
+1. **Copy, don't edit.** The source document is opened read-only and copied to
+   `<doc>.translated.indd`, which is then opened as the working document. The
+   source is never written to.
+2. **One interactive moment.** The working document opens visibly so you can
+   resolve missing fonts or missing links once, up front. After that the
+   pipeline runs without prompting.
+3. **Pre-flight snapshot** of the layout state.
+4. **Analyse** — build the style plan, locate every segment, run pre-flight.
+5. **Gate** — if pre-flight finds a blocking problem, the run stops here.
+6. **Commit** — write the translated text and apply the style plan.
+7. **Post-flight** — check for overset text, failed style application, and
+   mixed runs.
+8. **Repair** — run the repair pass over what post-flight found.
+9. **Save** — the working document is saved in place and stays open on screen.
+
+If the run fails, the working document is closed and the half-written
+`.translated.indd` is deleted. There is no partial output.
+
+### Why it is a single open document
+
+The whole pipeline happens in one open document with one font-resolution state.
+An earlier design saved, closed and reopened between phases; that caused
+recomposition to diverge, because fonts were substituted silently during the
+pipeline and then confirmed by the user after reopening — frames overflowed
+after the reopen even though the repair pass had logged no overflows.
+
+### Guardrails
+
+- **It refuses to import into a previous output.** If the active document is
+  named `.translated`, `.aborted` or `.BLOCKED` and carries no import-state
+  label, the run aborts. Importing into an output would double-apply the
+  pipeline and cascade into `<doc>.translated.translated.indd`. Open the
+  original `.indd` instead.
+- **Post-flight results do not rename the file.** Post-flight statistics stay
+  in `report.json` and never change the filename suffix. Post-flight passing
+  does not certify the result as acceptable, and post-flight failing does not
+  mean the result is unusable — both need a human to look.
+- If the previous run's `.translated.indd` is still open in InDesign, the new
+  output gets a timestamp appended to its name rather than fighting over the
+  file.
+
+### Notes
+
+- Reports land in `script_outputs/report/`, logs in `script_outputs/log/`.
+- See [Files and folders](/guide/folders) for what happens to the previous
+  output.
+
+---
+
+<!-- page: scripts/type-and-styles.md -->
+# Group 2 — Type & Styles
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/type-and-styles
+
+Summary: Tools for typography and style sheets — font pairing, CJK styles, selection weight, style reorganization, cluster GREP repair, and underline-to-rule conversion.
+
+# Group 2 — Type & Styles
+
+**These are tools, not steps.** Nothing here is part of the
+[normal path](/guide/workflow). Open one because the document has a specific
+typographic problem.
+
+## 2.1 Apply Font Pairing 
+*Source: `font_apply_panel.idjs`*
+
+**Scans the document's fonts, opens a panel to pick cross-language font
+pairings, and applies the swaps as direct formatting.**
+
+1. It scans the active document and collects the fonts in use, their weights,
+   and how much text each one carries.
+2. It opens a panel inside InDesign where you set the pairings.
+3. On **Done**, it applies the pairing-driven font swaps as direct format
+   overrides. It does **not** create paragraph or character styles to do it.
+4. It reports how many swaps landed.
+
+**Undo:** the whole batch is wrapped in one undo step — a single
+<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> reverts all of it.
+
+## 2.2 Apply CJK Styles 
+*Source: `cjk_style_apply.idjs`*
+
+**Imports the Simplified Chinese donor paragraph style and its composition
+settings into the document, after an optional text cleanup pass.**
+
+1. It asks which cleanup passes to run first — soft line breaks, stray spaces,
+   symbol/full-width punctuation, collapsing.
+2. It works on either the story containing your selection, or on every
+   repairable story in the document.
+3. It opens the bundled CJK donor document, imports its text styles into your
+   document — this brings in the Chinese composition settings, including the
+   kinsoku line-breaking set — and applies the donor paragraph style.
+4. It verifies that the donor style actually arrived with its CJK settings
+   intact, and says so loudly if the import came through broken.
+
+**Undo:** the import and apply are wrapped in one undo step.
+
+> **Source note**
+This script carries no header comment; the description above is read off its
+implementation rather than off a stated summary.
+
+## 2.3 Set Selection Weight 
+*Source: `set_selection_weight.idjs`*
+
+**Sets the selected text to a named weight, taking the concrete font and weight
+from the brand config.**
+
+Select text, pick a target weight, and the script resolves that weight name to
+a concrete (font, weight) pair via the brand configuration and applies it.
+
+- If the document does not already have a character style for that weight, the
+  script creates one on the fly.
+- A **mixed Han + Latin selection is routed per script**, so each half gets the
+  right family — full-width punctuation included.
+- Existing paragraph-level overrides are left alone; only character-level
+  overrides in the selection are cleared.
+
+**Failure behaviour:** it fails loudly, never silently. Rare or ambiguous cases
+exit with a message, and every exit is logged. If applying fails, the whole
+change is rolled back as one unit rather than leaving the selection half
+changed.
+
+## 2.4 Reorganize Styles 
+*Source: `reorganize_styles_inplace.idjs`*
+
+**Clusters every paragraph by its visual fingerprint and rebuilds the document
+on a small set of generated paragraph styles, in place.**
+
+Use it when a document has sprawled into hundreds of near-identical paragraph
+styles, or into paragraphs held together by local overrides.
+
+What it does:
+
+- Walks every paragraph in every story and captures its *effective* visual
+  properties — font, size, colour, leading, indents, spacing, keep options,
+  bullets, and so on.
+- Clusters paragraphs by that visual fingerprint.
+- Creates one `_T_p_<hash>` paragraph style per cluster with those properties
+  baked in. N paragraphs typically collapse to a much smaller number of styles.
+- Reassigns each paragraph to its cluster's canonical style.
+
+What it does **not** do:
+
+- No source file picker — it reads the active document.
+- No output file — it modifies the active document in place.
+- **No CJK font policy.** It preserves the original Latin font family. This is
+  pure style consolidation, not translation preparation.
+
+How a run goes:
+
+1. Open the document you want to consolidate.
+2. Double-click the script.
+3. Choose grouping options in the one dialog it opens — dimensions, colour
+   tolerance, auto-merge preset, safety, soft-break handling, edit mode.
+   **Cancel aborts cleanly with no changes.**
+4. Wait. There are no further prompts.
+5. An alert summarises the result. Read the warnings.
+6. Inspect the document, then either save it or undo.
+
+**Undo:** the whole reorganization — pre-flight, apply and repair — is one undo
+step.
+
+**It also writes:** a progress log next to the document
+(`<doc>_reorganize_progress_<timestamp>.log`) for post-mortem triage, and, when
+safety is on, a before-snapshot used by the post-flight repair.
+
+## 2.5 Repair Cluster GREP 
+*Source: `repair_cluster_grep.idjs`*
+
+**Rewrites the nested GREP rules in already-built cluster styles so neutral
+punctuation stops rendering on the wrong script's font.**
+
+The problem it fixes: in a bilingual document built with the older rule set,
+neutral punctuation — a curly apostrophe (U+2019), for instance — sitting
+between Latin letters inside a Chinese-cluster document was left out of the
+Latin GREP, so it stayed orphaned on the full-width CJK font.
+
+This script rewrites the `grepExpression` of every managed cluster paragraph
+style's nested Latin and CJK GREP rules to the current, context-aware patterns,
+then recomposes so already-orphaned marks are re-routed.
+
+- **It is a repair for documents already built with the old rules.** New imports
+  get the current rules from the pipeline; they do not need this.
+- **It is idempotent.** Re-running it rewrites nothing.
+- **Undo:** one undo step for the whole run.
+
+## 2.6 Convert Underline to Rule 
+*Source: `convert_underline_to_rule.idjs`*
+
+**Replaces fully-underlined paragraphs' character-level underline with a
+paragraph rule.**
+
+It scans every paragraph in every story and finds the ones where **100% of the
+visible characters** carry character-level `underline = true`. For each, it
+removes the character-level underline and puts a paragraph-level rule below
+instead — 0.5pt, text width, coloured from the majority fill colour of the
+underlined characters.
+
+**Why:** a character-level underline tracks each glyph's own baseline. CJK
+glyphs hide the line under their body while Latin characters and digits expose
+it, so a mixed line gets a half-drawn underline. A paragraph rule sits at the
+paragraph baseline and stays continuous across both scripts.
+
+- It lives outside the import pipeline on purpose, so the import stays
+  format-neutral and **you** decide when to apply this visual change.
+- **It is idempotent.** Paragraphs already converted are skipped.
+- **It writes** a log to `<document folder>/convert_underline_to_rule_<timestamp>.log`.
+
+---
+
+<!-- page: scripts/check-and-repair.md -->
+# Group 3 — Check & Repair
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/check-and-repair
+
+Summary: Tools for checking and repairing a document — before/after snapshots, relinking missing links, highlighting what changed, and saving and revealing the file.
+
+# Group 3 — Check & Repair
+
+**These are tools, not steps.** Reach for one when something is broken, or when
+you want to see what changed.
+
+`3.1` and `3.2` are a **pair** — the first captures the state, the second
+restores it. Run `3.1` *before* a bulk change and `3.2` *after*.
+
+## 3.1 Snapshot Before Apply 
+*Source: `snapshot_before_apply.idjs`* — **pairs with [`3.2`](#repair-after-apply)**
+
+**Captures a "before" snapshot of every repairable story, and expands frames
+too short to hold CJK text.**
+
+Run it **before** any bulk text replacement or CJK style application. It:
+
+1. Expands geometry-split frames that are too short to hold a line of CJK text.
+   Left alone, those frames come back empty after recomposition.
+2. Captures a "before" snapshot of every repairable story.
+3. Saves that snapshot twice — once as `before_snapshot_latest.json` and once
+   as `<document name>_before_snapshot.json`.
+
+[`3.2 Repair After Apply`](#repair-after-apply) reads that file and uses it as
+the target state to restore.
+
+## 3.2 Repair After Apply 
+*Source: `repair_after_apply.idjs`* — **pairs with [`3.1`](#snapshot-before-apply)**
+
+**Reads the snapshot from `3.1`, repairs what the bulk change disturbed, and
+writes an acceptance report.**
+
+The intended sequence is:
+
+1. [`3.1 Snapshot Before Apply`](#snapshot-before-apply) — save the "before"
+   snapshot and expand the short frames.
+2. Do the bulk change — text replacement, CJK style import, whatever it is.
+3. `3.2 Repair After Apply` — read the snapshot, repair, and report.
+
+## 3.3 Relink Missing Links 
+*Source: `relink_missing_from_doc_folder.idjs`*
+
+**Finds broken links by filename anywhere under the document's own folder and
+relinks them.**
+
+For every link in the document whose status is *missing*, the script searches
+**the document's folder and all of its subfolders** for a file of the same name,
+matched case-insensitively. When it finds one, it relinks and updates. When it
+does not, it **reports the link and leaves it alone** — it never guesses.
+
+- **Shallow wins.** If the same filename appears in several places, the one
+  closest to the document folder is taken first. That keeps it from grabbing a
+  deep copy out of a packaged folder.
+- **Missing only.** It handles broken links. A link whose file still exists but
+  has been modified is an *Update*, not a relink, and is out of scope.
+- **Dry run available.** It can report what it *would* relink without touching
+  anything.
+- **Undo:** all relinks are wrapped in one undo step.
+- **Search limits:** it stops at 4000 directories or 12 levels deep, and says so
+  when it hits a limit rather than silently truncating the search.
+- **It writes** its report to `<document folder>/script_outputs/log/`, falling
+  back to the document folder itself if that is unavailable.
+
+## 3.4 Highlight Translation Changes 
+*Source: `track_translation_changes.idjs`*
+
+**Diffs the text against a saved baseline and marks changed characters with
+rectangles on a dedicated layer.**
+
+The highlight is a **separate layer of yellow rectangles drawn behind the
+text**. It has zero effect on the text's own properties — underlines, character
+styles and everything else are untouched.
+
+### Modes
+
+| Mode | What it does |
+| --- | --- |
+| `auto` (default) | **First run:** captures a baseline, with no visible change to the document. **Later runs:** diffs every paragraph against the baseline character by character and marks the changed substrings. It always clears the previous overlay first, so stale marks never pile up. |
+| `clear` | Deletes the highlight layer and everything on it. The baseline file is kept. |
+| `rebaseline` | Clears the overlay, then re-captures the baseline as the new ground truth. |
+
+### Options
+
+- **Ignore whitespace** — suppresses highlights whose inserted or deleted
+  characters are pure whitespace (space, tab, newline, non-breaking space,
+  ideographic space). **Off by default**; turn it on when you only care about
+  content edits and want post-translation whitespace shuffling ignored.
+- **Baseline file** — pick which baseline JSON to diff against, either from the
+  dropdown of files in the baselines folder or by giving an arbitrary path.
+  Capture mode ignores this and always writes a fresh timestamped file.
+
+### Surviving structural edits
+
+The baseline is keyed positionally first — by story and paragraph index — which
+is the fast path when the structure has not changed. When a paragraph's text
+turns out to be wildly different from the baseline entry at that position (a
+sign that paragraphs were added or removed and indices have shifted), it falls
+back to matching on a content fingerprint. That is what keeps a document from
+lighting up with false positives after "N paragraphs added between capture and
+diff".
+
+## 3.5 Save and Reveal 
+*Source: `save_and_reveal.idjs`*
+
+**Offers to save the active document if it has unsaved changes, then opens its
+folder in the system file browser.**
+
+A small convenience: run it, answer the save prompt if one appears, and the
+document's folder opens in Explorer or Finder.
+
+---
+
+<!-- page: scripts/brand-presets.md -->
+# Group 4 — Brand Presets
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/brand-presets
+
+Summary: 4.1 Export Brand Preset and 4.2 Apply Brand Preset — capture one document's tuned paragraph-style geometry and transfer it onto a sibling document without redoing the work by hand.
+
+# Group 4 — Brand Presets
+
+**These are tools, not steps.** They exist for one situation: you tuned the
+paragraph styles of one document over several rounds, and a sibling document
+needs to match — without you redoing it by hand.
+
+`4.1` captures. `4.2` applies. Together they close the round trip.
+
+## 4.1 Export Brand Preset 
+*Source: `export_brand_style_preset.idjs`*
+
+**Captures the tuned geometry of this document's generated paragraph styles
+into a brand preset file.**
+
+It reads the active document's `_T_p_*` paragraph-style definitions and writes
+their geometry into a `brand_style_preset.json`:
+
+- point size and leading
+- indents and space before / space after
+- justification and composer
+- fill colour
+- rules above and below
+
+**It is read-only on the document.** It builds a preset *from* the styles; it
+does not modify them. The one undo-block it opens exists only to hold a
+consistent points-based measurement context while reading numbers, and to give
+a clean single-undo boundary — nothing is written to the document.
+
+**Output:** `brand_style_preset.json` at the resolved brand-level path — by
+default next to the saved `.indd` — plus a summary log.
+
+## 4.2 Apply Brand Preset 
+*Source: `apply_brand_style_preset.idjs`*
+
+**Applies a brand preset's geometry onto a sibling document's matching
+paragraph styles.**
+
+It loads a `brand_style_preset.json` captured by
+[`4.1`](#export-brand-preset) and writes its tuned geometry onto the active
+document's matching `_T_p_*` paragraph-style **definitions**.
+
+**It never touches fonts.** `appliedFont` and `fontStyle` are out of scope, by
+design.
+
+### How it finds the preset
+
+1. An explicitly given path, used verbatim.
+2. Otherwise, `<saved document folder>/*_brand_style_preset.json`.
+3. If neither turns one up, it reports "no preset found" and exits cleanly —
+   that is not treated as an error.
+
+### What happens when the target document disagrees
+
+Conflicts are resolved per dimension, not per style.
+
+**Protected dimensions** — point size, leading, indents, keep options,
+justification, composer — are reconciled three ways against what was last
+applied and what the style was created with:
+
+| The live value is… | Result |
+| --- | --- |
+| the same as what was last applied | safe to update — take the preset's value |
+| the same as the creation baseline (never touched locally) | take the preset's value |
+| different from both — someone tuned it locally | **keep the local value** and report it |
+
+**Always-apply dimensions** — space before / space after, fill colour, rules
+above and below — have no reconstructable creation baseline, so the preset's
+value is always written. The colour and rule writes are then **read back and
+verified**, and reported as applied-OK or applied-FAILED. A write that silently
+did not land is reported, not swallowed.
+
+### Reading the report
+
+The headline number is **reuse rate** — matched styles divided by total. A style
+counts as matched even if one of its dimensions was kept local or failed to
+apply.
+
+Three separate counts sit next to it so "reuse" is never misread as "everything
+transferred":
+
+- **applied rate**
+- **kept-local count**
+- **applied-failed count**
+
+Read all four together.
+
+---
+
+<!-- page: reference/advanced.md -->
+# Advanced install and distribution
+
+Source: https://zxa24.github.io/creative-script-installer/reference/advanced
+
+Summary: Installer flags, the TOOLKIT_SOURCE / TOOLKIT_ZIP_URL / TOOLKIT_MANIFEST_URL / TOOLKIT_AUTH_TOKEN environment overrides, offline installs, and how the distribution bundle is produced.
+
+# Advanced install and distribution
+
+For people packaging, redistributing, or testing the toolkit. Designers
+installing it normally want [Install and update](/guide/install) instead.
+
+## Where the installer fetches from
+
+The download source is configurable. The public distribution repository's
+coordinates live at the top of the install scripts — `$Owner` / `$Repo` /
+`$Ref` in the Windows PowerShell script, `OWNER` / `REPO` / `REF` in the macOS
+shell script.
+
+## Environment overrides
+
+You can redirect the installer without editing it, by setting environment
+variables:
+
+| Variable | Effect |
+| --- | --- |
+| `TOOLKIT_SOURCE` | Install from a local `.zip` or an already-extracted directory. Use this for offline installs and for self-testing. |
+| `TOOLKIT_ZIP_URL` | Override the payload URL outright. |
+| `TOOLKIT_MANIFEST_URL` | Override the manifest URL outright. |
+| `TOOLKIT_AUTH_TOKEN` | Fallback for a private source: sends an `Authorization: token …` header with the request. |
+
+## Command-line flags
+
+| Windows | macOS | Effect |
+| --- | --- | --- |
+| `-Force` | `--force` | Reinstall even when the installed version already matches. |
+| `-DryRun` | `--dry-run` | Detect and verify only — write no files. |
+| `-Source <path>` | `--source=<path>` | Install from a local source. |
+
+## Building the distribution bundle
+
+From the development repository:
+
+```bash
+node toolkit_installer/make_dist.mjs
+```
+
+It takes `translation_mvp_uxp/` and produces the distributable payload by
+walking the whole tree minus an exclusion list, then self-checking the `require`
+closure so nothing that is reachable at runtime is left out of the bundle. It
+emits:
+
+- `dist/toolkit/` — the payload that gets installed into the Scripts panel
+- `toolkit.manifest.json` — the version plus a SHA-256 for every file
+- `toolkit.manifest.sha256` — a `shasum -c` sidecar, used for verification on
+  macOS
+
+The version number is read from `toolkit_installer/VERSION`.
+
+## Shape of the distribution repository
+
+The distribution bundle — that is, what the public distribution repository
+contains — looks like this:
+
+```text
+<repo root>/
+  toolkit/                  ← the content that gets installed into the Scripts panel
+  toolkit.manifest.json     ← version + per-file sha256
+  toolkit.manifest.sha256   ← shasum -c sidecar (macOS verification)
+  install-update.bat
+  install-update.command
+  install-update.ps1
+  install-update.sh
+  README.md
+```
+
+## Update semantics, restated
+
+- The whole folder is replaced **atomically**: download and verify first, swap
+  second.
+- A `.bak` folder exists only *during* the swap, as the transaction's undo, and
+  is removed once the new folder is in place. It is **not** a rollback copy you
+  can use afterwards — a leftover copy would appear in the Scripts panel as a
+  duplicate set of scripts, because InDesign scans it recursively.
+- To roll back, reinstall the older distribution: `--source=/path/to/old-dist`
+  (macOS) or `-Source C:\path\to\old-dist` (Windows). Keeping the distribution
+  you are currently on is the only rollback path there is.
+- Any failure at any step leaves the existing installation untouched. There is
+  no half-installed state.
+- Re-running when already current is a no-op.
+
+## The machine-readable copy of this site
+
+Two files are generated from the same Markdown that builds these pages:
+
+| File | Contents |
+| --- | --- |
+| `llms.txt` | An index of the site with absolute links and one-line summaries, following the [llms.txt](https://llmstxt.org) convention. |
+| `llms-full.txt` | The full text of every page on this site, concatenated. |
+
+They are regenerated by the build, not maintained by hand:
+
+```bash
+cd website
+npm run llms     # regenerate only
+npm run build    # regenerate, then build the site
+```
+
+The generator reads the page list out of `.vitepress/site.mjs` — the same list
+that produces the navigation — and fails the build if it finds a Markdown page
+that is not on it. That is what keeps the two surfaces from drifting apart.

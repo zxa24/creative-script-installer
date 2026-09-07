@@ -1,0 +1,15 @@
+"use strict";
+
+// repair_after_apply.idjs — Thin entry point
+//
+// Delegates all logic to lib/repair_after_apply.js.
+// Run directly from InDesign Scripts Panel, or require from other scripts
+// via: var repair = require("./lib/repair_after_apply.js"); repair.runRepair(config);
+//
+// 使用流程：
+//   1. snapshot_before_apply.idjs  — 保存 _before 快照，展开 geom-split 帧
+//   2. 文字替换 + CJK 样式导入（原 import_translations 已退役 → _retired/）
+//   3. repair_after_apply.idjs     — 读取快照，执行 repair，输出验收报告
+
+var repair = require("./lib/repair_after_apply.js");
+repair.runRepair();

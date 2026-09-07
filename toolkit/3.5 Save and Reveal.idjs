@@ -1,0 +1,268 @@
+"use strict";
+
+/**
+ * save_and_reveal.idjs  —  Operator Tool
+ *
+ * 对当前活跃文档：若有未保存改动，弹框询问是否保存；保存后在资源管理器中
+ * 打开该文档所在目录。
+ *
+ * 打开目录走 temp-doc + SVG anchor + Link.revealInSystem() workaround
+ *（UXP FileSystemEntry 无 revealInSystem，见 export_translation_package.idjs:2608）。
+ *
+ *   bridge: 无参数，始终对 activeDocument 操作。
+ *   manual: 双击运行。
+ *
+ * Created 2026-07-01。遵循闸门 #3(fullName 是 Promise)/ #4(入口写法)/ #8(NEVER_INTERACT)。
+ */
+
+var indesign = require("indesign");
+var app = (typeof globalThis !== "undefined" && globalThis.app) ? globalThis.app : indesign.app;
+var SaveOptions = indesign.SaveOptions;
+var UserInteractionLevels = indesign.UserInteractionLevels;
+var fs = require("fs");
+var uxp = require("uxp");
+var lfs = uxp.storage.localFileSystem;
+
+var AutomationBridge = null;
+try { AutomationBridge = require("./lib/automation_bridge.js"); } catch (e) {}
+var RuntimePaths = require("./lib/runtime_paths.js");
+
+function parentDir(nativePath) {
+    var p = String(nativePath);
+    var idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+    return idx >= 0 ? p.substring(0, idx) : p;
+}
+
+function nativePathToFileUrl(p) {
+    return "file:///" + String(p).replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+// 通过 temp doc + SVG anchor + Link.revealInSystem() 打开目录。
+// 来源: export_translation_package.idjs:2619
+async function revealFolderViaTempLink(docDir) {
+    var pathSep = (docDir.indexOf("\\") >= 0) ? "\\" : "/";
+    var anchorName = "_reveal_anchor_" + Date.now() + ".svg";
+    var anchorPath = docDir + pathSep + anchorName;
+    var tempDoc = null;
+    try {
+        fs.writeFileSync(anchorPath, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', "utf-8");
+        tempDoc = app.documents.add();
+        var page = tempDoc.pages.item(0);
+        page.place(anchorPath);
+        if (tempDoc.links.length > 0) {
+            tempDoc.links.item(0).revealInSystem();
+        }
+        return true;
+    } finally {
+        try { if (tempDoc) await tempDoc.close(SaveOptions.NO); } catch (eC) {}
+        try { await new Promise(function (r) { setTimeout(r, 600); }); } catch (eS) {}
+        try {
+            var anchorUrl = nativePathToFileUrl(anchorPath);
+            var aE = await lfs.getEntryWithUrl(anchorUrl);
+            if (aE) await aE.delete();
+        } catch (eU) {}
+    }
+}
+
+async function showResult(text) {
+    try {
+        if (typeof document === "undefined" || !document.body) return;
+        var dlg = document.createElement("dialog");
+        dlg.style.cssText = "padding:16px;min-width:320px;font-family:sans-serif;font-size:12px;color:#111;background:#fff;border:1px solid #888;";
+        var pre = document.createElement("pre");
+        pre.style.cssText = "white-space:pre-wrap;margin:0 0 14px 0;line-height:1.5;";
+        pre.textContent = text;
+        var btn = document.createElement("div");
+        btn.setAttribute("role", "button");
+        btn.setAttribute("tabindex", "0");
+        btn.textContent = "关闭";
+        btn.style.cssText = "display:inline-block;padding:6px 18px;background:#2b6cb0;color:#fff;border-radius:4px;cursor:pointer;";
+        function close() {
+            try { dlg.close(); } catch (e) {}
+            try { dlg.remove(); } catch (e) {}
+        }
+        btn.addEventListener("click", close);
+        dlg.appendChild(pre);
+        dlg.appendChild(btn);
+        document.body.appendChild(dlg);
+        dlg.showModal();
+        await new Promise(function (r) { dlg.addEventListener("close", r, { once: true }); });
+    } catch (e) {}
+}
+
+async function askSaveAs() {
+    var confirmMsg = "";
+    var dlg = document.createElement("dialog");
+    dlg.style.cssText = "padding:16px;min-width:320px;font-family:sans-serif;font-size:12px;color:#111;background:#fff;border:1px solid #888;";
+    var title = document.createElement("div");
+    title.style.cssText = "margin-bottom:10px;font-size:13px;font-weight:bold;";
+    title.textContent = "文档「" + String(doc.name) + "」尚未保存到磁盘";
+    var msg = document.createElement("div");
+    msg.style.cssText = "margin-bottom:14px;";
+    msg.textContent = "是否保存？（将弹出 Save As 对话框）";
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;";
+    var btns = [
+        { label: "保存", color: "#2b6cb0", action: "save" },
+        { label: "不保存", color: "#666", action: "nosave" }
+    ];
+    for (var i = 0; i < btns.length; i++) {
+        var b = document.createElement("div");
+        b.setAttribute("role", "button");
+        b.setAttribute("tabindex", "0");
+        b.textContent = btns[i].label;
+        b.style.cssText = "display:inline-block;padding:6px 18px;background:" + btns[i].color + ";color:#fff;border-radius:4px;cursor:pointer;";
+        (function (action) {
+            b.addEventListener("click", function () {
+                confirmMsg = action;
+                try { dlg.close(); } catch (e) {}
+                try { dlg.remove(); } catch (e) {}
+            });
+            b.addEventListener("keydown", function (ev) {
+                if (ev.key === "Enter") {
+                    confirmMsg = action;
+                    try { dlg.close(); } catch (e) {}
+                    try { dlg.remove(); } catch (e) {}
+                }
+            });
+        })(btns[i].action);
+        btnRow.appendChild(b);
+    }
+    dlg.appendChild(title);
+    dlg.appendChild(msg);
+    dlg.appendChild(btnRow);
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    await new Promise(function (r) { dlg.addEventListener("close", r, { once: true }); });
+    return confirmMsg === "save";
+}
+
+async function askSave(doc) {
+    var confirmMsg = "";
+    var dlg = document.createElement("dialog");
+    dlg.style.cssText = "padding:16px;min-width:320px;font-family:sans-serif;font-size:12px;color:#111;background:#fff;border:1px solid #888;";
+    var title = document.createElement("div");
+    title.style.cssText = "margin-bottom:10px;font-size:13px;font-weight:bold;";
+    title.textContent = "文档「" + String(doc.name) + "」有未保存的改动";
+    var msg = document.createElement("div");
+    msg.style.cssText = "margin-bottom:14px;";
+    msg.textContent = "是否保存？";
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;";
+    var btns = [
+        { label: "保存", color: "#2b6cb0", action: "save" },
+        { label: "不保存", color: "#666", action: "nosave" }
+    ];
+    for (var i = 0; i < btns.length; i++) {
+        var b = document.createElement("div");
+        b.setAttribute("role", "button");
+        b.setAttribute("tabindex", "0");
+        b.textContent = btns[i].label;
+        b.style.cssText = "display:inline-block;padding:6px 18px;background:" + btns[i].color + ";color:#fff;border-radius:4px;cursor:pointer;";
+        (function (action) {
+            b.addEventListener("click", function () {
+                confirmMsg = action;
+                try { dlg.close(); } catch (e) {}
+                try { dlg.remove(); } catch (e) {}
+            });
+            b.addEventListener("keydown", function (ev) {
+                if (ev.key === "Enter") {
+                    confirmMsg = action;
+                    try { dlg.close(); } catch (e) {}
+                    try { dlg.remove(); } catch (e) {}
+                }
+            });
+        })(btns[i].action);
+        btnRow.appendChild(b);
+    }
+    dlg.appendChild(title);
+    dlg.appendChild(msg);
+    dlg.appendChild(btnRow);
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    await new Promise(function (r) { dlg.addEventListener("close", r, { once: true }); });
+    if (confirmMsg === "save") {
+        try { doc.save(); return true; } catch (e) { await showResult("保存失败: " + String(e && e.message || e)); }
+    }
+    return false;
+}
+
+async function main() {
+    await RuntimePaths.bootstrap();
+    var opts = null;
+    if (AutomationBridge) {
+        try { opts = await AutomationBridge.readAutomationOptions("save_and_reveal"); } catch (e) { opts = null; }
+    }
+    var isAutomation = !!opts;
+
+    // DEBUG (best-effort, self-purged): dump bridge-wiring state to the toolkit
+    // log dir. Was a hardcoded opencode temp path — broke portability. This
+    // scratch/log file is swept by purge_old_logs.idjs on its retention pass.
+    try {
+        var dbgPath = RuntimePaths.joinPath(RuntimePaths.getLogDir(), "save_reveal_debug.json");
+        fs.writeFileSync(dbgPath, JSON.stringify({ isAutomation: isAutomation, hasBridge: !!AutomationBridge, opts: opts }), "utf-8");
+    } catch (e) {}
+
+    var doc = app.activeDocument;
+    if (!doc) {
+        if (!isAutomation) await showResult("没有打开的文档。");
+        return { ok: false, reason: "no_document" };
+    }
+
+    var docName = String(doc.name);
+
+    // 闸门 #3: fullName 是 Promise，未保存文档 throw
+    var fn = null;
+    try { fn = await doc.fullName; } catch (e) {}
+    var docDir = fn ? parentDir(fn.nativePath) : null;
+
+    if (!docDir) {
+        // 从未保存到磁盘
+        if (isAutomation) {
+            var m = "文档「" + docName + "」尚未保存到磁盘（automation 模式）。";
+            if (!isAutomation) await showResult(m);
+            return { ok: false, reason: "not_saved", doc: docName };
+        }
+        var prev2 = app.scriptPreferences.userInteractionLevel;
+        app.scriptPreferences.userInteractionLevel = UserInteractionLevels.INTERACT_WITH_ALL;
+        try {
+            if (await askSaveAs()) {
+                await doc.save();
+            }
+        } finally { app.scriptPreferences.userInteractionLevel = prev2; }
+        try { fn = await doc.fullName; } catch (e) {}
+        docDir = fn ? parentDir(fn.nativePath) : null;
+        if (!docDir) {
+            var m = "文档「" + docName + "」保存后仍无路径（可能用户取消了 Save As）。";
+            await showResult(m);
+            return { ok: false, reason: "not_saved", doc: docName };
+        }
+    } else if (doc.saved === false) {
+        // 已保存过但有未保存改动
+        if (isAutomation) {
+            try { doc.save(); } catch (e) {}
+        } else {
+            var prev = app.scriptPreferences.userInteractionLevel;
+            app.scriptPreferences.userInteractionLevel = UserInteractionLevels.INTERACT_WITH_ALL;
+            try { await askSave(doc); }
+            finally { app.scriptPreferences.userInteractionLevel = prev; }
+        }
+    }
+
+    // Reveal document directory in file explorer
+    await revealFolderViaTempLink(docDir);
+
+    if (!isAutomation) {
+        await showResult("文档目录已在资源管理器中打开:\n\n" + docDir);
+    }
+
+    return { ok: true, doc: docName, docDir: docDir };
+}
+
+var __result = null;
+try { __result = await main(); }
+catch (eTop) {
+    __result = { fatal: String(eTop && (eTop.stack || eTop.message) || eTop) };
+    try { if (typeof showResult === "function") await showResult("脚本出错: " + __result.fatal); } catch (e2) {}
+}
+module.exports = __result;

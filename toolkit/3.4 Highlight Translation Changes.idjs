@@ -1,0 +1,1189 @@
+/*
+ * track_translation_changes.idjs
+ *
+ * Highlight CHARACTER-LEVEL changes since last baseline, using a
+ * dedicated layer of yellow rectangles drawn behind the text. Zero
+ * impact on existing text properties (underline, char styles, etc.) —
+ * the highlight is a separate page-item layer.
+ *
+ * Modes (via automationOptions.mode, default = "auto"):
+ *   "auto"        First run: capture baseline (no visible change).
+ *                 Subsequent runs: LCS-diff every paragraph vs baseline,
+ *                 mark changed substrings with overlay rectangles.
+ *                 Always clears prior overlays first so stale marks
+ *                 don't accumulate.
+ *   "clear"       Delete the highlight layer (and all rectangles on it).
+ *                 Baseline file is preserved.
+ *   "rebaseline"  Clear + re-capture baseline as new ground truth.
+ *
+ * Options (via automationOptions or the manual dialog widgets):
+ *   ignoreWhitespace = true → suppress highlight rects + carets for
+ *     diffs whose inserted/deleted chars are pure whitespace
+ *     (space / tab / newline / U+00A0 NBSP / U+3000 ideographic space).
+ *     Default OFF — opt in when only content edits should be visualized
+ *     and post-translation whitespace shuffling should be ignored.
+ *   baselineFile = absolute path → load this baseline JSON for highlight
+ *     mode instead of the auto-picked default. The dialog exposes the
+ *     same selector as a dropdown of files in the baselines folder plus
+ *     an "其他文件..." entry that prompts for an arbitrary path. Capture
+ *     mode ignores this option — it always writes a fresh timestamped
+ *     file into the folder.
+ *
+ * Baseline keying:
+ *   Primary: (storyId, paraIdx). Fast path for unchanged structure.
+ *   Fallback (schema 3, 2026-05-27): content fingerprint + prefix maps,
+ *   used when the positional baseline entry's text is wildly different
+ *   from the current paragraph (= paragraph add/remove shifted indices).
+ *   Survives "N paragraphs added/removed between capture and diff"
+ *   without spraying false-positive highlights across every shifted
+ *   paragraph.
+ *
+ * Workflow:
+ *   1. Right after translation import → run with mode=auto → baseline saved
+ *      into `<docDir>/script_outputs/baseline_snapshots/<docname>__<timestamp>.json`.
+ *   2. Operator edits text → run mode=auto → diff against most-recent
+ *      baseline in that folder, changed chars highlighted.
+ *   3. Export PDF (highlights export as real page items, visible in PDF).
+ *   4. Run mode=clear (or just delete the layer manually) → clean state.
+ *   5. Run mode=rebaseline after accepting changes → captures a new
+ *      timestamped baseline (old ones are preserved).
+ *
+ * Baseline folder: `<docDir>/script_outputs/baseline_snapshots/`
+ *   Each capture writes a new `<docname>__YYYYMMDD_HHMMSS.translation_baseline.json`.
+ *   Two legacy paths auto-included in the dialog dropdown for back-compat:
+ *     - `<docDir>/translation_baselines/<...>.json` (5/28 earlier)
+ *     - `<docDir>/<docname>.translation_baseline.json` (pre-folder single file)
+ */
+
+async function main() {
+    var __fatalErr = null;
+    var __baselinePath = "";
+    var __stats = null;
+    var __docDirForLog = "";   // set after docDir is computed below
+try {
+    var indesign = require("indesign");
+    // Scripts-panel double-click does NOT expose `app` as a global —
+    // we must pull it from the indesign module ourselves.
+    var app = (typeof globalThis !== "undefined" && globalThis.app)
+        ? globalThis.app
+        : (indesign && indesign.app);
+    if (!app) return;
+    if (!app.documents || app.documents.length === 0) {
+        try { app.alert("Open a document first."); } catch (e) {}
+        return;
+    }
+
+    var ColorSpace = indesign && indesign.ColorSpace;
+    var ColorModel = indesign && indesign.ColorModel;
+    var UIColors = indesign && indesign.UIColors;
+    var LocationOptions = indesign && indesign.LocationOptions;
+    var UndoModes = indesign && indesign.UndoModes;
+    var ScriptLanguage = indesign && indesign.ScriptLanguage;
+    var fs = require("fs");
+
+    var AutomationBridge = null;
+    try { AutomationBridge = require("./lib/automation_bridge.js"); } catch (eAB) {}
+
+    var doc = app.activeDocument;
+    // UXP: doc.fullName returns a Promise that resolves to a File entry with .nativePath.
+    var docPath = "";
+    try {
+        var fn = await doc.fullName;
+        if (fn && typeof fn === "object") {
+            docPath = String(fn.nativePath || fn.fsName || fn.name || "");
+        } else if (fn) {
+            docPath = String(fn);
+        }
+    } catch (e) {}
+    if (!docPath || docPath === "[object Promise]" || docPath === "undefined") docPath = "";
+    var sep = (docPath.indexOf("\\") >= 0) ? "\\" : "/";
+    var dirEnd = docPath.lastIndexOf(sep);
+    var docDir = dirEnd > 0 ? docPath.substring(0, dirEnd) : "C:\\temp";
+    if (docDir === "C:\\temp") sep = "\\";
+    // Expose docDir to outer wrapper so the final log writer can put its
+    // diagnostic JSON under <docDir>/script_outputs/log/ (see end of main).
+    // When doc is untitled, docDir stays "C:\\temp" → log helper falls back
+    // to system tempDir anyway.
+    __docDirForLog = (docDir && docDir !== "C:\\temp") ? docDir : "";
+    var docName = "doc"; try { docName = String(doc.name || "doc"); } catch (e) {}
+    // 2026-05-28: baselines live under a unified script-outputs umbrella
+    // so non-translation toolkit scripts (reorganize / migrate / repair /
+    // cjk_style_apply) share the same `<docDir>/script_outputs/` tree.
+    // Layout: `<docDir>/script_outputs/baseline_snapshots/<name>__<ts>.json`.
+    //
+    // Two legacy paths still readable for back-compat (auto-promoted into
+    // the file dropdown when present):
+    //   1. `<docDir>/translation_baselines/` — 2026-05-28 earlier in day
+    //   2. `<docDir>/<docname>.translation_baseline.json` — pre-folder single file
+    var scriptOutputsDir = docDir + sep + "script_outputs";
+    var baselineDir = scriptOutputsDir + sep + "baseline_snapshots";
+    var legacyBaselineFolderPath = docDir + sep + "translation_baselines";
+    var legacyBaselinePath = docDir + sep + docName + ".translation_baseline.json";
+    // Per-run paths. Decided later (automationOptions / dialog / defaults).
+    //   baselinePathRead  → what to LOAD for highlight mode.
+    //   baselinePathWrite → what to WRITE for capture/rebaseline.
+    var baselinePathRead = "";
+    var baselinePathWrite = "";
+    __baselinePath = "";
+
+    // UXP fs has no mkdirSync — must create via the async lfs storage API.
+    // Two-level mkdir: script_outputs/ then baseline_snapshots/. Idempotent:
+    // each createFolder swallows "already exists" and re-verifies via stat.
+    async function _ensureBaselineDirAsync() {
+        try { fs.statSync(baselineDir); return true; } catch (e) {}
+        try {
+            var uxp = require("uxp");
+            var lfs = uxp && uxp.storage && uxp.storage.localFileSystem;
+            if (!lfs) return false;
+            var docUrl = "file:///" + docDir.replace(/\\/g, "/").replace(/^\/+/, "");
+            var docFolder = await lfs.getEntryWithUrl(docUrl);
+            if (!docFolder) return false;
+            // Step 1: ensure script_outputs/
+            var soFolder;
+            try { soFolder = await docFolder.getEntry("script_outputs"); }
+            catch (eGet) { soFolder = null; }
+            if (!soFolder) {
+                try { soFolder = await docFolder.createFolder("script_outputs"); }
+                catch (eC1) {
+                    try { soFolder = await docFolder.getEntry("script_outputs"); } catch (e2) {}
+                    if (!soFolder) return false;
+                }
+            }
+            // Step 2: ensure baseline_snapshots/
+            var bsFolder;
+            try { bsFolder = await soFolder.getEntry("baseline_snapshots"); }
+            catch (eGet2) { bsFolder = null; }
+            if (!bsFolder) {
+                try { await soFolder.createFolder("baseline_snapshots"); }
+                catch (eC2) {
+                    try { fs.statSync(baselineDir); return true; } catch (e3) {}
+                    return false;
+                }
+            }
+            return true;
+        } catch (eM) { return false; }
+    }
+    function _listBaselineFiles() {
+        function _readJsonsIn(dirPath) {
+            var arr = [];
+            try {
+                var nmList = fs.readdirSync(dirPath) || [];
+                for (var i = 0; i < nmList.length; i++) {
+                    var nm = String(nmList[i] || "");
+                    if (!/\.json$/i.test(nm)) continue;
+                    arr.push({ name: nm, path: dirPath + sep + nm });
+                }
+            } catch (e) {}
+            return arr;
+        }
+        // Primary location (new): script_outputs/baseline_snapshots/
+        var out = _readJsonsIn(baselineDir);
+        out.sort(function (a, b) { return b.name.localeCompare(a.name); });
+
+        // Legacy 1: translation_baselines/ (2026-05-28 earlier). Tag entries
+        // so the user can tell they're from the old layout.
+        var legacy1 = _readJsonsIn(legacyBaselineFolderPath);
+        legacy1.sort(function (a, b) { return b.name.localeCompare(a.name); });
+        for (var l1 = 0; l1 < legacy1.length; l1++) {
+            out.push({ name: legacy1[l1].name + " (translation_baselines/)", path: legacy1[l1].path });
+        }
+
+        // Legacy 2: <docDir>/<docname>.translation_baseline.json (single-file pre-folder).
+        try {
+            fs.statSync(legacyBaselinePath);
+            out.push({ name: docName + ".translation_baseline.json (legacy)", path: legacyBaselinePath });
+        } catch (eL) {}
+        return out;
+    }
+    function _timestampSlug() {
+        var d = new Date();
+        var pad = function (n) { return (n < 10 ? "0" + n : "" + n); };
+        return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+             + "_" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    }
+    // Pure string builder. Caller must `await _ensureBaselineDirAsync()`
+    // before the actual write (folder creation needs the async lfs API).
+    function _newBaselineWritePath() {
+        return baselineDir + sep + docName + "__" + _timestampSlug() + ".translation_baseline.json";
+    }
+    // Pick a default baseline to LOAD when no explicit selection is made.
+    // Order: most-recent file in folder → legacy single-file path → empty.
+    function _defaultBaselinePathRead() {
+        var files = _listBaselineFiles();
+        if (files.length > 0) return files[0].path;
+        try { fs.statSync(legacyBaselinePath); return legacyBaselinePath; } catch (e) {}
+        return "";
+    }
+
+    // ---- mode ----
+    // Resolution order:
+    //   1. automationOptions.mode (when bridge-preseeded — no dialog)
+    //   2. Interactive dialog (manual run from Scripts panel)
+    //   3. Default "auto"
+    var mode = null;
+    // `ignoreWhitespace`: when true, the LCS diff treats whitespace-only
+    // additions / deletions as non-changes. Highlight rects + caret marks
+    // are suppressed for ranges/gaps consisting purely of whitespace.
+    // Default OFF — explicit opt-in via automationOptions or the dialog
+    // checkbox, because users may want to see "extra space inserted" as a
+    // visible diff in some workflows.
+    var ignoreWhitespace = false;
+    // `baselineFile`: absolute path to a baseline JSON to LOAD for
+    // highlight mode. When absent, defaults to the most recent file in
+    // `<docDir>/script_outputs/baseline_snapshots/` (or one of two legacy paths
+    // for backward compat). Capture/rebaseline always writes a fresh
+    // timestamped file into the folder.
+    var baselineFileOpt = null;
+    if (AutomationBridge) {
+        try {
+            var ao = await AutomationBridge.readAutomationOptions("track_translation_changes");
+            if (ao && ao.mode) mode = String(ao.mode);
+            if (ao && ao.ignoreWhitespace === true) ignoreWhitespace = true;
+            if (ao && ao.baselineFile) baselineFileOpt = String(ao.baselineFile);
+        } catch (eR) {}
+    }
+    var isAutomated = !!(AutomationBridge && AutomationBridge.isAutomatedRun("track_translation_changes"));
+
+    // Show dialog only on manual run with no preseeded mode.
+    if (!mode && !isAutomated) {
+        var availableBaselines = _listBaselineFiles();
+        var hasAnyBaseline = availableBaselines.length > 0;
+
+        // Force INTERACT_WITH_ALL — a prior bridge run may have set
+        // NEVER_INTERACT, in which case dlg.show() silently returns false
+        // and the user sees nothing happen.
+        var UserInteractionLevels = indesign && indesign.UserInteractionLevels;
+        var __origUIL = null;
+        try { __origUIL = app.scriptPreferences.userInteractionLevel; } catch (eUI0) {}
+        try {
+            if (UserInteractionLevels && UserInteractionLevels.INTERACT_WITH_ALL) {
+                app.scriptPreferences.userInteractionLevel = UserInteractionLevels.INTERACT_WITH_ALL;
+            }
+        } catch (eUI1) {}
+
+        // Sentinel marker shown at the end of the baseline dropdown so the
+        // user can pick a file from anywhere on disk (path entered via a
+        // follow-up text-input dialog — UXP idjs has no first-class file
+        // picker that integrates with the ScriptUI dialog flow).
+        var OTHER_FILE_LABEL = "其他文件...";
+
+        var dlg = null, chosen = null, chosenBaselineIdx = 0;
+        try {
+            dlg = app.dialogs.add({ name: "Track Translation Changes", canCancel: true });
+            var col = dlg.dialogColumns.add();
+            col.staticTexts.add({ staticLabel: "选择要执行的操作：" });
+            col.staticTexts.add({ staticLabel: " " });
+            var rbGroup = col.radiobuttonGroups.add();
+            var rbCapture = rbGroup.radiobuttonControls.add({
+                staticLabel: hasAnyBaseline
+                    ? "捕获 baseline  (在 script_outputs/baseline_snapshots/ 下新增带时间戳的文件)"
+                    : "捕获 baseline  (首次捕获，无可见变化)"
+            });
+            var rbHighlight = rbGroup.radiobuttonControls.add({
+                staticLabel: hasAnyBaseline
+                    ? "生成高亮     (diff 当前文本 vs 选中的 baseline)"
+                    : "生成高亮     (尚无 baseline — 不可用)"
+            });
+            try { rbGroup.selectedButton = hasAnyBaseline ? 1 : 0; } catch (eSB) {}
+            col.staticTexts.add({ staticLabel: " " });
+            // Baseline-file dropdown (for highlight). Shows filenames in
+            // baseline_snapshots/ (newest first) plus an "Other..." entry
+            // that triggers a follow-up path-entry dialog. Capture mode
+            // ignores this selection — it always writes a fresh timestamped
+            // file into the folder.
+            col.staticTexts.add({ staticLabel: "选择 baseline 文件（仅生成高亮时使用）：" });
+            var ddNames = [];
+            if (hasAnyBaseline) {
+                for (var __bi = 0; __bi < availableBaselines.length; __bi++) {
+                    ddNames.push(availableBaselines[__bi].name);
+                }
+            } else {
+                ddNames.push("(无)");
+            }
+            ddNames.push(OTHER_FILE_LABEL);
+            var ddBaselineFile = col.dropdowns.add({ stringList: ddNames, selectedIndex: 0 });
+            col.staticTexts.add({ staticLabel: " " });
+            // Whitespace-diff toggle. Default unchecked (= show every diff
+            // incl. whitespace-only). Checked = drop whitespace-only ranges
+            // and gaps so the operator only sees content edits.
+            var cbIgnoreWS = col.checkboxControls.add({
+                staticLabel: "忽略空格差异  (只对生成高亮模式有效；默认关闭)",
+                checkedState: false
+            });
+            col.staticTexts.add({ staticLabel: " " });
+            col.staticTexts.add({ staticLabel: "baseline 文件夹: " + baselineDir });
+            col.staticTexts.add({
+                staticLabel: "提示：清除高亮请删除「图层」面板中的 _T_translation_highlights 图层。"
+            });
+
+            if (dlg.show()) {
+                var picked = 0;
+                try { picked = Number(rbGroup.selectedButton); } catch (eGS) {}
+                chosen = (picked === 0) ? "rebaseline" : "highlight";
+                try { ignoreWhitespace = !!cbIgnoreWS.checkedState; } catch (eCB) {}
+                try { chosenBaselineIdx = Number(ddBaselineFile.selectedIndex); } catch (eDD) {}
+                if (chosen === "highlight" && !hasAnyBaseline && chosenBaselineIdx !== (ddNames.length - 1)) {
+                    try {
+                        var warnDlg = app.dialogs.add({ name: "Track Translation Changes", canCancel: false });
+                        var warnCol = warnDlg.dialogColumns.add();
+                        warnCol.staticTexts.add({ staticLabel: "尚无 baseline，无法生成高亮。" });
+                        warnCol.staticTexts.add({ staticLabel: "请先运行「捕获 baseline」或选择其他文件。" });
+                        warnDlg.show();
+                        try { warnDlg.destroy(); } catch (e) {}
+                    } catch (eW) {}
+                    chosen = null;
+                }
+            }
+        } catch (eDlg) {
+            __fatalErr = "dialog: " + String(eDlg && eDlg.message || eDlg);
+        } finally {
+            try { if (dlg) dlg.destroy(); } catch (e) {}
+            try { if (__origUIL !== null) app.scriptPreferences.userInteractionLevel = __origUIL; } catch (eUI2) {}
+        }
+        if (!chosen) {
+            // User cancelled or warning aborted — exit quietly.
+            return;
+        }
+        mode = chosen;
+
+        // Resolve baseline-file selection. Capture mode doesn't need a
+        // read path (it writes a new file), so only resolve for highlight.
+        if (mode === "highlight") {
+            var lastIdx = (hasAnyBaseline ? availableBaselines.length : 1); // OTHER_FILE_LABEL slot
+            if (chosenBaselineIdx === lastIdx) {
+                // "其他文件..." — collect an absolute path via a 2nd dialog.
+                var pathDlg = null, typedPath = "";
+                try {
+                    pathDlg = app.dialogs.add({ name: "选择 baseline 文件", canCancel: true });
+                    var pcol = pathDlg.dialogColumns.add();
+                    pcol.staticTexts.add({ staticLabel: "请输入 baseline JSON 文件的绝对路径：" });
+                    var pathField = pcol.textEditboxes.add({ editContents: "", minWidth: 480 });
+                    if (pathDlg.show()) {
+                        try { typedPath = String(pathField.editContents || "").replace(/^\s+|\s+$/g, ""); } catch (e) {}
+                    }
+                } catch (ePD) {
+                    __fatalErr = "path dialog: " + String(ePD && ePD.message || ePD);
+                } finally {
+                    try { if (pathDlg) pathDlg.destroy(); } catch (e) {}
+                }
+                if (!typedPath) return; // cancelled
+                baselineFileOpt = typedPath;
+            } else if (hasAnyBaseline && chosenBaselineIdx >= 0 && chosenBaselineIdx < availableBaselines.length) {
+                baselineFileOpt = availableBaselines[chosenBaselineIdx].path;
+            }
+        }
+    }
+    if (!mode) mode = "auto";
+
+    // Finalize read/write paths now that mode + options are known.
+    // - Capture (rebaseline, or auto with no existing baseline) → write to
+    //   a fresh timestamped file in the folder.
+    // - Highlight (auto/highlight with explicit baselineFile or auto-picked
+    //   most recent in folder) → read from that file.
+    baselinePathWrite = _newBaselineWritePath();
+    baselinePathRead = baselineFileOpt || _defaultBaselinePathRead();
+    __baselinePath = (mode === "rebaseline" || (mode === "auto" && !baselinePathRead))
+        ? baselinePathWrite
+        : baselinePathRead;
+
+    var LAYER_NAME = "_T_translation_highlights";
+    var SWATCH_NAME = "_T_modified_highlight";
+    var HIGHLIGHT_RGB = [255, 235, 0];
+    var DELETED_SWATCH_NAME = "_T_deleted_highlight";
+    var DELETED_RGB = [230, 30, 30];
+    var CARET_HALF_WIDTH = 0.025; // inches; ~0.05" total caret width
+    var HIGHLIGHT_OPACITY = 100;  // % (multiply lets text show through)
+    var BlendMode = indesign && indesign.BlendMode;
+
+    // ---- LCS diff ----
+    // Whitespace test — covers ASCII space/tab/newline/CR plus U+00A0 NBSP
+    // and U+3000 ideographic space (common in CJK layout). Extend if your
+    // workflow needs more (zero-width? em-space?). Used by the
+    // ignoreWhitespace filter below.
+    function _isWS(c) {
+        return c === " " || c === "\t" || c === "\n" || c === "\r"
+            || c === " " || c === "　";
+    }
+    function _allWS(s) {
+        if (!s) return true;
+        for (var i = 0; i < s.length; i++) {
+            if (!_isWS(s.charAt(i))) return false;
+        }
+        return true;
+    }
+    function diffChangedRanges(oldStr, newStr, ignoreWS) {
+        // Return array of {start, end} (inclusive) ranges in newStr for
+        // chars NOT in the longest common subsequence with oldStr.
+        var m = oldStr.length, n = newStr.length;
+        // Returns { ranges, gaps } where:
+        //   ranges = inserted/replaced char runs in newStr ({start,end} inclusive)
+        //   gaps   = deletion-only positions in newStr's coordinate space
+        //            (each gap j means "old chars were removed BEFORE
+        //             newStr[j]"; j∈[0..n], with j=n meaning end-of-string)
+        if (n === 0) return { ranges: [], gaps: (m > 0 && !(ignoreWS && _allWS(oldStr))) ? [0] : [] };
+        if (m === 0) {
+            if (ignoreWS && _allWS(newStr)) return { ranges: [], gaps: [] };
+            return { ranges: [{start: 0, end: n - 1}], gaps: [] };
+        }
+        var L = new Array(m + 1);
+        for (var i = 0; i <= m; i++) L[i] = new Array(n + 1);
+        for (var i0 = 0; i0 <= m; i0++) L[i0][0] = 0;
+        for (var j0 = 0; j0 <= n; j0++) L[0][j0] = 0;
+        for (var i = 1; i <= m; i++) {
+            for (var j = 1; j <= n; j++) {
+                if (oldStr.charAt(i - 1) === newStr.charAt(j - 1)) {
+                    L[i][j] = L[i - 1][j - 1] + 1;
+                } else {
+                    L[i][j] = L[i - 1][j] > L[i][j - 1] ? L[i - 1][j] : L[i][j - 1];
+                }
+            }
+        }
+        var inLCS = new Array(n);
+        for (var k = 0; k < n; k++) inLCS[k] = false;
+        // gapDeleted: maps gap position (jj in newStr coords) → concatenated
+        // string of oldStr chars deleted at that gap, in original order.
+        // Used by the ignoreWS filter below to test whether the deletion is
+        // pure whitespace.
+        var gapDeleted = {};
+        var ii = m, jj = n;
+        while (ii > 0 && jj > 0) {
+            if (oldStr.charAt(ii - 1) === newStr.charAt(jj - 1)) {
+                inLCS[jj - 1] = true;
+                ii--; jj--;
+            } else if (L[ii - 1][jj] > L[ii][jj - 1]) {
+                // Deletion: oldStr[ii-1] removed; gap sits at position jj in
+                // newStr. Backtrack runs RIGHT→LEFT so we prepend to keep
+                // gapDeleted[jj] in original order.
+                gapDeleted[jj] = (gapDeleted[jj] === undefined ? "" : gapDeleted[jj]);
+                gapDeleted[jj] = oldStr.charAt(ii - 1) + gapDeleted[jj];
+                ii--;
+            } else {
+                jj--;
+            }
+        }
+        // Any remaining old chars (loop hit jj=0) are deletions at the start.
+        if (ii > 0) {
+            gapDeleted[0] = (gapDeleted[0] === undefined ? "" : gapDeleted[0]);
+            while (ii > 0) {
+                gapDeleted[0] = oldStr.charAt(ii - 1) + gapDeleted[0];
+                ii--;
+            }
+        }
+        var ranges = [];
+        var s = -1;
+        for (var p = 0; p < n; p++) {
+            if (!inLCS[p]) {
+                if (s < 0) s = p;
+            } else if (s >= 0) {
+                ranges.push({start: s, end: p - 1});
+                s = -1;
+            }
+        }
+        if (s >= 0) ranges.push({start: s, end: n - 1});
+        var gaps = [];
+        for (var g in gapDeleted) if (gapDeleted.hasOwnProperty(g)) gaps.push(parseInt(g, 10));
+        gaps.sort(function (a, b) { return a - b; });
+
+        // ignoreWhitespace filter: drop ranges whose newStr substring is
+        // all-whitespace, and drop gaps whose deleted chars are all-whitespace.
+        // This matches "operator pasted edited translation; whitespace shifted
+        // around but no real content changed" cases.
+        if (ignoreWS) {
+            ranges = ranges.filter(function (r) {
+                return !_allWS(newStr.substring(r.start, r.end + 1));
+            });
+            gaps = gaps.filter(function (gp) {
+                var dchars = gapDeleted[gp] || "";
+                return !_allWS(dchars);
+            });
+        }
+
+        return { ranges: ranges, gaps: gaps };
+    }
+
+    // ---- collect paragraphs ----
+    // Note: UXP idjs makes paragraph.id undefined — use (storyId, paraIdx)
+    // as the primary key + content fingerprint as the matching key (so
+    // paragraph add/remove doesn't break diff alignment).
+    function collectAllParagraphs() {
+        var out = [];
+        var stories = doc.stories;
+        for (var si = 0; si < stories.length; si++) {
+            var st = null; try { st = stories.item(si); } catch (e) { continue; }
+            if (!st) continue;
+            var sid = ""; try { sid = String(st.id); } catch (e) {}
+            try {
+                for (var pi = 0; pi < st.paragraphs.length; pi++) {
+                    var pp = null; try { pp = st.paragraphs.item(pi); } catch (e) { continue; }
+                    if (!pp) continue;
+                    out.push({ key: sid + ":" + pi, story: st, storyId: sid, paraIdx: pi, para: pp, scope: "story" });
+                }
+            } catch (eP) {}
+            try {
+                for (var ti = 0; ti < st.tables.length; ti++) {
+                    var tbl = st.tables.item(ti);
+                    for (var ci = 0; ci < tbl.cells.length; ci++) {
+                        var cell = tbl.cells.item(ci);
+                        for (var cpi = 0; cpi < cell.paragraphs.length; cpi++) {
+                            var cp = cell.paragraphs.item(cpi);
+                            if (!cp) continue;
+                            out.push({
+                                key: sid + ":t" + ti + ":c" + ci + ":p" + cpi,
+                                story: st, storyId: sid, table: ti, cell: ci, paraIdx: cpi, para: cp, scope: "cell"
+                            });
+                        }
+                    }
+                }
+            } catch (eT) {}
+        }
+        return out;
+    }
+
+    function stripCR(s) {
+        // remove trailing paragraph mark (\r) for diff stability
+        while (s.length > 0 && s.charCodeAt(s.length - 1) === 13) s = s.substring(0, s.length - 1);
+        return s;
+    }
+
+    // ---- content fingerprint ----
+    // Stable, position-independent identifier for a paragraph. Used so
+    // baseline matching survives "paragraph N inserted / deleted" between
+    // capture and diff — when the position-based key misses, we fall back
+    // to fingerprint match within the same story.
+    //
+    // The fingerprint trades a bit of accuracy for robustness: it's a hash
+    // over (storyId + normalized first 24 + normalized last 24 + length).
+    // Two paragraphs that share start, end, and length are almost certainly
+    // the same paragraph even if the middle was edited. Pure djb2 hash
+    // collides too easily for short Chinese strings, so the prefix/suffix
+    // pair acts as a self-disambiguating signature.
+    function _normalizeForFp(s) {
+        // Drop all whitespace (incl. CJK ideographic / NBSP) so trailing
+        // soft breaks and accidental spaces don't poison the fingerprint.
+        return (s || "").replace(/[\s 　]+/g, "");
+    }
+    function _djb2(s) {
+        var h = 5381;
+        for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        return (h >>> 0).toString(16);
+    }
+    function paragraphFingerprint(storyId, text) {
+        var norm = _normalizeForFp(text);
+        var n = norm.length;
+        var head = norm.substring(0, Math.min(24, n));
+        var tail = n > 24 ? norm.substring(Math.max(0, n - 24)) : "";
+        return "fp_" + storyId + "_" + n + "_" + _djb2(head + "|" + tail);
+    }
+    // Lighter prefix-only key for content-prefix lookup (used when full
+    // fingerprint misses but a partial match is plausible).
+    function paragraphPrefixKey(storyId, text) {
+        var norm = _normalizeForFp(text);
+        var head = norm.substring(0, Math.min(16, norm.length));
+        return "px_" + storyId + "_" + head;
+    }
+
+    // ---- baseline file ----
+    // Schema 3 (2026-05-27): same as schema 2 but adds two reverse-lookup
+    // indexes built off content (fingerprint + prefix). Diff path tries
+    // (storyId, paraIdx) first; on miss / wildly-different text, falls back
+    // to the fingerprint / prefix maps within the same story. Robust to
+    // paragraphs being added/removed between capture and diff. Old schema 2
+    // baselines still load — fingerprint maps are recomputed lazily.
+    function saveBaseline(paras, savePath) {
+        var map = {};
+        var byFp = {};        // fingerprint → key (for content-exact match)
+        var byPrefix = {};    // prefix key → key (for fuzzy lookup)
+        for (var i = 0; i < paras.length; i++) {
+            var item = paras[i];
+            var raw = "";
+            try { raw = String(item.para.contents || ""); } catch (e) {}
+            var text = stripCR(raw);
+            var fp = paragraphFingerprint(item.storyId, text);
+            var px = paragraphPrefixKey(item.storyId, text);
+            map[item.key] = { text: text, fp: fp, px: px };
+            // First seen wins (duplicates are rare enough that ambiguity
+            // resolution can be deferred to the diff phase).
+            if (!byFp[fp]) byFp[fp] = item.key;
+            if (!byPrefix[px]) byPrefix[px] = item.key;
+        }
+        var payload = {
+            schema: 3,
+            doc: docName,
+            capturedAt: new Date().toISOString(),
+            paragraphs: map,
+            byFp: byFp,
+            byPrefix: byPrefix
+        };
+        try {
+            fs.writeFileSync(savePath, JSON.stringify(payload), "utf-8");
+            return { ok: true, count: paras.length, path: savePath };
+        } catch (e) {
+            return { ok: false, err: String(e && e.message || e) };
+        }
+    }
+    function loadBaseline(loadPath) {
+        if (!loadPath) return null;
+        try {
+            var raw = fs.readFileSync(loadPath, "utf-8");
+            var parsed = JSON.parse(raw);
+            // Schema 2 → 3 upgrade: synthesize byFp / byPrefix maps lazily.
+            if (parsed && parsed.paragraphs && (!parsed.byFp || !parsed.byPrefix)) {
+                parsed.byFp = {};
+                parsed.byPrefix = {};
+                for (var k in parsed.paragraphs) {
+                    if (!Object.prototype.hasOwnProperty.call(parsed.paragraphs, k)) continue;
+                    var entry = parsed.paragraphs[k];
+                    var sid = k.split(":")[0];
+                    var text = (entry && entry.text) || "";
+                    var fp = paragraphFingerprint(sid, text);
+                    var px = paragraphPrefixKey(sid, text);
+                    if (!entry.fp) entry.fp = fp;
+                    if (!entry.px) entry.px = px;
+                    if (!parsed.byFp[fp]) parsed.byFp[fp] = k;
+                    if (!parsed.byPrefix[px]) parsed.byPrefix[px] = k;
+                }
+            }
+            return parsed;
+        } catch (e) { return null; }
+    }
+
+    // ---- swatch + layer ----
+    function ensureSwatch(name, rgb) {
+        var sw = null;
+        try { sw = doc.colors.itemByName(name); } catch (e) {}
+        try { if (sw && !sw.isValid) sw = null; } catch (e) { sw = null; }
+        if (!sw) {
+            try {
+                sw = doc.colors.add({
+                    name: name,
+                    space: ColorSpace.RGB,
+                    model: ColorModel.PROCESS,
+                    colorValue: rgb
+                });
+            } catch (eA) { return null; }
+        }
+        return sw;
+    }
+    function ensureLayer() {
+        var layer = null;
+        try { layer = doc.layers.itemByName(LAYER_NAME); } catch (e) {}
+        try { if (layer && !layer.isValid) layer = null; } catch (e) { layer = null; }
+        if (!layer) {
+            try {
+                var spec = { name: LAYER_NAME };
+                if (UIColors && UIColors.YELLOW) spec.layerColor = UIColors.YELLOW;
+                layer = doc.layers.add(spec);
+            } catch (eL) { return null; }
+        }
+        // Always promote to topmost so rects sit above all existing content.
+        try {
+            var topLayer = doc.layers.item(0);
+            if (topLayer && topLayer.id !== layer.id) layer.move(LocationOptions.AT_BEGINNING);
+        } catch (eMove) {}
+        return layer;
+    }
+    function deleteLayerAndRects() {
+        var n = 0;
+        var layer = null;
+        try { layer = doc.layers.itemByName(LAYER_NAME); } catch (e) {}
+        try { if (layer && !layer.isValid) layer = null; } catch (e) { layer = null; }
+        if (!layer) return 0;
+        // unlock all rects so remove() works
+        try {
+            var rects = layer.allPageItems;
+            for (var i = 0; i < rects.length; i++) {
+                try { rects[i].locked = false; } catch (eU) {}
+            }
+        } catch (eR) {}
+        try { n = layer.allPageItems.length; } catch (e) {}
+        try { layer.remove(); } catch (eDel) {}
+        return n;
+    }
+
+    // ---- per-line rectangle planning (async) ----
+    // UXP idjs quirks: line.parentTextFrames is [[TextFrame]] (nested); frame.parentPage is async.
+    // Returns plan = { pg, bounds:[top,left,bottom,right] } or null.
+    // The actual rectangle.add() is deferred to a synchronous batch (see runMark)
+    // so all N rects collapse into ONE undo step via ENTIRE_SCRIPT.
+    // usePara=true: arg2 is the paragraph and range/anchor offsets are
+    // paragraph-local. Mandatory for table-cell paragraphs because cell
+    // paragraphs use cell-local character indexing, NOT story-global —
+    // mixing story.characters.item(globalIdx) with cell-local offsets
+    // lands rects in totally unrelated story positions (story-paragraph 0
+    // chars instead of cell text), producing the false-positive marks the
+    // 2026-05-28 fix targets. usePara=false retains the legacy
+    // story-global path for any caller that still works in story coords.
+    async function planRectForLinePortion(line, paraOrStory, rangeFirst, rangeLast, usePara) {
+        var lineFirst = -1, lineLast = -1;
+        try { lineFirst = line.characters.item(0).index; } catch (e) {}
+        try { lineLast  = line.characters.item(line.characters.length - 1).index; } catch (e) {}
+        if (Array.isArray(lineFirst)) lineFirst = lineFirst[0];
+        if (Array.isArray(lineLast))  lineLast  = lineLast[0];
+        // paragraph.characters.item(0).index and line.characters.item(0).index
+        // both report indices in the SAME parent-collection coord space
+        // (story-global for story paragraphs, cell-local for table-cell
+        // paragraphs). So we can convert the caller's paragraph-local
+        // range into that shared coord space by adding paraStart.
+        var paraStart = 0;
+        if (usePara) {
+            try { paraStart = paraOrStory.characters.item(0).index; } catch (e) {}
+            if (Array.isArray(paraStart)) paraStart = paraStart[0];
+        }
+        var rangeFirstAbs = usePara ? (paraStart + rangeFirst) : rangeFirst;
+        var rangeLastAbs  = usePara ? (paraStart + rangeLast)  : rangeLast;
+        var pStart = Math.max(rangeFirstAbs, lineFirst);
+        var pEnd   = Math.min(rangeLastAbs,  lineLast);
+        if (pEnd < pStart) return null;
+        var startChar = null, endChar = null;
+        if (usePara) {
+            try { startChar = paraOrStory.characters.item(pStart - paraStart); } catch (e) {}
+            try { endChar   = paraOrStory.characters.item(pEnd   - paraStart); } catch (e) {}
+        } else {
+            try { startChar = paraOrStory.characters.item(pStart); } catch (e) {}
+            try { endChar   = paraOrStory.characters.item(pEnd);   } catch (e) {}
+        }
+        if (!startChar || !endChar) return null;
+        var startX = NaN, endX = NaN;
+        try { startX = Number(startChar.horizontalOffset);   } catch (e) {}
+        try { endX   = Number(endChar.endHorizontalOffset);  } catch (e) {}
+        var baseline = NaN, ascent = NaN, descent = NaN;
+        try { baseline = Number(line.baseline); } catch (e) {}
+        try { ascent   = Number(line.ascent);   } catch (e) {}
+        try { descent  = Number(line.descent);  } catch (e) {}
+        if (!isFinite(startX) || !isFinite(endX) || !isFinite(baseline)) return null;
+        if (!isFinite(ascent)) ascent = 0.1;
+        if (!isFinite(descent)) descent = 0.02;
+        var pg = null;
+        try {
+            var ptf = line.parentTextFrames;
+            var frame = ptf && ptf[0];
+            if (Array.isArray(frame)) frame = frame[0];
+            if (frame) pg = await frame.parentPage;
+        } catch (eP) {}
+        if (!pg) return null;
+        return { pg: pg, bounds: [baseline - ascent, startX, baseline + descent, endX] };
+    }
+
+    // Async: build a thin red caret rectangle at a deletion-gap position.
+    // anchorChar is the character whose edge marks the gap; useEndEdge=true
+    // → right edge (endHorizontalOffset), else left edge (horizontalOffset).
+    // usePara=true: arg2 is the paragraph and anchorIdx is paragraph-local.
+    // Required for table-cell paragraphs — see planRectForLinePortion note.
+    async function planGapMarker(line, paraOrStory, anchorIdx, useEndEdge, usePara) {
+        var ch = null;
+        // Either branch is `paraOrStory.characters.item(anchorIdx)` — the
+        // caller is responsible for keeping the coord space consistent.
+        // usePara stays in the signature for symmetry with planRectForLinePortion
+        // and as a self-documenting "this caller is paragraph-local" flag.
+        try { ch = paraOrStory.characters.item(anchorIdx); } catch (e) {}
+        if (!ch) return null;
+        var x = NaN;
+        try { x = Number(useEndEdge ? ch.endHorizontalOffset : ch.horizontalOffset); } catch (e) {}
+        var baseline = NaN, ascent = NaN, descent = NaN;
+        try { baseline = Number(line.baseline); } catch (e) {}
+        try { ascent   = Number(line.ascent);   } catch (e) {}
+        try { descent  = Number(line.descent);  } catch (e) {}
+        if (!isFinite(x) || !isFinite(baseline)) return null;
+        if (!isFinite(ascent)) ascent = 0.1;
+        if (!isFinite(descent)) descent = 0.02;
+        var pg = null;
+        try {
+            var ptf = line.parentTextFrames;
+            var frame = ptf && ptf[0];
+            if (Array.isArray(frame)) frame = frame[0];
+            if (frame) pg = await frame.parentPage;
+        } catch (eP) {}
+        if (!pg) return null;
+        return {
+            pg: pg,
+            bounds: [baseline - ascent, x - CARET_HALF_WIDTH, baseline + descent, x + CARET_HALF_WIDTH],
+            kind: "delete"
+        };
+    }
+
+    // Synchronous: drawn inside the doScript ENTIRE_SCRIPT block.
+    function applyRectPlan(plan, layer, swatch, noneSwatch) {
+        var rect = null;
+        try {
+            rect = plan.pg.rectangles.add(layer, { geometricBounds: plan.bounds });
+        } catch (eAdd) { return null; }
+        try { rect.fillColor = swatch; } catch (e) {}
+        try { rect.fillTint = 100; } catch (e) {}
+        try { rect.strokeWeight = 0; } catch (e) {}
+        try { if (noneSwatch) rect.strokeColor = noneSwatch; } catch (e) {}
+        try { rect.transparencySettings.blendingSettings.opacity = HIGHLIGHT_OPACITY; } catch (e) {}
+        // Multiply: yellow×white=yellow, yellow×black=black → text stays readable through opaque highlight.
+        try {
+            if (BlendMode && BlendMode.MULTIPLY) {
+                rect.transparencySettings.blendingSettings.blendMode = BlendMode.MULTIPLY;
+            }
+        } catch (eBM) {}
+        try { rect.locked = true; } catch (e) {}
+        return rect;
+    }
+
+    var stats = {
+        mode: mode,
+        baselineHas: 0,
+        paragraphsScanned: 0,
+        paragraphsChanged: 0,
+        rangesMarked: 0,
+        gapsMarked: 0,
+        rectsDrawn: 0,
+        caretsDrawn: 0,
+        layerCleared: 0,
+        addedSinceBaseline: 0,
+        errors: []
+    };
+
+    async function runMark() {
+        var baseline = loadBaseline(baselinePathRead);
+        if (!baseline || !baseline.paragraphs) {
+            // No baseline: capture and exit (no visible change).
+            var paras0 = collectAllParagraphs();
+            stats.paragraphsScanned = paras0.length;
+            stats.mode = "auto→baseline";
+            var dirOk0 = await _ensureBaselineDirAsync();
+            if (!dirOk0) {
+                stats.errors.push("baseline dir not creatable: " + baselineDir);
+                return;
+            }
+            var bs = saveBaseline(paras0, baselinePathWrite);
+            if (!bs.ok) stats.errors.push("baseline save: " + bs.err);
+            else stats.baselineSavedTo = bs.path;
+            return;
+        }
+        stats.baselineLoadedFrom = baselinePathRead;
+        stats.baselineHas = Object.keys(baseline.paragraphs).length;
+
+        // Phase A (async): scan paragraphs, compute LCS diff, plan rects.
+        var plans = [];
+        var paras = collectAllParagraphs();
+        // Tracks which baseline keys were already consumed by another
+        // current paragraph; prevents two current paragraphs from
+        // back-resolving onto the same baseline entry (would generate
+        // false-positive diffs against duplicated content).
+        var __claimedBaselineKey = {};
+        // Heuristic for "wildly-different positional match": almost
+        // certainly a paragraph add/remove shift, not a real edit.
+        // Trigger fingerprint/prefix fallback when triggered.
+        //
+        // Old rule was prefix-only (k<2 mismatch → realigned), but a
+        // common real-edit pattern is "swap a word in the first 1–2 chars"
+        // (e.g. "对全寿险" → "对终身寿险"). Prefix-only flagged that as
+        // realigned, fingerprint/prefix both missed, resolver returned
+        // null, and the whole paragraph got highlighted as "new" — when
+        // in fact only 1–2 chars actually changed.
+        //
+        // Better: require BOTH prefix AND suffix to mismatch before
+        // calling it realigned. A heavy edit at the start of an otherwise-
+        // unchanged paragraph keeps the suffix intact, so suffix-match
+        // catches that case and stays on the positional key.
+        function _looksRealigned(oldText, newText) {
+            var ml = Math.max(oldText.length, newText.length);
+            if (ml < 4) return false;
+            var pre = Math.min(8, oldText.length, newText.length);
+            var prefixMismatchAt = -1;
+            for (var k = 0; k < pre; k++) {
+                if (oldText.charAt(k) !== newText.charAt(k)) { prefixMismatchAt = k; break; }
+            }
+            if (prefixMismatchAt < 0) return false;        // prefix fully matched
+            if (prefixMismatchAt >= 2) return false;       // prefix matched ≥2 chars → looks like an edit
+            // Prefix only matched 0–1 char. Check suffix — if last few
+            // chars still match, it's a heavy front-of-paragraph edit,
+            // not a structural realignment.
+            var sufLen = Math.min(8, oldText.length, newText.length);
+            for (var s = 1; s <= sufLen; s++) {
+                if (oldText.charAt(oldText.length - s) !== newText.charAt(newText.length - s)) {
+                    return true; // prefix AND suffix mismatch → really realigned
+                }
+            }
+            return false; // suffix matched → keep positional
+        }
+        function _resolvePrior(item, curText) {
+            // Step 1: positional key
+            var prior = baseline.paragraphs[item.key];
+            if (prior) {
+                // If positional baseline IS wildly different, treat as miss
+                // and fall through to fingerprint match. Otherwise accept.
+                if (prior.text === curText || !_looksRealigned(prior.text || "", curText)) {
+                    __claimedBaselineKey[item.key] = true;
+                    return prior;
+                }
+            }
+            // Step 2: exact-content fingerprint
+            var fp = paragraphFingerprint(item.storyId, curText);
+            var fpKey = baseline.byFp && baseline.byFp[fp];
+            if (fpKey && !__claimedBaselineKey[fpKey] && baseline.paragraphs[fpKey]) {
+                __claimedBaselineKey[fpKey] = true;
+                return baseline.paragraphs[fpKey];
+            }
+            // Step 3: prefix match (first ~16 normalized chars). Same prefix
+            // = very likely the same paragraph, just edited later in body.
+            var px = paragraphPrefixKey(item.storyId, curText);
+            var pxKey = baseline.byPrefix && baseline.byPrefix[px];
+            if (pxKey && !__claimedBaselineKey[pxKey] && baseline.paragraphs[pxKey]) {
+                __claimedBaselineKey[pxKey] = true;
+                return baseline.paragraphs[pxKey];
+            }
+            return null;
+        }
+        // Diagnostic: capture per-paragraph diff details for verification
+        if (!stats.diffTrace) stats.diffTrace = [];
+        for (var i = 0; i < paras.length; i++) {
+            var item = paras[i];
+            stats.paragraphsScanned++;
+            var curRaw = "";
+            try { curRaw = stripCR(String(item.para.contents || "")); } catch (e) { continue; }
+            var prior = _resolvePrior(item, curRaw);
+            var ranges, gaps;
+            if (!prior) {
+                stats.addedSinceBaseline++;
+                if (curRaw.length === 0) continue;
+                ranges = [{ start: 0, end: curRaw.length - 1 }];
+                gaps = [];
+                if (stats.diffTrace.length < 80) {
+                    stats.diffTrace.push({
+                        key: item.key, src: "new",
+                        curLen: curRaw.length, curHead: curRaw.slice(0,30),
+                        ranges: ranges.length, gaps: gaps.length
+                    });
+                }
+            } else {
+                if (prior.text === curRaw) continue;
+                var diff = diffChangedRanges(prior.text || "", curRaw, ignoreWhitespace);
+                ranges = diff.ranges;
+                gaps = diff.gaps;
+                if (!ranges.length && !gaps.length) continue;
+                if (stats.diffTrace.length < 80) {
+                    stats.diffTrace.push({
+                        key: item.key,
+                        baseLen: (prior.text || "").length,
+                        curLen: curRaw.length,
+                        baseHead: (prior.text || "").slice(0,30),
+                        curHead: curRaw.slice(0,30),
+                        rangesCount: ranges.length,
+                        gapsCount: gaps.length,
+                        rangesPreview: ranges.slice(0,5).map(function(r){return r.start+":"+r.end;}).join("|"),
+                        gapsPreview: gaps.slice(0,5).join("|")
+                    });
+                }
+            }
+            stats.paragraphsChanged++;
+            var paraStartGlobal = -1;
+            // 2026-05-28 root-cause fix: the original code added paragraph
+            // offsets to `paragraph.characters.item(0).index` and then looked
+            // up chars via `item.story.characters.item(...)`. For STORY-level
+            // paragraphs this works because the index IS story-global. For
+            // table-CELL paragraphs the index is CELL-LOCAL (e.g. 3 for a
+            // cell's 2nd paragraph). Adding offsets and indexing into the
+            // parent story's chars landed rects on TOTALLY UNRELATED story
+            // positions (e.g. "蒙特利尔银行" in story-paragraph 0). Visually
+            // those rects bled onto page 2's story-paragraph 3, producing the
+            // false-positive marks on "使其成为您财务计划...".
+            //
+            // Fix: use the paragraph's OWN characters collection
+            // (`item.para.characters.itemByRange(localStart, localEnd)`),
+            // which is identically zero-based for both story and cell
+            // paragraphs. Line geometry comes from `charRange.lines` and the
+            // line's own baseline/ascent/descent — no story-vs-cell ambiguity.
+
+            try { paraStartGlobal = item.para.characters.item(0).index; } catch (ePS) {}
+            if (Array.isArray(paraStartGlobal)) paraStartGlobal = paraStartGlobal[0];
+            var paraLen = curRaw.length;
+            if (!stats.planTrace) stats.planTrace = [];
+
+            // Yellow rects for inserted/replaced runs.
+            for (var ri = 0; ri < ranges.length; ri++) {
+                stats.rangesMarked++;
+                var rngStartOff = ranges[ri].start;
+                var rngEndOff   = ranges[ri].end;
+                try {
+                    var charRange = item.para.characters.itemByRange(rngStartOff, rngEndOff);
+                    var lines = charRange.lines;
+                    if (stats.planTrace.length < 80) {
+                        stats.planTrace.push({
+                            key: item.key, kind: "range", scope: item.scope || "story",
+                            paraStart: paraStartGlobal,
+                            offsetStart: rngStartOff,
+                            offsetEnd: rngEndOff,
+                            linesCount: (function(){try{return lines.length;}catch(e){return -1;}})(),
+                            actualText: (function(){try{return String(charRange.contents).slice(0,20);}catch(e){return "?";}})()
+                        });
+                    }
+                    // planRectForLinePortion needs paragraph-local indices for
+                    // its clipping (range AND line are both in the same
+                    // "paragraph.characters" coord space).
+                    for (var li = 0; li < lines.length; li++) {
+                        var plan = await planRectForLinePortion(lines.item(li), item.para, rngStartOff, rngEndOff, true);
+                        if (plan) plans.push(plan);
+                    }
+                } catch (eL) {
+                    stats.errors.push({ key: item.key, ri: ri, reason: String(eL.message || eL) });
+                }
+            }
+
+            // Red carets at deletion gap positions. paraLen===0 means the
+            // whole paragraph emptied — nothing to anchor against, skip.
+            if (paraLen > 0) {
+                for (var gi = 0; gi < gaps.length; gi++) {
+                    var g = gaps[gi];
+                    var anchorIdx, useEndEdge;
+                    if (g <= 0) { anchorIdx = 0; useEndEdge = false; }
+                    else if (g >= paraLen) { anchorIdx = paraLen - 1; useEndEdge = true; }
+                    else { anchorIdx = g; useEndEdge = false; }
+                    try {
+                        var anchorRange = item.para.characters.itemByRange(anchorIdx, anchorIdx);
+                        var anchorLines = anchorRange.lines;
+                        if (anchorLines.length === 0) continue;
+                        var caretPlan = await planGapMarker(anchorLines.item(0), item.para, anchorIdx, useEndEdge, true);
+                        if (caretPlan) {
+                            plans.push(caretPlan);
+                            stats.gapsMarked++;
+                            if (stats.planTrace.length < 80) {
+                                stats.planTrace.push({
+                                    key: item.key, kind: "gap", scope: item.scope || "story",
+                                    paraStart: paraStartGlobal,
+                                    offsetGap: g,
+                                    anchorIdx: anchorIdx,
+                                    useEndEdge: useEndEdge,
+                                    actualChar: (function(){try{return String(item.para.characters.item(anchorIdx).contents);}catch(e){return "?";}})(),
+                                    bounds: caretPlan.bounds
+                                });
+                            }
+                        }
+                    } catch (eGap) {
+                        stats.errors.push({ key: item.key, gap: gi, reason: String(eGap.message || eGap) });
+                    }
+                }
+            }
+        }
+
+        // Phase B (sync, in one ENTIRE_SCRIPT undo step):
+        // clear old layer + create fresh layer + ensure both swatches + add all rects.
+        var noneSwatch = null;
+        try { noneSwatch = doc.swatches.itemByName("None"); } catch (e) {}
+        function syncDraw() {
+            stats.layerCleared = deleteLayerAndRects();
+            var layer = ensureLayer();
+            var yellowSwatch = ensureSwatch(SWATCH_NAME, HIGHLIGHT_RGB);
+            var redSwatch = ensureSwatch(DELETED_SWATCH_NAME, DELETED_RGB);
+            if (!layer || !yellowSwatch || !redSwatch) {
+                stats.errors.push("ensureLayer/Swatch failed");
+                return;
+            }
+            for (var pi = 0; pi < plans.length; pi++) {
+                var p = plans[pi];
+                var sw = (p.kind === "delete") ? redSwatch : yellowSwatch;
+                if (applyRectPlan(p, layer, sw, noneSwatch)) {
+                    if (p.kind === "delete") stats.caretsDrawn++;
+                    else stats.rectsDrawn++;
+                }
+            }
+        }
+        runInOneUndoStep(syncDraw, "Track Translation Highlights");
+    }
+
+    function runClear() {
+        function syncClear() {
+            stats.layerCleared = deleteLayerAndRects();
+        }
+        runInOneUndoStep(syncClear, "Clear Translation Highlights");
+    }
+
+    async function runRebaseline() {
+        function syncWork() {
+            deleteLayerAndRects();
+        }
+        runInOneUndoStep(syncWork, "Clear Translation Highlights (rebaseline)");
+        // Baseline save is a disk write — outside the doc undo system.
+        // Capture always reads from the active doc and writes to a fresh
+        // timestamped file in script_outputs/baseline_snapshots/.
+        var paras = collectAllParagraphs();
+        stats.paragraphsScanned = paras.length;
+        stats.mode = "rebaseline";
+        var dirOk = await _ensureBaselineDirAsync();
+        if (!dirOk) {
+            stats.errors.push("baseline dir not creatable: " + baselineDir);
+            return;
+        }
+        var bs = saveBaseline(paras, baselinePathWrite);
+        if (!bs.ok) stats.errors.push("rebaseline save: " + bs.err);
+        else {
+            stats.baselineHas = bs.count;
+            stats.baselineSavedTo = bs.path;
+        }
+    }
+
+    // Wrap a synchronous function in app.doScript with ENTIRE_SCRIPT undo
+    // so multiple page-item add/remove operations collapse into ONE undo
+    // step (single Cmd/Ctrl+Z reverts everything). Falls back to a plain
+    // invocation if doScript isn't available.
+    function runInOneUndoStep(fn, label) {
+        if (UndoModes && UndoModes.ENTIRE_SCRIPT && ScriptLanguage && ScriptLanguage.JAVASCRIPT) {
+            try {
+                app.doScript(fn, ScriptLanguage.JAVASCRIPT, undefined,
+                    UndoModes.ENTIRE_SCRIPT, label || "Track Translation Changes");
+                return;
+            } catch (eDS) {
+                stats.errors.push("doScript: " + String(eDS && eDS.message || eDS));
+            }
+        }
+        try { fn(); } catch (eRaw) {
+            stats.errors.push("fn raw: " + String(eRaw && eRaw.message || eRaw));
+        }
+    }
+
+    var runCore = async function () {
+        if (mode === "clear") return runClear();
+        if (mode === "rebaseline") return await runRebaseline();
+        // "highlight", "mark", "auto", or anything else → runMark
+        return await runMark();
+    };
+
+    try {
+        await runCore();
+    } catch (eRun) {
+        stats.errors.push("runCore: " + (eRun && (eRun.stack || eRun.message) || eRun));
+    }
+
+    __stats = stats;
+    var summary = "Track Translation Changes — " + stats.mode + "\n\n"
+        + "Ignore whitespace: " + (ignoreWhitespace ? "ON" : "off") + "\n"
+        + "Baseline paragraphs: " + stats.baselineHas + "\n"
+        + "Paragraphs scanned: " + stats.paragraphsScanned + "\n"
+        + "Paragraphs changed: " + stats.paragraphsChanged + "\n"
+        + "Diff ranges marked (yellow): " + stats.rangesMarked + "\n"
+        + "Deletion gaps marked (red): " + stats.gapsMarked + "\n"
+        + "Rectangles drawn: " + stats.rectsDrawn + "\n"
+        + "Carets drawn: " + stats.caretsDrawn + "\n"
+        + "Layer cleared (rects): " + stats.layerCleared + "\n"
+        + "Added since baseline: " + stats.addedSinceBaseline + "\n"
+        + (stats.baselineLoadedFrom ? ("Baseline loaded from: " + stats.baselineLoadedFrom + "\n") : "")
+        + (stats.baselineSavedTo  ? ("Baseline saved to:   " + stats.baselineSavedTo  + "\n") : "")
+        + "Errors: " + stats.errors.length;
+    if (!isAutomated) {
+        try { app.alert(summary); } catch (eA) {}
+    }
+} catch (eOuter) {
+    __fatalErr = String(eOuter && (eOuter.stack || eOuter.message) || eOuter);
+}
+    try {
+        var fs2 = require("fs");
+        var ScriptLogPaths2 = require("./lib/script_log_paths.js");
+        // 2026-05-28: write the diagnostic JSON to <docDir>/script_outputs/log/
+        // with a timestamp suffix; falls back to system tempDir for untitled
+        // docs. ensureLogDirAsync is awaited in a fire-and-forget pattern —
+        // the dir may already exist from earlier baseline writes; if not,
+        // the writeFileSync will fail silently and we just lose this one
+        // diagnostic file (not script-fatal).
+        try { await ScriptLogPaths2.ensureLogDirAsync(__docDirForLog); } catch (eED2) {}
+        var __finalLogPath = ScriptLogPaths2.resolveLogPath(__docDirForLog, "track_translation_changes", "json");
+        fs2.writeFileSync(__finalLogPath,
+            JSON.stringify({ baselinePath: __baselinePath, stats: __stats, fatalErr: __fatalErr }, null, 2),
+            "utf-8");
+    } catch (eLog) {}
+    return { stats: __stats, baselinePath: __baselinePath, fatalErr: __fatalErr };
+}
+
+await main();

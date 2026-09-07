@@ -1,0 +1,27 @@
+# indesign-toolkit
+
+> Adobe InDesign scripts for a translation and localization workflow: export a translation package, import the translated text back into the layout, and repair typography afterwards.
+
+Adobe InDesign scripts installed into the InDesign Scripts panel. Group 1 (1.1, 1.2) is the normal translation path a designer runs; groups 2, 3 and 4 are tools reached for when a specific problem appears.
+
+The complete text of every page below is available as a single file: [llms-full.txt](https://zxa24.github.io/creative-script-installer/llms-full.txt)
+
+## Start here
+
+- [indesign-toolkit](https://zxa24.github.io/creative-script-installer/): What the toolkit is, who runs which script, and how the pieces fit together.
+- [What this toolkit is](https://zxa24.github.io/creative-script-installer/guide/): The two tracks: the normal translation path (1.x) versus the tools you reach for when needed (2.x/3.x/4.x).
+- [Install and update](https://zxa24.github.io/creative-script-installer/guide/install): One-click install on Windows and macOS, the SmartScreen/Gatekeeper prompts, install paths, and the atomic-replace update behaviour.
+- [The normal path](https://zxa24.github.io/creative-script-installer/guide/workflow): Export a translation package, translate it, import it back — step by step.
+- [Files and folders](https://zxa24.github.io/creative-script-installer/guide/folders): The directory convention: a simple working folder plus a script_outputs/ folder that scripts own.
+
+## Scripts
+
+- [All scripts](https://zxa24.github.io/creative-script-installer/scripts/): The complete numbered index of every script the installer distributes.
+- [Group 1 — Workflow](https://zxa24.github.io/creative-script-installer/scripts/workflow): 1.1 Export Translation Package and 1.2 Import Translation Package — the normal path.
+- [Group 2 — Type & Styles](https://zxa24.github.io/creative-script-installer/scripts/type-and-styles): 2.1 Apply Font Pairing, 2.2 Apply CJK Styles, 2.3 Set Selection Weight, 2.4 Reorganize Styles, 2.5 Repair Cluster GREP, 2.6 Convert Underline to Rule.
+- [Group 3 — Check & Repair](https://zxa24.github.io/creative-script-installer/scripts/check-and-repair): 3.1 Snapshot Before Apply, 3.2 Repair After Apply, 3.3 Relink Missing Links, 3.4 Highlight Translation Changes, 3.5 Save and Reveal.
+- [Group 4 — Brand Presets](https://zxa24.github.io/creative-script-installer/scripts/brand-presets): 4.1 Export Brand Preset and 4.2 Apply Brand Preset — move tuned paragraph-style geometry between sibling documents.
+
+## Reference
+
+- [Advanced install and distribution](https://zxa24.github.io/creative-script-installer/reference/advanced): Installer flags, the TOOLKIT_SOURCE / TOOLKIT_ZIP_URL / TOOLKIT_AUTH_TOKEN overrides, and how the distribution bundle is produced.

@@ -1,0 +1,322 @@
+/*
+ * indesign-toolkit docs — house style.
+ *
+ * Palette and typography lifted from the Folio product-spec page
+ * (app-folio/Workflow.html): warm neutral paper, near-black ink, a single
+ * warm orange accent, a blue secondary. Restrained and editorial.
+ *
+ * This is a variable + a handful of element overrides on top of the stock
+ * VitePress default theme. Nothing is forked.
+ */
+
+/* ─────────────────────────── Light (default) ─────────────────────────── */
+
+:root {
+  /* House palette */
+  --ho-ink: #14171c;
+  --ho-ink-2: #2a2f37;
+  --ho-muted: #6b7280;
+  --ho-line: #e6e3dc;
+  --ho-line-2: #d9d4c8;
+  --ho-paper: #f4f1ea;
+  --ho-paper-2: #efece4;
+  --ho-card: #fbf9f3;
+  --ho-accent: #ff5b1f;
+  --ho-accent-deep: #b13c0a;
+  --ho-accent-2: #1657d6;
+  --ho-warn: #c98a00;
+
+  --ho-font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ho-font-serif: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --ho-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* VitePress typography */
+  --vp-font-family-base: var(--ho-font-sans);
+  --vp-font-family-mono: var(--ho-font-mono);
+
+  /* VitePress surfaces */
+  --vp-c-bg: var(--ho-paper);
+  --vp-c-bg-alt: var(--ho-paper-2);
+  --vp-c-bg-soft: var(--ho-card);
+  --vp-c-bg-elv: var(--ho-card);
+
+  /* VitePress text */
+  --vp-c-text-1: var(--ho-ink);
+  --vp-c-text-2: var(--ho-ink-2);
+  --vp-c-text-3: var(--ho-muted);
+
+  /* VitePress lines */
+  --vp-c-divider: var(--ho-line-2);
+  --vp-c-border: var(--ho-line-2);
+  --vp-c-gutter: var(--ho-line);
+
+  /* Brand — deep orange carries text-weight contrast on warm paper,
+     the bright orange is reserved for fills and hovers. */
+  --vp-c-brand-1: var(--ho-accent-deep);
+  --vp-c-brand-2: var(--ho-accent);
+  --vp-c-brand-3: var(--ho-accent);
+  --vp-c-brand-soft: rgba(255, 91, 31, 0.14);
+
+  --vp-c-tip-1: var(--ho-accent-2);
+  --vp-c-tip-soft: rgba(22, 87, 214, 0.1);
+  --vp-c-warning-1: #8a5f00;
+  --vp-c-warning-soft: rgba(201, 138, 0, 0.14);
+
+  --vp-code-bg: #efece4;
+  --vp-code-block-bg: #14171c;
+
+  --vp-button-brand-bg: var(--ho-accent);
+  --vp-button-brand-hover-bg: var(--ho-accent-deep);
+  --vp-button-brand-active-bg: var(--ho-accent-deep);
+  --vp-button-brand-border: transparent;
+
+  --vp-home-hero-name-color: var(--ho-ink);
+  --vp-home-hero-image-filter: none;
+}
+
+/* ─────────────────────────────── Dark ────────────────────────────────── */
+
+.dark {
+  --ho-ink: #f2efe7;
+  --ho-ink-2: #d5d0c4;
+  --ho-muted: #948e80;
+  --ho-line: #302d27;
+  --ho-line-2: #3a362f;
+  --ho-paper: #171613;
+  --ho-paper-2: #1d1b17;
+  --ho-card: #201e19;
+
+  --vp-c-bg: var(--ho-paper);
+  --vp-c-bg-alt: var(--ho-paper-2);
+  --vp-c-bg-soft: var(--ho-card);
+  --vp-c-bg-elv: var(--ho-card);
+
+  --vp-c-text-1: var(--ho-ink);
+  --vp-c-text-2: var(--ho-ink-2);
+  --vp-c-text-3: var(--ho-muted);
+
+  --vp-c-divider: var(--ho-line-2);
+  --vp-c-border: var(--ho-line-2);
+  --vp-c-gutter: var(--ho-line);
+
+  /* On dark ground the bright orange is the readable one. */
+  --vp-c-brand-1: #ff8a5a;
+  --vp-c-brand-2: #ff5b1f;
+  --vp-c-brand-3: #ff5b1f;
+  --vp-c-brand-soft: rgba(255, 138, 90, 0.16);
+
+  --vp-c-tip-1: #a8c0f5;
+  --vp-c-tip-soft: rgba(168, 192, 245, 0.12);
+  --vp-c-warning-1: #f0b441;
+  --vp-c-warning-soft: rgba(240, 180, 65, 0.14);
+
+  --vp-code-bg: #26231d;
+  --vp-code-block-bg: #100f0d;
+
+  --vp-button-brand-bg: #ff5b1f;
+  --vp-button-brand-hover-bg: #ff8a5a;
+  --vp-button-brand-active-bg: #ff8a5a;
+
+  --vp-home-hero-name-color: var(--ho-ink);
+}
+
+/* ───────────────────────────── Type scale ────────────────────────────── */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.vp-doc h1,
+.vp-doc h2,
+.VPHome .name,
+.VPHome .text {
+  font-family: var(--ho-font-serif);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+
+.vp-doc h1 {
+  font-size: 2.9rem;
+  line-height: 1.06;
+  margin-bottom: 0.4em;
+}
+
+.vp-doc h2 {
+  font-size: 1.9rem;
+  line-height: 1.15;
+  border-top: 1px solid var(--vp-c-divider);
+  margin-top: 3rem;
+  padding-top: 1.6rem;
+}
+
+.vp-doc h3 {
+  font-family: var(--ho-font-sans);
+  font-weight: 600;
+  font-size: 1.12rem;
+  letter-spacing: 0.005em;
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.68;
+}
+
+/* Home hero: serif display, warm accent on the emphasised half. */
+.VPHome .name {
+  font-size: 4.2rem;
+  line-height: 0.98;
+}
+
+.VPHome .name .clip {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: currentColor;
+  color: var(--ho-accent-deep);
+  font-style: italic;
+}
+
+.dark .VPHome .name .clip {
+  color: #ff8a5a;
+}
+
+.VPHome .text {
+  font-size: 2rem;
+  line-height: 1.15;
+  color: var(--vp-c-text-1);
+}
+
+.VPHome .tagline {
+  font-family: var(--ho-font-sans);
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--vp-c-text-2);
+}
+
+/* Feature cards read as paper, not as chips. */
+.VPFeature {
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+}
+
+.VPFeature .title {
+  font-weight: 600;
+  letter-spacing: 0.005em;
+}
+
+/* ────────────────────────── Editorial details ────────────────────────── */
+
+/* An eyebrow line: `**Eyebrow**{.eyebrow}` style small caps lead-in. */
+.vp-doc .eyebrow {
+  display: inline-block;
+  font-family: var(--ho-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+  font-size: 0.94rem;
+}
+
+.vp-doc th {
+  font-family: var(--ho-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+  background: transparent;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc tr {
+  background: transparent;
+}
+
+.vp-doc tr:nth-child(2n) {
+  background: transparent;
+}
+
+.vp-doc td,
+.vp-doc th {
+  border-color: var(--vp-c-divider);
+}
+
+.vp-doc blockquote {
+  border-left: 2px solid var(--ho-accent);
+  padding-left: 1rem;
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc blockquote > p {
+  font-size: 1rem;
+}
+
+/* Script numbers (1.1, 2.4 …) set in mono wherever they lead a heading. */
+.vp-doc h2 code,
+.vp-doc h3 code {
+  font-family: var(--ho-font-mono);
+  font-size: 0.82em;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  padding: 0.12em 0.4em;
+}
+
+.vp-doc .custom-block {
+  border-radius: 6px;
+  border-width: 1px;
+}
+
+/* Wide content never pushes the page sideways. */
+.vp-doc div[class*="language-"],
+.vp-doc table {
+  overflow-x: auto;
+}
+
+/* Feature cards are links; keep their prose as prose, not as link colour. */
+.VPFeature .title {
+  color: var(--vp-c-text-1);
+}
+
+.VPFeature .details {
+  color: var(--vp-c-text-2);
+}
+
+.VPFeature .link-text-value {
+  color: var(--vp-c-brand-1);
+}
+
+/* The hero's second line is a subtitle, not a second title. */
+.VPHome .text {
+  margin-top: 0.15em;
+  color: var(--vp-c-text-2);
+}
+
+/* These pages lean on wide tables — give the column room before it wraps. */
+:root {
+  --vp-layout-max-width: 1504px;
+}
+
+/* Mirrors the default theme's own breakpoints so these win on cascade order
+   rather than on specificity. */
+@media (min-width: 960px) {
+  .VPDoc:not(.has-sidebar) .content {
+    max-width: 928px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .VPDoc.has-aside .content-container {
+    max-width: 928px;
+  }
+}
+
+/* The script-number column never wraps. */
+.vp-doc table td:first-child {
+  white-space: nowrap;
+}

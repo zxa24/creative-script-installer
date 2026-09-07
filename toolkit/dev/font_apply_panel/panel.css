@@ -1,0 +1,1224 @@
+:root{
+  --ui:'Hanken Grotesk',system-ui,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --bg:#070809;
+  --shell:#101216;
+  --surface:#15181d;
+  --surface-2:#191d23;
+  --card:#1c2027;
+  --card-2:#21262e;
+  --line:#2a2f38;
+  --line-2:#343b46;
+  --txt:#e8eaef;
+  --txt-2:#9aa1ad;
+  --txt-3:#646b78;
+  --accent:#8b7cff;
+  --accent-soft:#8b7cff26;
+  --merge:#e0a45b;
+  --merge-soft:#e0a45b1f;
+  --danger:#f0697a;
+  --todo:#e6ad5c;
+  --todo-soft:#e6ad5c1f;
+  --ok:#5b9cf0;
+  --ok-soft:#5b9cf016;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;height:100%;}
+body{
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #14161c 0%, var(--bg) 60%);
+  color:var(--txt);
+  font-family:var(--ui);
+  -webkit-font-smoothing:antialiased;
+  display:flex;align-items:center;justify-content:center;
+  min-height:100vh;padding:22px;
+}
+body.grabbing{cursor:grabbing;user-select:none;}
+.mono{font-family:var(--mono);font-feature-settings:"ss01";}
+
+/* ---------- window shell ---------- */
+.app{
+  width:1180px;height:706px;max-width:100%;max-height:calc(100vh - 36px);
+  background:var(--shell);
+  border:1px solid var(--line);
+  border-radius:16px;
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 30px 80px -20px rgba(0,0,0,.7), 0 0 0 1px rgba(0,0,0,.4);
+  display:flex;flex-direction:column;overflow:hidden;
+  position:relative; /* 8D-ext-bypair-tofu-ux Phase 2: anchor the top-right tofu-warn popup */
+}
+
+/* ---------- topbar ---------- */
+.topbar{
+  height:54px;flex:none;display:flex;align-items:center;gap:18px;
+  padding:0 16px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#181b21,#131519);
+}
+.brand{display:flex;align-items:center;gap:9px;min-width:0;}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#5d7bff);box-shadow:0 0 12px var(--accent-soft);flex:none;}
+.brand-name{font-weight:600;font-size:14.5px;letter-spacing:-.01em;}
+.brand-sub{font-size:11px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.13em;padding-left:8px;border-left:1px solid var(--line-2);}
+.legend{display:flex;gap:16px;margin-left:auto;}
+.lg{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--txt-2);}
+.lg i{width:14px;height:14px;border-radius:4px;flex:none;}
+.lg-merge{background:var(--merge-soft);border:1px solid var(--merge);}
+.lg-pair{background:transparent;border:1px dashed var(--accent);position:relative;}
+.lg-pair::after{content:"";position:absolute;inset:0;margin:auto;width:6px;height:6px;border-radius:50%;background:var(--accent);}
+.topbar-actions{display:flex;gap:8px;margin-left:auto;}
+.profile-switch{display:flex;gap:2px;padding:2px;background:var(--surface-2);border:1px solid var(--line-2);border-radius:8px;}
+.pf{
+  font:inherit;font-size:11px;font-weight:500;color:var(--txt-3);background:transparent;border:none;
+  border-radius:6px;padding:5px 9px;cursor:pointer;transition:.12s;white-space:nowrap;
+}
+.pf:hover{color:var(--txt-2);}
+.pf.on{color:var(--txt);background:var(--card-2);box-shadow:0 1px 0 rgba(255,255,255,.05) inset;}
+.ghost,.primary{
+  display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;
+  font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;border:1px solid var(--line-2);
+  background:var(--surface-2);color:var(--txt-2);transition:.14s;white-space:nowrap;
+}
+.ghost:hover{color:var(--txt);border-color:#404856;}
+.ghost.on{color:var(--accent);border-color:#403d63;background:var(--accent-soft);}
+.primary{background:var(--accent);border-color:var(--accent);color:#0c0a1e;font-weight:600;}
+.primary:hover{filter:brightness(1.08);}
+
+/* ---------- canvas ---------- */
+.canvas{
+  flex:1;overflow:auto;position:relative;cursor:grab;
+  background-image:radial-gradient(rgba(255,255,255,.045) 1px,transparent 1px);
+  background-size:22px 22px;background-position:-1px -1px;
+}
+.canvas .column{cursor:default;}
+.canvas-inner{
+  position:relative;display:flex;gap:46px;align-items:flex-start;
+  padding:26px 30px 40px 204px;min-width:min-content;min-height:100%;
+}
+/* 🔴 #84② — the label wire was NOT broken; it was CLIPPED, and the reason is NOT
+   what `inset:0` below appears to say. MEASURED, two file-level readings:
+       with `inset:0` alone     → box at left 234, top 117
+       with an explicit `left`  → box at (30 + that left)
+   30 and 91 are .canvas-inner's own edges, while 234 = 30 + padding-left and
+   117 = 91 + padding-top — i.e. the STATIC POSITION, where an out-of-flow box
+   lands when nothing positions it.
+   🔴 ⇒ the `inset` shorthand is silently ignored in this webview. It computes, it
+   reads back, and it positions nothing. So this box has been sitting one padding
+   inside its own container ever since the v2 port (#16) — which left the label
+   lane, and therefore the START of every label wire, OUTSIDE the SVG viewport,
+   where an outer <svg> clips it away.
+   ⚠ `overflow:visible` never helped: getComputedStyle reports "visible" and the
+   painter clips regardless. Kept so that removing it does not read as a decision.
+   ⇒ The fix is to say in longhand what `inset:0` already meant. The box is then
+   exactly the padding box (30..1036 × 91..691), which contains the lane AND the
+   columns.
+   ⚠ The first attempt wrote `left:-204px`, cancelling the padding. That was built
+   on the wrong model and it OVERSHOT to -174..832 — covering the lane but cutting
+   the RIGHT side off at 832 while the content runs to 1006. The fixture's ordinary
+   wire sits at x 502..561, so the pixel rig would have passed with that regression
+   in place (#28: a test that stops at the first gate cannot pin the second).
+   🔴 Every other `inset:` in this stylesheet is under the same suspicion. */
+.wires{position:absolute;inset:0;width:100%;height:100%;overflow:visible;
+  left:0;top:0;}
+.wires-hit{z-index:5;}
+.wires-over{z-index:8;}
+.wire{fill:none;stroke-width:2.2;opacity:.92;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4));}
+.wire-hit{fill:none;stroke:transparent;stroke-width:14;cursor:pointer;}
+.wire-live{stroke-dasharray:2 6;stroke-linecap:round;opacity:.9;}
+
+/* ---------- column ---------- */
+.column{
+  width:300px;flex:none;display:flex;flex-direction:column;
+  background:var(--surface);border:1px solid var(--line);border-radius:13px;
+  position:relative;z-index:6;
+}
+.col-head{
+  display:flex;align-items:center;padding:13px 13px 12px;
+  border-bottom:1px solid var(--line);
+}
+/* #51 处 3 —— 语言栏图标 <-> 全称/缩写。原为 `gap:11px`，而 flex gap 在 UXP
+   webview **根本没实现**（2026-08-22 probes/20260820_01_51_spacing_capability
+   实测：stylesheet / inline / row 轴四种写法 computed 全是 <undefined>，控制组
+   通过）=> 这三处一直是 0px，正是 owner 说的「从最开始一直遗留」。
+   载体换成相邻兄弟 + margin：文档明确列了 `+` 组合器与 margin，且明写
+   「Margins do not collapse in UXP」=> 结果可预测。
+   9px 不是新挑的值 —— `.brand` 和 `.font-head` 这两个同构的「图标+标题」头部
+   本来就都是 9px，`.col-head` 的 11 是全表唯一 outlier；改完三个头部统一。 */
+.col-head > * + *{margin-left:9px;}
+.specimen-old{
+  width:38px;height:38px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:21px;line-height:1;border-radius:9px;background:var(--card-2);
+  border:1px solid var(--line-2);color:var(--txt);
+}
+.col-titles{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1;}
+.col-name{font-weight:600;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-2);}
+.col-code{font-size:10px;color:var(--txt-3);letter-spacing:.04em;}
+.specimen{
+  width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:18px;line-height:1;border-radius:8px;background:var(--card-2);
+  border:1px solid var(--line-2);color:var(--txt-2);
+}
+/* #51 处 1 —— font card 之间。gap 删除见 .col-head 上方那段说明。
+   16px = 真实生效值 18px（原先写在 components.jsx 的 inline 上）就近归档到
+   面板既有值域（.legend / .statusbar 都用 16）。inline 已一并删除 =>
+   这一处的间距真相现在只有 panel.css 一层。 */
+.col-body{padding:11px;display:flex;flex-direction:column;}
+.col-body > * + *{margin-top:16px;}
+
+/* ---------- font card ---------- */
+.font-card{
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:visible;
+}
+.font-head{
+  display:flex;align-items:center;gap:9px;padding:11px 9px 11px 12px;
+  border-bottom:1px solid var(--line);
+}
+.role-chip{
+  font:inherit;font-size:9.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-soft);border:1px solid #3a3760;
+  padding:3px 7px;border-radius:6px;cursor:pointer;flex:none;
+}
+.font-name{font-weight:700;font-size:15px;flex:1;min-width:0;letter-spacing:-.01em;color:var(--txt);}
+.icon-btn{
+  width:25px;height:25px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:6px;border:1px solid transparent;background:transparent;color:var(--txt-3);cursor:pointer;transition:.12s;
+}
+.icon-btn:hover{color:var(--txt);background:var(--surface-2);border-color:var(--line);}
+
+/* ---------- nodes ---------- */
+/* #51 处 2 —— 字重节点之间。padding 17px 6px 是把 components.jsx inline 上
+   的真值收回 CSS（CSS 里原写 9px 0，被 inline 覆盖，从未生效）。
+   9px 取代原 inline 的 8px：与处 3 同档，且 9 在本面板已用过 13 次。 */
+.nodes{padding:17px 6px;display:flex;flex-direction:column;}
+.nodes > * + *{margin-top:9px;}
+/* TODO#83 — hover hit area spans the gap between nodes (owner 2026-08-23:
+   「对于每个字重节点的 hover 覆盖范围扩展到两个项之间的 gap，防止光标移动时
+   ui 组件因为变浅经常闪烁」).
+   MEASURED before this rule existed (probes/20260823_14): crossing one gap
+   drops the dim set to 0 and rebuilds it — 11 state flips across 5 gaps, i.e.
+   the WHOLE panel blinks once per gap, not just the two neighbours.
+   🔴 A REAL transparent child, not ::before: absolutely-positioned real children
+   provably hit-test and receive events in this webview (.port is exactly that
+   shape, in daily use), whereas "does a pseudo-element count as hit area" is an
+   untested assumption — and this webview has burned that class of assumption
+   four times (#13 #23 #37 #46).
+   ⚠ .node::after is already the blue insertion line, so it was not available anyway.
+   🔴 5.5px = HALF the 9px gap (4.5) PLUS the node's 1px border. The border term is
+   not decoration: an absolutely-positioned child's containing block is the parent's
+   PADDING box, so `top:-4.5px` starts 4.5px above the padding box = only 3.5px above
+   the border box, and the gap is measured between border boxes. Same family as #19.
+   ⚠ MEASURED, not derived on paper: the first version used 4.5px and the probe read
+   `gap 9 = above 3 + below 4, slack 2` — a 2px dead band survived, which is exactly
+   the flicker this change exists to remove. Neither I nor arch named the border term
+   until the measurement produced it.
+   🔴 Overlap and shortfall are both failures, for different reasons: an overlap puts
+   the pointer inside two hit areas at once (winner decided by stacking order — a NEW
+   flicker), a shortfall leaves the old one, narrower.
+   ⚠ These are literals in three places (gap / extension / border), so an ARITHMETIC
+   TEST asserts `2 × (extension − border) === gap` by parsing this file
+   (tests/hover_hit_span_tests.js). A comment stating the formula would be an
+   assertion; that test is a mechanism — and the spacing is live (owner still owes a
+   letter on A 9px / B 6px / C 0px for the derived rows). */
+.node-hit{
+  position:absolute;left:0;right:0;top:-5.5px;bottom:-5.5px;
+  background:transparent;
+}
+.node{
+  position:relative;display:flex;align-items:center;gap:4px;
+  /* #51 处 2 修复：原为 `margin:0 10px` —— 简写会把 margin-top/bottom 一起
+     写成 0，而本规则在 `.nodes > * + *{margin-top:9px}` 之后、特异度相同
+     ⇒ 后者胜 ⇒ 节点间距被静默重置成 0（panelfix 2026-08-22 实测 computed
+     marginTop=0px）。这里的意图从来只是左右留白，纵向的 0 是简写的副产品。
+     拆成单边属性 = 从源头去掉那个副产品，而不是去打特异度/顺序的仗。 */
+  padding:5px 14px 5px 6px;margin-left:10px;margin-right:10px; /* owner ⑧-1: 右端留白略加大 */
+  background:var(--surface-2);border:1px solid var(--line);border-radius:9px;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+}
+/* reorder insertion indicator — a blue line in the gap between weight nodes */
+.node.drop-before::after,.node.drop-after::after{
+  content:"";position:absolute;left:0;right:0;height:2px;border-radius:2px;
+  background:#5b9cf0;box-shadow:0 0 7px rgba(91,156,240,.7);z-index:7;
+}
+.node.drop-before::after{top:-5px;}
+.node.drop-after::after{bottom:-5px;}
+.node.drop-merge{background:var(--merge-soft);box-shadow:inset 0 0 0 1px var(--merge);border-radius:8px;}
+.node.is-dragging{opacity:.35;}
+/* during a wire drag, fade ports/nodes that aren't valid drop targets */
+/* ⚠ DEAD RULE (kept as tombstone, #46 sweep 2026-08-14): runtime opacity is
+   write-only (CLAUDE.md #13) — this line has NEVER painted. The wire-dim
+   visual is actually carried by the palette rules below (#45). Left in place
+   so nobody re-adds an opacity dim thinking it was lost. */
+.node.wire-dim,.label-card.wire-dim{opacity:.22 !important;transition:opacity .12s;}
+/* #45 — hover relation-set: everything OUTSIDE the hovered weight's pairing
+   dims (font cards never carry this class). Applied via React className swap
+   (state-driven re-render — the mechanism wire-dim already uses), NOT via
+   CSS :hover, which does not repaint opacity in this dialog (CLAUDE.md #13).
+   Same .22 as wire-dim: one dim look for "not in the active set". wire-dim's
+   !important still wins while dragging, but drag also clears hoverHl so the
+   two never actually stack. */
+/* #45 dim = COLOR-PALETTE SWAP, deliberately NOT opacity. Machine probe
+   2026-08-14 (pixel-measured screenshots + computed-style reads on the live
+   dialog): runtime opacity changes NEVER repaint in this UXP dialog — the
+   style engine computes 0.22 (verified via getComputedStyle after class
+   swap, descendant selectors matching fine, DOM ancestry verified) but the
+   painted pixels stay identical (text 235/235, port 163/163). Inline color /
+   background-color changes DO repaint (probe painted a port magenta). So
+   CLAUDE.md #13 (display-vs-opacity under :hover) is a special case of:
+   ⚠ OPACITY IS A WRITE-ONLY PROPERTY AT RUNTIME HERE — any dim/reveal must
+   ride color/background/display, or SVG inline style (wires repaint fine,
+   user-verified round 1). The old `.hl-dim{opacity:.22}` rules "passed"
+   round 1 only because the WIRES (SVG) dimmed — no HTML element ever did.
+   wire-dim's identical hole predates #45 (its opacity:.22 !important has
+   never painted); owner ordered both fixed together. */
+.node.hl-dim,.node.wire-dim{background:#101317;border-color:#1e2229;}
+.node.hl-dim .member-name,.node.wire-dim .member-name{color:#40454e;}
+.node.hl-dim .port,.node.wire-dim .port,
+.label-card.hl-dim .port,.label-card.wire-dim .port{
+  background:#14171c;border-color:#20252c;box-shadow:none;}
+.label-card.hl-dim,.label-card.wire-dim{background:#101317;border-color:#1e2229;}
+.label-card.hl-dim .lc-txt,.label-card.wire-dim .lc-txt{color:#40454e;}
+.node.wire-dim .port{pointer-events:none;}
+.node-grip{
+  width:20px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;
+  color:var(--txt-3);cursor:grab;border-radius:5px;touch-action:none;
+}
+.node-grip:hover{color:var(--txt-2);background:var(--surface-2);}
+.node-main{flex:1;min-width:0;}
+.map-row{display:flex;align-items:center;gap:7px;height:26px;}
+.map-right{display:flex;align-items:center;gap:6px;margin-left:auto;}
+/* TODO#80 (owner 2026-08-23:「I 和 in doc 之间加间隔」).
+   MEASURED before changing anything (probes/20260823_14): the gap between
+   `.ital-add` and `.use-chip` reads 0px on 4/4 rows — the `gap:6px` declared
+   just above has never applied (flex gap is dead in this webview, #37).
+   ⚠ The first attempt at that measurement printed 429px: `.ital-add` is
+   `display:none` until the node is hovered, and a statically hidden element has
+   an all-zero rect (CLAUDE #13d(2)), so it was subtracting from the origin.
+   The row is measured with the element forced visible, per that same rule.
+   Carrier is the one #51 proved works in the real panel (`> * + *` + margin),
+   not the dead `gap`. The 6px matches what the gap always declared — this
+   restores the intent, it does not invent a new number.
+   ⚠ SCOPE: this row only. `.map-right` is one of the 42 naked gaps in TODO#76,
+   and the other 41 stay untouched — owner asked for this one. */
+.map-right > * + *{margin-left:6px;}
+.sem{font-size:13px;font-weight:600;color:var(--txt);white-space:nowrap;letter-spacing:-.005em;}
+.map-arrow{display:none;}
+.actual{
+  display:flex;align-items:center;gap:3px;font:inherit;cursor:pointer;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:6px;
+  padding:2px 5px 2px 7px;color:var(--txt-2);transition:.12s;
+}
+.actual:hover{border-color:var(--line-2);color:var(--txt);}
+.actual.is-same{background:transparent;border-color:transparent;color:var(--txt-3);}
+.actual.is-same:hover{background:var(--surface-2);border-color:var(--line);color:var(--txt-2);}
+.node:hover .actual.is-same{color:var(--txt-2);}
+.actual .mono{font-size:11px;font-weight:500;}
+.actual svg{color:var(--txt-3);}
+
+/* group node — kept visually quiet; structure shown by a subtle rail, not a fill */
+/* 🔴 同 #51 处 2：这一条是 (0,2,0)，**比 `.nodes > * + *` (0,1,0) 高一级**
+   ⇒ 它的 `margin:0 10px` 无论规则顺序如何都会赢 ⇒ 只挪顺序【修不好合并组节点】。
+   所以两处必须一起拆，否则普通节点看着好了、合并组仍是 0（抽查会误判为已修）。 */
+.node.is-group{background:var(--surface-2);border-radius:9px;box-shadow:none;border-color:var(--line);margin-left:10px;margin-right:10px;padding:7px 11px 7px 6px;}
+.node.is-group.drop-merge{box-shadow:inset 0 0 0 1px var(--merge);}
+.group-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.group-tag{display:flex;align-items:center;gap:8px;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);margin:0 0 3px 26px;font-weight:600;}
+.merged-label{position:relative;cursor:help;border-bottom:1px dotted var(--txt-3);padding-bottom:1px;}
+/* Hidden state = display:none, same reason as .chip-pop below (2026-08-13):
+   the old opacity:0 box stayed in layout floating over the content above the
+   label, and hovering that empty area could pop the tip (chip-pop family
+   sweep — this one had the identical latent width, just never user-hit). */
+.merged-pop{
+  display:none;position:absolute;left:-2px;bottom:calc(100% + 7px);z-index:40;white-space:nowrap;
+  padding:6px 9px;border-radius:7px;background:#0b0d11;border:1px solid var(--line-2);
+  color:var(--txt-2);font-size:10.5px;font-weight:500;text-transform:none;letter-spacing:0;
+  box-shadow:0 12px 30px -10px rgba(0,0,0,.75);
+}
+.merged-pop::after{content:"";position:absolute;left:10px;top:100%;border:5px solid transparent;border-top-color:var(--line-2);}
+.merged-label:hover .merged-pop{display:block;}
+/* #46: hidden state is display:none, NOT opacity:0 — CLAUDE.md #13, opacity
+   is write-only at runtime, so the old opacity reveals NEVER painted and this
+   whole button family was invisible (functionally unreachable). Same fix
+   shape as .ital-add (user-verified, #33d batch). Reveal stays hover-only —
+   hiding is deliberate (de-noise), the fix is making the reveal real. */
+.unbind{
+  font:inherit;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;margin-left:auto;
+  color:var(--txt-3);background:transparent;border:1px solid var(--line-2);
+  border-radius:5px;padding:2px 7px;cursor:pointer;display:none;margin-right:2px;
+}
+.node.is-group:hover .unbind{display:block;}
+.unbind:hover{background:var(--surface-2);color:var(--txt);border-color:#414a58;}
+.map-row.member{height:36px;margin:3px 0;padding:0 4px 0 2px;border-radius:7px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.04);}
+.actual-flat{
+  display:flex;align-items:center;font:inherit;cursor:pointer;
+  background:transparent;border:none;border-radius:5px;padding:2px 5px;color:var(--txt-2);transition:.12s;
+}
+.actual-flat .mono{font-size:11px;font-weight:500;}
+.actual-flat:hover{color:var(--txt);background:rgba(255,255,255,.05);}
+.member-name{
+  flex:1;min-width:0;display:flex;align-items:center;height:26px;
+  font:inherit;font-size:13px;font-weight:600;letter-spacing:-.005em;color:var(--txt);
+  background:transparent;border:none;border-radius:6px;padding:0 8px;margin-left:-2px;
+  text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:.12s;
+}
+.member-name:hover{background:rgba(255,255,255,.06);}
+.member-name.is-static{cursor:default;}
+.member-name.is-static:hover{background:transparent;}
+.rep{
+  width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:5px;border:none;background:transparent;color:var(--txt-3);cursor:pointer;transition:.12s;
+  position:relative; /* anchors its .chip-pop (star popup, owner 2026-08-13) */
+}
+.rep:hover{color:var(--merge);}
+.rep.is-rep{color:var(--merge);}
+/* #46: same display:none conversion as .unbind above (opacity never paints). */
+.member-x{
+  width:18px;height:18px;display:none;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--txt-3);cursor:pointer;border-radius:4px;
+}
+.node.is-group:hover .member-x{display:flex;}
+.node:hover .member-x{display:flex;}
+.member-x:hover{color:var(--danger);background:var(--surface-2);}
+
+/* ---------- ports ---------- */
+.port{
+  position:absolute;top:50%;transform:translateY(-50%);
+  width:13px;height:13px;border-radius:50%;padding:0;cursor:crosshair;
+  background:var(--card);border:1.5px solid var(--line-2);transition:.12s;z-index:7;touch-action:none;
+}
+.port-L{left:-7px;}
+.port-R{right:-7px;}
+.port:hover{border-color:var(--accent);transform:translateY(-50%) scale(1.25);}
+.port.is-paired{background:var(--ph);border-color:var(--ph);box-shadow:0 0 0 3px color-mix(in oklab,var(--ph) 22%,transparent);}
+.port.wire-armed{cursor:crosshair;}
+/* #48: label port no longer starts wires (derived); default cursor says so. */
+.port.is-derived{cursor:default;}
+.port.is-target{transform:translateY(-50%) scale(1.45);box-shadow:0 0 0 4px var(--accent-soft);border-color:var(--accent);}
+.port.is-source{transform:translateY(-50%) scale(1.3);border-color:var(--accent);}
+.node.is-group .port{top:50%;}
+
+/* ---------- weight state system (used / matched / todo / available) ---------- */
+/* “in document” chip: presence = used; colour = whether it still needs matching */
+.use-chip{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;flex:none;
+  font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
+  background:var(--surface-2);color:var(--txt-3);border:1px solid var(--line);
+}
+/* used but not yet matched = the actionable to-do → loud amber */
+.node.is-todo .use-chip{background:var(--todo);color:#1a1206;border-color:var(--todo);}
+
+/* W3 — "the config names this family, this machine hasn't got it". Same geometry
+   as .use-chip and it sits in the same slot, but a SEPARATE class on purpose:
+   `.node.is-todo .use-chip` repaints that chip amber by state, and this fact is
+   not a state of the mapping — it would read as an action item it isn't. Muted,
+   because an absent font is information, not an error. */
+.miss-chip{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;flex:none;
+  font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
+  background:transparent;color:#c98b8b;border:1px dashed #7a4a4a;
+}
+/* available (in font, neither used nor matched) = dim background */
+/* ⚠ #46 sweep note: if is-available is ever toggled AT RUNTIME these two
+   lines will not repaint (CLAUDE.md #13 — runtime opacity is write-only);
+   only an initial-render mount would show the .5. Not converted in #46 (it is
+   a dim, not a reveal-button; conversion = palette swap when someone owns it). */
+.node.is-available{opacity:.5;transition:opacity .14s;}
+.node.is-available:hover{opacity:1;}
+
+/* base: no per-state node fill (Quiet profile) — colour lives only in the chip + wire */
+
+/* Profile: Bold — tint the whole node by state */
+[data-profile="bold"] .node.is-todo{background:var(--todo-soft);border-color:color-mix(in oklab,var(--todo) 55%,transparent);}
+[data-profile="bold"] .node.is-matched{background:var(--ok-soft);border-color:color-mix(in oklab,var(--ok) 45%,transparent);}
+
+/* Profile: Focus — identical to Bold, except the unconnected (used-but-unmatched)
+   node's background tint is neutral grey instead of amber. The "In doc" chip
+   keeps the Bold amber. */
+[data-profile="focus"] .node.is-matched{background:var(--ok-soft);border-color:color-mix(in oklab,var(--ok) 45%,transparent);}
+[data-profile="focus"] .node.is-todo{background:var(--surface-2);border-color:var(--line);}
+
+/* 8D-ext-bypair-tofu-ux Phase 2: source-present-unpaired (tofu-risk) RED outline.
+   The flagged node is state==='todo' so it also matches the rule ABOVE
+   ([data-profile="focus"] .node.is-todo, (0,3,0) grey border); these rules are
+   (0,3,0) too and placed AFTER it to win the tie. The .app twin guards any future
+   non-focus profile. Plain hex (闸门4: dialog var()/color-mix may not resolve). */
+[data-profile="focus"] .node.is-tofu-warn{border-color:#e5484d;}
+.app .node.is-tofu-warn{border-color:#e5484d;}
+
+/* #28e: config face not installed on this machine — SAME red + SAME Done-gated
+   lifecycle as the tofu rule above (owner 2026-08-13:「和已有未配对提示一致」;
+   the Done popup carries the CTA, its 取消 returns to the panel where these
+   outlines are then visible). Same (0,3,0)+order tie-break rationale. */
+[data-profile="focus"] .node.is-miss-warn{border-color:#e5484d;}
+.app .node.is-miss-warn{border-color:#e5484d;}
+
+/* Phase 2 top-right Done-confirm popup (source-present unpaired fonts). Overlay
+   catches click-outside=cancel; box anchored top-right inside .app{position:relative}.
+   Plain px/hex only (闸门4). */
+/* 闸门4: explicit top/right/bottom/left (UXP webview may not parse the `inset`
+   shorthand → overlay would collapse to 0 size → popup invisible). High z-index
+   so it sits above the canvas/columns/menu. */
+.tofu-pop-overlay{position:absolute;top:0;right:0;bottom:0;left:0;z-index:2000;background:rgba(0,0,0,.18);}
+
+/* ② owner 2026-08-28 眼验:「6的角度输入框会显示在删除弹窗之上」.
+   The angle field (.iv-deg) stayed visible ON TOP of the confirm popup's opaque box.
+
+   🔴 WHY THIS IS NOT A z-index FIX. Read before "simplifying" it back to one.
+   The scrim is z-index 2000 and the box 2001, both direct children of .app; every
+   ancestor of .iv-deg tops out at z-index 10 in that same stacking context, so by
+   the CSS cascade the popup ALREADY covers it. It does not. 【假设, 未实测】the
+   reason is the one 闸门4 records for <button>: in this webview a native host
+   widget is composited by the host, not painted as part of the page — so no
+   z-index we write can put anything over it. ⚠ That mechanism is UNVERIFIED; what
+   IS verified is owner's observation. So the fix is deliberately chosen to hold
+   under EITHER explanation: the widget is not stacked below the popup, it is taken
+   out of the picture while the popup is up.
+
+   🔴 The whole FAMILY, not the one instance. If the mechanism is host compositing
+   then every <input>/<select>/<button> in the panel does this, and the identical
+   bug is reachable from the Done/tofu popup — the topbar's Primary <select> sits
+   right where that popup lands. Fixing only .iv-deg is the mistake CLAUDE #16
+   names: a defect that was never one instance, patched one instance at a time.
+
+   `display` is used because it is one of the properties measured to actually
+   repaint here (CLAUDE #13); `visibility` is untested in this webview and an
+   untested property is exactly how #13 cost this line three eye-verify rounds.
+   ⚠ Consequence, stated rather than hidden: hidden widgets stop occupying space,
+   so what is behind the scrim reflows for as long as the question is up. The
+   labelled wrappers below are hidden WHOLE so no orphan label text is left behind,
+   and .iv-deg — the one owner actually reported, sitting inline in a row — hands
+   its place to a static stand-in that reads the same.
+   The class lives on <html> (set by fapModalScrim in components.jsx) because both
+   popups must be able to raise it: one is React-rendered and one is built by hand,
+   and a class on .app would have two owners writing it. Neither popup contains a
+   native widget, so applying this inside them costs nothing. */
+.fap-modal-up input,
+.fap-modal-up select,
+.fap-modal-up button{display:none;}
+.fap-modal-up .primary-lang-picker,
+.fap-modal-up .enforcer-toggle,
+.fap-modal-up .picker-search,
+.fap-modal-up .menu-search{display:none;}
+.iv-deg-ghost{display:none;}
+.fap-modal-up .iv-deg-ghost{
+  display:inline-block;
+  width:30px;flex:none;text-align:right;font-size:11px;
+  border-bottom:1px solid var(--line-2);color:var(--txt);padding:1px 2px;
+}
+.tofu-pop{position:absolute;top:52px;right:16px;width:320px;z-index:2001;
+  background:#241b1b;border:1px solid #e5484d;border-radius:8px;
+  box-shadow:0 12px 32px -8px rgba(0,0,0,.7);padding:12px 14px;}
+/* ① owner 2026-08-22:「把弹窗位置移到中间」— the delete-confirm popup only.
+   🔴 Centred with FLEX on the overlay, not with `transform: translate(-50%,-50%)`
+   and not with calc(): this webview has a measured history of dropping CSS it does
+   not parse (闸门 4 — `inset` shorthand collapses the overlay to 0 size, and
+   min()/calc()/var() may not resolve inside the dialog). `display:flex` is already
+   load-bearing in this sheet (.app), so it is the one centring mechanism proven to
+   work here.
+   🔴 Selectors are COMPOUND (two classes on the same element), never descendant.
+   #23 measured that the descendant form is what this webview breaks — for
+   querySelector; the style engine handled it — but there is no reason to spend the
+   risk when a modifier class costs nothing.
+   The box drops back to position:relative so the flex centring actually applies;
+   top/right are cleared explicitly because .tofu-pop sets them for the Done popup. */
+.tofu-pop-overlay.ital-del-overlay{display:flex;align-items:center;justify-content:center;}
+.tofu-pop.is-centered{position:relative;top:auto;right:auto;left:auto;}
+
+.tofu-pop-msg{font-size:12px;line-height:1.5;color:#ffd7d7;margin-bottom:10px;}
+.tofu-pop-btns{display:flex;justify-content:flex-end;gap:8px;}
+.tofu-pop-ignore{font-size:12px;padding:5px 12px;border-radius:6px;cursor:pointer;
+  background:#393939;border:1px solid #5a5a5a;color:#e6e6e6;}
+.tofu-pop-cancel{font-size:12px;padding:5px 14px;border-radius:6px;cursor:pointer;
+  background:#2680eb;border:1px solid #2680eb;color:#fff;font-weight:600;}
+/* #54ⓒ (owner 2026-08-20): a NEUTRAL skin for popups that reuse this structure
+   without being a warning. owner:「复用 Done 的类不需要红，因为不是 done」——
+   the red/pink above encodes the pre-apply warning's MEANING; a delete-confirm
+   borrows the shape, not the alarm.
+   🔴 Three colour declarations only — no geometry is repeated here, so .tofu-pop
+   stays the single source of truth for the popup's shape (#51: near-duplicate
+   rulesets are how this sheet grew rival truths in the first place).
+   The blue emphasis on 取消 is deliberately KEPT: it marks the safe default,
+   which is this popup's own convention, not part of the warning skin. */
+.tofu-pop.is-neutral{background:var(--card);border-color:var(--line-2);}
+.tofu-pop.is-neutral .tofu-pop-msg{color:var(--txt);}
+
+/* Focus — drop the language-column outline (border + fill) so columns read as
+   open regions; keep each font card's box. Space fonts ~3x apart with extra
+   room at the ends. (Column header + script specimen untouched.) */
+[data-profile="focus"] .column{background:transparent;border-color:transparent;}
+[data-profile="focus"] .col-head{border-bottom-color:transparent;}
+[data-profile="focus"] .col-body{padding-top:4px;padding-bottom:16px;}
+
+/* ---------- unified-weight naming lane ---------- */
+.label-lane{
+  position:absolute;left:24px;top:26px;width:168px;pointer-events:none;z-index:5;
+}
+.lane-title{
+  font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-3);
+}
+.label-card{
+  position:absolute;left:24px;width:168px;transform:translateY(-50%);z-index:6;
+  /* #54ⓐ/#51: padding-right 8→11px lifts the ✕↔port gap 2→5px (family value
+     5, no fourth value invented) — port hover-scale (1.25×/1.45×) no longer
+     overlaps the ✕; the chevron removal above pays for the 3px. */
+  display:flex;align-items:center;gap:4px;padding:6px 11px 6px 10px;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+}
+.label-card.is-loose{border-style:dashed;border-color:var(--line-2);opacity:.92;}
+.label-card .label-name{
+  flex:1;min-width:0;display:flex;align-items:center;gap:3px;height:24px;
+  font:inherit;font-size:13px;font-weight:700;letter-spacing:-.005em;color:var(--txt);
+  background:transparent;border:none;border-radius:6px;padding:0 4px;cursor:pointer;transition:.12s;
+}
+.label-card .lc-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.label-card .label-name svg{color:var(--txt-3);flex:none;}
+.label-card .label-name:hover{background:var(--surface-2);color:#fff;}
+.label-card .label-name:hover svg{color:var(--accent);}
+/* #46: same display:none conversion (opacity never paints); this one is the
+   delete-a-pairing entry — it was functionally unreachable. */
+.label-card .label-x{
+  width:18px;height:18px;flex:none;display:none;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--txt-3);cursor:pointer;border-radius:4px;
+}
+.label-card:hover .label-x{display:flex;}
+.label-card .label-x:hover{color:var(--danger);background:var(--surface-2);}
+
+/* ---------- fallback footer ---------- */
+.fallback{
+  display:flex;align-items:flex-start;gap:8px;padding:8px 10px 9px;
+  border-top:1px solid var(--line);background:#181c22;border-radius:0 0 10px 10px;
+}
+.fb-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600;padding-top:4px;flex:none;}
+.fb-chips{display:flex;flex-wrap:wrap;gap:5px;flex:1;}
+.fb-chip{
+  display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--txt-2);
+  background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:2px 4px 2px 7px;
+}
+.fb-x{width:14px;height:14px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--txt-3);cursor:pointer;border-radius:3px;}
+.fb-x:hover{color:var(--danger);}
+.fb-add{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--line-2);background:transparent;color:var(--txt-3);border-radius:6px;cursor:pointer;}
+.fb-add:hover{color:var(--accent);border-color:var(--accent);}
+
+/* ---------- add buttons ---------- */
+.add-font{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  font:inherit;font-size:12px;color:var(--txt-3);cursor:pointer;
+  background:transparent;border:1px dashed var(--line-2);border-radius:9px;padding:9px;transition:.12s;
+}
+.add-font:hover{color:var(--txt);border-color:#414a58;background:var(--surface-2);}
+.add-column{
+  width:172px;flex:none;align-self:stretch;min-height:160px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  font:inherit;font-size:13px;font-weight:500;color:var(--txt-3);cursor:pointer;
+  background:transparent;border:1.5px dashed var(--line);border-radius:13px;transition:.14s;z-index:6;
+}
+.add-column:hover{color:var(--accent);border-color:#3f3c63;background:#16161f;}
+
+/* ---------- editable ---------- */
+.editable{cursor:text;border-radius:4px;padding:1px 3px;margin:-1px -3px;outline:1px solid transparent;transition:.1s;}
+.editable:hover{background:var(--surface-2);outline-color:var(--line);}
+.editable.is-empty{color:var(--txt-3);font-style:italic;}
+.edit-input{
+  font:inherit;font-weight:inherit;color:var(--txt);background:var(--bg);
+  border:1px solid var(--accent);border-radius:5px;padding:1px 4px;margin:-2px 0;width:100%;outline:none;
+}
+.edit-input.mono{font-family:var(--mono);}
+
+/* ---------- statusbar ---------- */
+.statusbar{
+  height:34px;flex:none;display:flex;align-items:center;gap:16px;
+  padding:0 16px;border-top:1px solid var(--line);background:#0f1115;
+  font-size:11px;color:var(--txt-3);
+}
+.statusbar .hint{margin-left:auto;color:var(--txt-3);opacity:.8;}
+
+/* ---------- menu ---------- */
+.menu{
+  position:fixed;z-index:1000;min-width:180px;max-width:280px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
+  box-shadow:0 18px 50px -10px rgba(0,0,0,.7);padding:5px;
+  transition:opacity .1s;
+}
+.menu-head{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--txt-3);padding:7px 9px 5px;font-weight:600;}
+.menu-search{
+  display:flex;align-items:center;gap:6px;margin:3px 4px 5px;padding:0 7px;
+  height:30px;border-radius:7px;background:var(--bg);border:1px solid var(--line-2);
+  color:var(--txt-3);
+}
+.menu-search:focus-within{border-color:var(--accent);color:var(--txt-2);}
+.menu-search-input{
+  flex:1;min-width:0;font:inherit;font-size:12.5px;color:var(--txt);
+  background:transparent;border:none;outline:none;padding:0;
+}
+.menu-search-input::placeholder{color:var(--txt-3);}
+.menu-search-clear{
+  width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--txt-3);cursor:pointer;border-radius:4px;transition:.12s;
+}
+.menu-search-clear:hover{color:var(--txt);background:var(--surface-2);}
+.menu-sep{height:1px;background:var(--line);margin:5px 4px;}
+.menu-item{
+  display:flex;align-items:center;gap:7px;width:100%;font:inherit;font-size:12.5px;
+  color:var(--txt);background:transparent;border:none;border-radius:6px;
+  padding:7px 9px;cursor:pointer;text-align:left;
+}
+.menu-item:hover{background:var(--accent-soft);color:#fff;}
+.menu-item.danger{color:var(--danger);}
+.menu-item.danger:hover{background:#f0697a1a;}
+.menu-item.checked{color:var(--accent);}
+.mi-check{width:12px;flex:none;color:var(--accent);font-size:11px;}
+.mi-custom{color:var(--txt-2);font-style:italic;}
+
+::-webkit-scrollbar{width:11px;height:11px;}
+::-webkit-scrollbar-thumb{background:#2b313b;border-radius:6px;border:3px solid var(--shell);}
+::-webkit-scrollbar-thumb:hover{background:#363d49;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ===================================================================
+ * UXP-specific overrides (appended for indesign-toolkit port)
+ * ===================================================================
+ *
+ * UXP <dialog> webview limitations require these adjustments. See
+ * indesign-toolkit findings.md UXP-platform + html-dialog-sizing
+ * sections for the underlying constraints.
+ */
+
+/* CanvasPan transform-based pan replaces browser scroll — see
+ * lib/canvas_pan.js. overflow:auto + wheel events are non-functional
+ * in modal <dialog> webview. */
+.canvas { overflow: hidden; cursor: default; }
+.canvas-inner {
+  position: absolute;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Pan-期间 simplified shell — the parent toggles .panning class via
+ * pointerdown/up while React state-driven simplification rerenders
+ * font cards as empty .node frames. Just suppresses pointer
+ * interactivity on the simplified DOM to keep paint shape stable. */
+.canvas-inner.panning .node { pointer-events: none; }
+.canvas-inner.panning .port { display: none; }
+
+/* ===================================================================
+ * Inline family picker card — renders in place of FontCard while font
+ * is pending. Replaces overlay menu (which overflows the dialog when
+ * the family list is long).
+ * =================================================================== */
+.font-card-picker .picker-title {
+  color: var(--txt-2);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.font-card-picker .picker-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--txt-3);
+}
+.font-card-picker .picker-search-input {
+  flex: 1; min-width: 0;
+  font: inherit; font-size: 12.5px;
+  color: var(--txt);
+  background: transparent; border: none; outline: none; padding: 0;
+}
+.font-card-picker .picker-search-input::placeholder { color: var(--txt-3); }
+.font-card-picker .picker-search-clear {
+  width: 18px; height: 18px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--txt-3);
+  cursor: pointer; border-radius: 4px; transition: .12s;
+}
+.font-card-picker .picker-search-clear:hover { color: var(--txt); background: var(--surface-2); }
+.font-card-picker .picker-list-wrap {
+  position: relative;
+  overflow: hidden;          /* clips the inner list's protruding scrollbar */
+  /* Standard "hide native scrollbar" trick: inner list is wider than this
+   * wrap by ~16px and uses overflow-y:auto so it CAN scroll content; the
+   * native InDesign scrollbar lives in the 16px overhang which wrap clips.
+   * (`scrollbar-width:none` and `::-webkit-scrollbar:display:none` both
+   * ignored in UXP modal <dialog> — verified 2026-06-07.) Custom
+   * .picker-thumb gives the user a draggable handle. */
+}
+.font-card-picker .picker-list {
+  max-height: 260px;
+  width: calc(100% + 16px);  /* overflow past wrap to hide native bar */
+  overflow-y: auto;          /* keep scrollTop visually effective */
+  padding: 4px;
+  padding-right: 20px;       /* visual padding (4) + clipped-bar width (16) */
+  cursor: grab;
+  box-sizing: border-box;
+}
+.font-card-picker .picker-list:active { cursor: grabbing; }
+.font-card-picker .picker-thumb {
+  position: absolute;
+  right: 2px;
+  width: 8px;
+  background: rgba(120, 130, 145, 0.65);
+  border: 1px solid rgba(40, 44, 52, 0.8);
+  border-radius: 4px;
+  cursor: grab;
+  z-index: 10;
+  transition: background .12s;
+}
+.font-card-picker .picker-thumb:hover { background: rgba(150, 170, 200, 0.85); }
+.font-card-picker .picker-thumb:active { background: #5b9cf0; cursor: grabbing; }
+.font-card-picker .picker-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--txt);
+  transition: .1s;
+}
+.font-card-picker .picker-item:hover {
+  background: var(--accent-soft);
+  color: #fff;
+}
+.font-card-picker .picker-item-name {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.font-card-picker .picker-item-count {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--txt-3);
+  font-family: var(--mono);
+}
+.font-card-picker .picker-empty {
+  padding: 14px 9px;
+  color: var(--txt-3);
+  text-align: center;
+  font-size: 11.5px;
+}
+
+/* === language picker column (inline replaces a language column while
+ * lang.pendingLang). Wraps a single .font-card.font-card-picker so the
+ * visual is identical to the family picker — same dark rounded card.
+ * Column wrapper is made transparent + borderless so only the inner
+ * card shows (no double-frame). */
+.column.column-picker {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.column.column-picker > .font-card-picker {
+  /* card uses --card bg + 1px border via .font-card; matches FamilyPickerCard */
+  width: 100%;
+}
+
+/* Custom BCP 47 input affordance (shown when search query is a valid tag
+ * not in presets and not already added) — highlighted to indicate it
+ * creates a custom entry vs picking a preset. */
+.font-card-picker .picker-item-custom {
+  background: var(--accent-soft);
+  border: 1px dashed var(--accent);
+  margin-bottom: 4px;
+}
+.font-card-picker .picker-item-custom:hover {
+  background: var(--accent);
+  color: #0c0a1e;
+}
+.font-card-picker .picker-item-custom .picker-item-count {
+  color: var(--accent);
+  font-weight: 600;
+}
+.font-card-picker .picker-item-custom:hover .picker-item-count {
+  color: #0c0a1e;
+}
+
+/* Disabled picker item — language already added to another column.
+ * Stays in the list (per user 2026-06-07) for visual completeness; click
+ * is no-op (handled in components.jsx). Use explicit darker color (not
+ * just opacity) because opacity alone wasn't visibly mu ted enough in UXP. */
+.font-card-picker .picker-item-disabled,
+.font-card-picker .picker-item-disabled:hover {
+  cursor: not-allowed;
+  background: transparent;
+  color: #4a505b;          /* much darker than var(--txt-3) #646b78 */
+}
+.font-card-picker .picker-item-disabled .picker-item-name,
+.font-card-picker .picker-item-disabled:hover .picker-item-name {
+  color: #4a505b;
+}
+.font-card-picker .picker-item-disabled .picker-item-count {
+  color: #4a505b;
+  font-style: italic;
+  font-family: var(--ui);
+}
+
+/* ============================================================================
+   Phase 8D-ext-0 — EnforcerToggle + B4 Representative hint
+   ============================================================================ */
+
+.enforcer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+  user-select: none;
+}
+.enforcer-toggle:hover {
+  background: rgba(255,255,255,0.05);
+}
+.enforcer-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.enforcer-toggle-label {
+  white-space: nowrap;
+}
+.enforcer-toggle-warn {
+  color: #c98a3a;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* 8D-ext-MM step 4: the B4 RepresentativeHintChip + its .rep-hint-* styles and
+   @keyframes rep-hint-fadein were removed — the representative is now picked
+   inline on the weight rows (auto first-connected + click the star). Per the UX
+   rule "提示/弹窗 = debug, 发版前删干净". */
+
+/* A4 ConfirmableMergeBanner (codex r2 P1-2 fix) */
+.confirmable-merge-banner {
+  position: sticky;
+  top: 56px;
+  z-index: 9;
+  padding: 8px 12px;
+  background: rgba(255, 180, 100, 0.10);
+  border-bottom: 1px solid rgba(255, 180, 100, 0.35);
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--text);
+}
+.cmb-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.cmb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.cmb-info {
+  flex: 1;
+}
+.cmb-info em {
+  color: #9da3ad;
+  font-style: italic;
+  margin-left: 4px;
+}
+/* 🪦 .cmb-accept dropped (owner 2026-08-20, TODO#58): it styled the retired
+   alias-collision banner's Merge button.
+   🪦 .cmb-dismiss dropped too (owner 姿态甲, same day): its only user was
+   RecombinationReviewStrip's Un-merge button, and that strip is read-only now.
+   🔴 The REST of the .cmb-* set is still LIVE — RecombinationReviewStrip uses
+   .confirmable-merge-banner / .cmb-title / .cmb-subnote / .cmb-row / .cmb-info.
+   Checked before deleting, because this set looks single-owner and is not:
+   deleting the block wholesale would silently unstyle a live feature. */
+
+/* 8D-ext-A (2026-06-11) — ConfirmableRecombinationBanner (cross-family twins) */
+.recombination-banner {
+  background: rgba(120, 170, 255, 0.10);
+  border-bottom: 1px solid rgba(120, 170, 255, 0.35);
+}
+.cmb-subnote {
+  color: #9da3ad;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.recomb-member { white-space: nowrap; }
+.recomb-equiv { color: #78aaff; font-weight: 700; }
+.recomb-style { color: #c7ccd4; }
+.recomb-meta { color: #9da3ad; margin-left: 4px; font-size: 11px; }
+.recomb-member.is-canonical strong { color: #78aaff; }
+
+/* 8D-ext-B (2026-06-09) — UnresolvedLangSection */
+.unresolved-lang-sections {
+  background: rgba(247, 195, 92, 0.06);
+  border-top: 1px solid rgba(247, 195, 92, 0.18);
+  border-bottom: 1px solid rgba(247, 195, 92, 0.18);
+  padding: 6px 14px;
+  font-family: var(--ui);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.unresolved-lang-section {
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(247, 195, 92, 0.22);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+.ul-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.ul-warn-icon { color: #f7c35c; font-size: 14px; }
+.ul-lang-label { color: var(--text); }
+.ul-lang-code { color: #9da3ad; font-family: var(--mono, monospace); font-size: 11px; }
+.ul-tsr-count { color: #9da3ad; font-size: 11px; margin-left: auto; }
+.ul-section-body { display: flex; flex-direction: column; gap: 3px; }
+.ul-pair-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+}
+.ul-pair-row.is-skipped { opacity: 0.45; background: rgba(255, 255, 255, 0.01); }
+.ul-pair-info {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ul-pair-name { color: #9da3ad; font-size: 11px; }
+.ul-source-font { color: var(--text); }
+.ul-tsr-mini { color: #9da3ad; font-size: 11px; }
+.ul-sample-paras { color: #9da3ad; font-size: 11px; font-style: italic; }
+.ul-pair-actions { display: flex; align-items: center; gap: 6px; }
+.ul-actions-row { display: flex; align-items: center; gap: 6px; }
+.ul-font-picker {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: var(--ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ul-font-picker:hover { background: rgba(255, 255, 255, 0.10); }
+.ul-no-fonts { color: #9da3ad; font-size: 11px; font-style: italic; }
+.ul-skip-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-family: var(--ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ul-skip-btn:hover { background: rgba(255, 255, 255, 0.10); }
+.ul-skip-btn.ul-unskip { background: rgba(86, 156, 214, 0.15); }
+.ul-skip-btn.ul-unskip:hover { background: rgba(86, 156, 214, 0.30); }
+
+/* 8D-ext-C (2026-06-09) — primary language dropdown */
+.primary-lang-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.primary-lang-label { color: #9da3ad; }
+.primary-lang-picker select {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: var(--ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+.primary-lang-picker select:hover { background: rgba(255, 255, 255, 0.10); }
+
+/* ── univ-italic §3 — per-weight italic HOW (copy node + its add affordance) ──
+   Gate-4(d): plain px / literal colours only — CSS min()/calc()/var() nesting is
+   unreliable inside a UXP <dialog>; var() for the palette tokens is fine (used
+   throughout this sheet already). */
+.ital-add{
+  width:18px;height:18px;flex:none;display:none;align-items:center;justify-content:center;
+  border:none;border-radius:5px;background:transparent;position:relative;
+  /* owner ⑦ (2026-08-13): hidden until the NODE is hovered. Hidden state is
+     display:none, NOT opacity:0 — experiment (b2) after (b1) died (R3a/R3b
+     both no, transition removal changed nothing): with transition excluded,
+     the ONLY variable separating this sheet's working reveals (.chip-pop /
+     .merged-pop — ancestor-hover, display switch, user-verified) from its
+     broken ones (.unbind/.member-x/.label-x/.ital-add — ancestor-hover,
+     opacity switch) is the switched property itself. (b2): UXP dialog :hover
+     restyle applies `display`, not `opacity`. Known cost: display:none gives
+     up the layout slot, so the row shifts when it appears (arch accepted;
+     report if ugly). Reveal below restores display:flex (the base value —
+     NOT block, this is a flex square). */
+  color:var(--txt-3);cursor:pointer;
+}
+.node:hover .ital-add{display:flex;}
+/* owner ⑧-2: outline ONLY while the pointer is on the button itself — and per
+   this round's mechanism finding (:hover restyle applies display, NOT
+   opacity; border/color/background unverified), the outline is a
+   display-switched RING child, same solution family as the button and the
+   proven .rep:hover .chip-pop. The button itself carries no border. */
+.ital-add-ring{
+  display:none;position:absolute;left:0;top:0;width:100%;height:100%;
+  border:1px solid #403d63;border-radius:5px;background:var(--accent-soft);
+  pointer-events:none;
+}
+.ital-add:hover .ital-add-ring{display:block;}
+/* #54ⓒ: the copy-bearing state KEEPS the hover ring (owner c: "hover 时仍有变化").
+   The old `.is-inert:hover .ital-add-ring{display:none}` suppression is gone with
+   is-inert — suppressing it now would make the button read as a dead status
+   badge, which is precisely the failure owner's (c) is there to prevent. */
+/* owner ⑦: a SERIF italic I, recognizable at a glance. font-style:italic is
+   UXP-supported (reference-css, v2.0+); generic `serif` family is NOT — must
+   name concrete faces (Georgia/Times ship with both Windows and macOS, and
+   are OS-installed, not Adobe-only-space, so the webview can see them). */
+.ital-add-glyph{font-size:13px;font-weight:400;font-style:italic;line-height:1;
+  font-family:'Georgia','Times New Roman','Times';}
+
+/* The copy renders as a derived sibling directly under its base weight. Same box
+   as a normal node (user 2026-06-16: no highlight — the mode/slider rows already
+   distinguish it); it just has no ports, because it is not part of the graph. */
+.italic-variant-node{ padding-left:26px; }
+.iv-head{display:flex;align-items:center;gap:7px;height:20px;}
+.iv-copy-name{font-size:12px;font-weight:600;color:var(--txt);white-space:nowrap;}
+.iv-copy-tag{font-size:11px;font-weight:500;font-style:italic;color:var(--txt-3);white-space:nowrap;}
+.iv-via{font-size:10px;color:var(--txt-3);white-space:nowrap;opacity:.8;}
+.iv-del{
+  width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--txt-3);cursor:pointer;border-radius:4px;
+  margin-left:auto;transition:.12s;
+}
+.iv-del:hover{color:var(--danger);background:var(--surface-2);}
+.iv-mode-row{display:flex;align-items:center;gap:5px;height:20px;margin-top:3px;}
+.iv-mode{
+  height:18px;padding:0 8px;display:flex;align-items:center;border-radius:5px;
+  border:1px solid var(--line-2);background:transparent;color:var(--txt-3);
+  font-size:10px;font-weight:600;letter-spacing:.02em;cursor:pointer;transition:.12s;
+}
+.iv-mode:hover{color:var(--txt);border-color:#403d63;}
+.iv-mode.is-on{color:var(--accent);border-color:#403d63;background:var(--accent-soft);}
+.iv-slider-row{display:flex;align-items:center;gap:8px;height:22px;margin-top:2px;}
+.iv-track{
+  position:relative;flex:1;height:6px;min-width:0;
+  background:var(--line);border-radius:4px;cursor:pointer;touch-action:none;
+}
+.iv-fill{position:absolute;left:0;top:0;height:6px;background:var(--accent);border-radius:4px;}
+.iv-knob{
+  position:absolute;top:-3px;width:11px;height:11px;margin-left:-5px;
+  background:var(--accent);border-radius:50%;box-shadow:0 0 0 2px var(--card);
+}
+.iv-deg{
+  width:30px;flex:none;text-align:right;font-size:11px;
+  background:transparent;border:none;border-bottom:1px solid var(--line-2);color:var(--txt);padding:1px 2px;
+}
+.iv-deg:focus{outline:none;border-bottom-color:var(--accent);}
+.iv-unit{font-size:10px;color:var(--txt-3);flex:none;margin-left:-4px;}
+.iv-undecided{font-size:10px;color:#e6b455;white-space:nowrap;}
+/* #41: session-only "auto-added" notice on an auto-faux copy (owner: say it +
+   show the angle). Quiet chip-class mark, plain hex (闸门4). */
+.iv-auto-tag{font-size:10px;color:#7fd18c;border:1px solid #3d6647;border-radius:4px;
+  padding:0 5px;white-space:nowrap;position:relative;cursor:help;}
+/* #33d: session-only "auto-picked" notice next to a machine-picked rep star
+   (限期豁免缓解件). Same chip class family as .iv-auto-tag. */
+.rep-auto-tag{font-size:10px;color:#7fd18c;border:1px solid #3d6647;border-radius:4px;
+  padding:0 5px;white-space:nowrap;position:relative;cursor:help;}
+/* Chip-family hover popup (owner 2026-08-13: self-built H5, shows the instant
+   the pointer arrives; shape/feel from app-folio webapp .hover-tip — radius 8,
+   8x10 padding, 11px/1.45 — but the PALETTE is this panel's dark popup family
+   (.merged-pop), not folio's light theme: arch corrected his own spec after
+   the white-card version shipped). Mechanism = pure-CSS :hover (React
+   synthetic hover does not dispatch inside a UXP <dialog>). NO transition:
+   instant is the ruling + UXP-dialog transition support is undetermined.
+   Hidden state MUST be display:none, NOT opacity:0 — an invisible box that
+   stays in layout floats over the card header above the chip, and hovering
+   THERE popped the tip (user-hit 2026-08-13; hover on a hidden child still
+   :hover-s the chip when pointer-events:none isn't honored — with
+   display:none there is no box, so no hit path either way). Explains only;
+   the change gesture stays where it already is. */
+.chip-pop{
+  display:none;position:absolute;right:-2px;bottom:calc(100% + 6px);z-index:40;
+  width:230px;white-space:normal;text-align:left;
+  padding:8px 10px;border-radius:8px;background:#0b0d11;border:1px solid var(--line-2);
+  box-shadow:0 8px 20px rgba(0,0,0,.6);
+  color:var(--txt-2);font-size:11px;font-weight:400;line-height:1.45;
+  text-transform:none;letter-spacing:0;
+  /* visible-state only (hidden = display:none): a tooltip is never a hit
+     target — without this, clicking the shown popup would bubble into the
+     star's onClick. If UXP ignores it, the fallbacks are harmless. */
+  pointer-events:none;
+}
+.iv-auto-tag:hover .chip-pop,
+.rep-auto-tag:hover .chip-pop,
+.rep:hover .chip-pop{display:block;}
+/* Literal colour on purpose: --warn is not declared in this sheet, so var(--warn,…)
+   would rest entirely on its fallback arm — and this block's own header says plain
+   literal colours (gate-4(d): var()/calc() nesting is unreliable in a UXP <dialog>).
+   If the fallback failed to resolve the badge would inherit body colour and stop
+   reading as a warning at all. */
+/* D2b capability hint on the copy node — literal colours (gate-4(d)). */
+.iv-cap{font-size:10px;color:#7fc99a;white-space:nowrap;margin-right:2px;}
+.iv-cap.is-none{color:#9aa0ab;}
+/* ── #54ⓒ (owner 2026-08-19): copy-bearing state = PERSISTENT, clickable, deletes ──
+   🪦 Replaces `.ital-add.is-inert` (AC⑧: "present but inert/dimmed"). Owner
+   inverted the semantics, so the old class is RETIRED, not kept beside this one.
+   History for anyone diffing: is-inert's #46 pass had already swapped its dead
+   opacity:0/.45 pair for a palette cue — that fix is moot now, the state it
+   styled no longer exists.
+
+   Owner's two requirements, and why BOTH are load-bearing (he ruled out a
+   confirm dialog, so appearance is the ONLY misclick defence):
+     (c1) persistent light rectangle → "there is already something here"
+     (c2) hover still changes       → "it is a live button, not a status badge"
+   Only c1 ⇒ reads as a label nobody dares click. Only c2 ⇒ create/delete look
+   identical until you hover.
+
+   🔴 Fill is `background-color` + `border-color`, both in CLAUDE.md #13's
+   REPAINTS column. Deliberately NOT opacity — "light" via opacity is exactly the
+   trap that made #46's whole button family invisible for months. */
+.ital-add.has-copy{
+  /* c1 — always in the row, no longer waiting on `.node:hover`. Specificity
+     (0,2,0) beats the base `.ital-add{display:none}` (0,1,0); the existing
+     `.node:hover .ital-add` (0,3,0) also says flex, so the two never fight. */
+  display:flex;
+  /* Fill ONLY, no border of its own — deliberate. `.ital-add-ring` is an
+     absolutely-positioned child, and its containing block is this element's
+     PADDING box, so a 1px border here would inset the ring and paint a second
+     concentric outline at 18px. Owner asked for a 浅背景矩形 (a filled
+     rectangle), which the fill alone already is. --card-2 over the node's
+     --surface-2 ground: an existing token, not a fourth invented value (#51). */
+  background:var(--card-2);
+  color:var(--txt-2);cursor:pointer;
+}
+/* c2 — hover reuses the SAME accent ring the no-copy state uses (display-switched
+   .ital-add-ring, proven mechanism) and brightens the glyph, so the fill visibly
+   becomes a pressable control. Deliberately NOT a destructive red: owner asked
+   for "hover 仍有变化", not a new colour language, and after he reinstated the
+   confirm popup (2026-08-20) the appearance no longer carries the misclick
+   defence at all — so a red cue would be decoration with a warning's weight.
+   arch ruled: stay neutral. */
+.ital-add.has-copy:hover{color:var(--txt);}
+
+/* ── #54ⓒ delete-confirm popup — NO RULES OF ITS OWN (owner 2026-08-20) ──
+   🪦 A `.ital-del-confirm` / `.idc-*` set lived here for one build (it skinned a
+   nested <dialog>). owner then ruled the confirm must look like the Done-time
+   popup and not like a system frame, so `confirmItalicDelete` now reuses
+   .tofu-pop-overlay / .tofu-pop / .tofu-pop-msg / .tofu-pop-btns /
+   .tofu-pop-cancel / .tofu-pop-ignore VERBATIM (panel.css:363-372).
+   🔴 Those rules were DELETED rather than left behind: a second near-identical
+   popup skin is exactly the multiple-sources-of-truth drift #51 is about, and a
+   dead ruleset reads to the next person as a style that is still in play.
+   ⇒ If this popup ever needs to diverge, change it at .tofu-pop and know you are
+   changing BOTH popups — that shared fate is the point, not an accident. */
+/* .iv-derived-arrow removed with the ↳ glyph (TODO#79, owner 3A 2026-08-23).
+   ⚠ A rule left behind for a deleted element is dead weight that reads as live:
+   the next person greps the class, finds a rule, and assumes the element exists. */

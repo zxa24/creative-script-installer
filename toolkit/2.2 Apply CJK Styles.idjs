@@ -1,0 +1,1197 @@
+"use strict";
+
+var RuntimePaths = require("./lib/runtime_paths.js");
+var BASE_DIR = RuntimePaths.getBaseDir();
+var DATA_DIR = RuntimePaths.getDataDir();
+var joinPath = RuntimePaths.joinPath;
+var joinWindowsPath = joinPath; // legacy alias for existing call sites
+
+var fs = require("fs");
+var indesign = require("indesign");
+var app = indesign.app;
+var ScriptLanguage = indesign.ScriptLanguage;
+var UndoModes = indesign.UndoModes;
+var utils = require("./lib/utils.js");
+var FileUtils = require("./lib/file_utils.js");
+var StoryUtils = require("./lib/story_utils.js");
+var SnapshotUtils = require("./lib/snapshot_utils.js");
+var RunnerConfig = require("./lib/smoke_runner_config.js");
+var AutomationBridge = require("./lib/automation_bridge.js");
+var StyleImport = require("./lib/style_import.js");
+var CjkFieldCheck = require("./lib/cjk_field_check.js");
+var TextCleanup = require("./lib/text_cleanup.js");
+var Contract = require("./lib/frame_repair_contract.js");
+var FramePartition = require("./lib/frame_partition.js");
+var FrameHostAdapter = require("./lib/frame_host_adapter.js");
+// FrameRepairEngine / FrameRepairStrategy no longer used here;
+// repair is delegated to repair_after_apply.idjs after cleanup.
+
+var SnapshotWriter = require("./lib/snapshot_writer.js");
+
+var SOURCE_FILE_PATH = joinWindowsPath(joinWindowsPath(BASE_DIR, "lib"), "CJK.idml");
+var DEFAULT_SOURCE_STYLE_NAME = "CJK_Simplified_Chinese";
+var DEFAULT_OUT_PATH = joinWindowsPath(RuntimePaths.getLogDir(), "cjk_style_apply_output.txt");
+var OUT_PATH = RunnerConfig.getOutputPath(app, DEFAULT_OUT_PATH);
+var ACCEPTANCE_BUNDLE_SUFFIX = "_acceptance_bundle";
+var ACCEPTANCE_WATCH_PAGES = ["4", "5", "6"];
+// Pre-apply geometry-split frame expansion: frames shorter than this threshold (document units)
+// cannot hold a CJK line and will become empty after recompose. Expand them before apply.
+var GEOM_SPLIT_HEIGHT_THRESHOLD = 0.15;
+var GEOM_SPLIT_EXPAND_HEIGHT = 0.25;
+var CJK_FIELD_NAMES = [
+    "composer",
+    "mojikumi",
+    "kinsokuSet",
+    "kinsokuType",
+    "kinsokuHangType",
+    "bunriKinshi",
+    "rensuuji",
+    "treatIdeographicSpaceAsSpace",
+    "allowArbitraryHyphenation",
+    "appliedLanguage"
+];
+
+var lines = [];
+var statusLine = "";
+// #CJK-IMPORT-GUARD: set when the imported donor style carries no kinsoku config
+// so the failure is surfaced to the operator (status dialog) + acceptance bundle,
+// not silently swallowed behind a "merged N/0/0" fake-green.
+var cjkImportBroken = false;
+var cjkImportBrokenDetail = "";
+var sourceDoc = null;
+var targetDocRef = null;
+var mergedStyleNames = {};
+var acceptanceBundle = null;
+var acceptanceBundleFinalized = false;
+
+function log(text) {
+    lines.push(utils.getTimestamp() + " " + String(text));
+}
+
+var getOutputDirectory = FileUtils.getOutputDirectory;
+var getOutputFileNameWithoutExtension = FileUtils.getOutputFileNameWithoutExtension;
+var writeJsonFile = FileUtils.writeJsonFile;
+var writeTextFile = FileUtils.writeTextFile;
+var getLastFileUtilsError = FileUtils.getLastFileUtilsError;
+
+function describeLastFileUtilsError() {
+    var err = null;
+    try { err = getLastFileUtilsError(); } catch (e0) {}
+    if (!err) {
+        return "";
+    }
+    return [
+        safe(err.operation),
+        safe(err.path),
+        safe(err.code),
+        safe(err.message)
+    ].join(" | ");
+}
+
+function recordWriteFailure(kind, pathValue, error) {
+    var detail = safe(error && error.message ? error.message : error);
+    var lastErr = describeLastFileUtilsError();
+    log("WRITE FAILED [" + safe(kind) + "]: " + safe(pathValue) + (detail ? " error=" + detail : ""));
+    if (lastErr) {
+        log("WRITE FAILED DETAIL [" + safe(kind) + "]: " + lastErr);
+    }
+}
+
+function writeJsonFileObserved(pathValue, payload, kind) {
+    try {
+        writeJsonFile(pathValue, payload);
+        return true;
+    } catch (e0) {
+        recordWriteFailure(kind || "json", pathValue, e0);
+    }
+    return false;
+}
+
+function writeTextFileObserved(pathValue, contents, kind) {
+    if (writeTextFile(pathValue, contents)) {
+        return true;
+    }
+    recordWriteFailure(kind || "text", pathValue, null);
+    return false;
+}
+
+function ensureAcceptanceBundle() {
+    var outDir;
+    var outBase;
+    if (acceptanceBundle) {
+        return acceptanceBundle;
+    }
+    outDir = getOutputDirectory(OUT_PATH);
+    outBase = getOutputFileNameWithoutExtension(OUT_PATH) + ACCEPTANCE_BUNDLE_SUFFIX;
+    acceptanceBundle = {
+        schemaVersion: 2,
+        generatedAt: new Date().toISOString ? new Date().toISOString() : String(new Date()),
+        logPath: OUT_PATH,
+        outputDir: outDir,
+        bundleBase: outBase,
+        imageOutputDir: outDir,
+        documentName: "",
+        pages: {},
+        storyIds: [],
+        stories: [],
+        images: [],
+        exports: [],
+        errors: [],
+        summary: {
+            pass: false,
+            issues: []
+        },
+        geometryRestoredFrameIds: {}
+    };
+    return acceptanceBundle;
+}
+
+function pushBundleIssue(message) {
+    var bundle = ensureAcceptanceBundle();
+    pushUnique(bundle.summary.issues, safe(message));
+}
+
+function ensureBundlePage(pageName) {
+    var bundle = ensureAcceptanceBundle();
+    var key = safe(pageName);
+    if (!bundle.pages[key]) {
+        bundle.pages[key] = {
+            pass: true,
+            issues: [],
+            frames: [],
+            geometrySplitUnresolved: []
+        };
+    }
+    return bundle.pages[key];
+}
+
+function pushPageGeometrySplitUnresolved(pageName, frameId) {
+    var pageRecord = ensureBundlePage(pageName);
+    if (!pageRecord.geometrySplitUnresolved) {
+        pageRecord.geometrySplitUnresolved = [];
+    }
+    pushUnique(pageRecord.geometrySplitUnresolved, "geometry-split-unresolved frame " + safe(frameId));
+    log("geometry-split-unresolved frame " + safe(frameId) + " on page " + safe(pageName) + " (manual review required, not counted as issue)");
+}
+
+function pushPageIssue(pageName, message) {
+    var pageRecord = ensureBundlePage(pageName);
+    pageRecord.pass = false;
+    pushUnique(pageRecord.issues, safe(message));
+    pushBundleIssue("page " + safe(pageName) + ": " + safe(message));
+}
+
+function captureFrameAcceptanceRecord(frameSnapshot) {
+    if (!frameSnapshot) {
+        return null;
+    }
+    return {
+        frameId: safe(frameSnapshot.id),
+        page: safe(frameSnapshot.pageName),
+        firstParaStart: frameSnapshot.firstParaStart,
+        lastParaStart: frameSnapshot.lastParaStart,
+        firstParaOrdinal: frameSnapshot.firstParaOrdinal,
+        lastParaOrdinal: frameSnapshot.lastParaOrdinal,
+        firstChar: frameSnapshot.firstCharIdx,
+        lastChar: frameSnapshot.lastCharIdx,
+        lineCount: frameSnapshot.lineCount,
+        firstLine: safe(frameSnapshot.firstLine),
+        lastLine: safe(frameSnapshot.lastLine),
+        hasObjectMarker: !!frameSnapshot.hasObjectMarker,
+        overflows: !!frameSnapshot.overflows
+    };
+}
+
+function getBeforeFrameRecord(pageRecord, frameId) {
+    var j;
+    var entry;
+    for (j = 0; j < pageRecord.frames.length; j++) {
+        entry = pageRecord.frames[j];
+        if (entry.data && String(entry.data.frameId) === String(frameId) &&
+                entry.stage && entry.stage.indexOf("_before") >= 0) {
+            return entry.data;
+        }
+    }
+    return null;
+}
+
+function recordSnapshotForAcceptance(stage, snapshot) {
+    var bundle = ensureAcceptanceBundle();
+    var i;
+    var frameRecord;
+    var pageRecord;
+    var beforeRec;
+    var isAfterRepair;
+    var bFirst;
+    var aFirst;
+    var delta;
+    if (!snapshot || !snapshot.frames) {
+        return;
+    }
+    isAfterRepair = stage && stage.indexOf("_after_repair") >= 0;
+    for (i = 0; i < snapshot.frames.length; i++) {
+        frameRecord = captureFrameAcceptanceRecord(snapshot.frames[i]);
+        if (!frameRecord) {
+            continue;
+        }
+        if (ACCEPTANCE_WATCH_PAGES.indexOf(frameRecord.page) < 0) {
+            continue;
+        }
+        pageRecord = ensureBundlePage(frameRecord.page);
+        pageRecord.frames.push({
+            stage: stage,
+            data: frameRecord
+        });
+
+        // M1-2: distinguish pre-existing overflow from script-introduced overflow
+        if (frameRecord.overflows) {
+            beforeRec = getBeforeFrameRecord(pageRecord, frameRecord.frameId);
+            if (beforeRec && beforeRec.overflows) {
+                log("pre-existing-overflow frame " + frameRecord.frameId + " during " + stage);
+            } else {
+                pushPageIssue(frameRecord.page, "overflow in frame " + frameRecord.frameId + " during " + stage);
+            }
+        }
+
+        // M1-1 / P3-2: compare _after_repair against _before for boundary delta
+        // Use firstParaOrdinal when available (stable across text replacement); fall back to firstChar.
+        if (isAfterRepair) {
+            beforeRec = getBeforeFrameRecord(pageRecord, frameRecord.frameId);
+            if (beforeRec) {
+                var useOrdinal = (beforeRec.firstParaOrdinal !== undefined && beforeRec.firstParaOrdinal !== null &&
+                    frameRecord.firstParaOrdinal !== undefined && frameRecord.firstParaOrdinal !== null);
+                if (useOrdinal) {
+                    bFirst = beforeRec.firstParaOrdinal;
+                    aFirst = frameRecord.firstParaOrdinal;
+                    if (bFirst !== -1 && aFirst === -1) {
+                        log("boundary-lost frame " + frameRecord.frameId + " firstParaOrdinal before=" + bFirst + " after=-1 during " + stage);
+                        if (bundle.geometryRestoredFrameIds && bundle.geometryRestoredFrameIds[String(frameRecord.frameId)]) {
+                            pushPageGeometrySplitUnresolved(frameRecord.page, frameRecord.frameId);
+                        } else {
+                            pushPageIssue(frameRecord.page, "boundary-lost frame " + frameRecord.frameId + " during " + stage);
+                        }
+                    } else if (bFirst !== -1 && aFirst !== -1 && aFirst !== bFirst) {
+                        log("boundary-delta frame " + frameRecord.frameId + " firstParaOrdinal before=" + bFirst + " after=" + aFirst + " delta=" + (aFirst - bFirst) + " during " + stage);
+                        pushPageIssue(frameRecord.page, "boundary-delta frame " + frameRecord.frameId + " paraOrdinal delta=" + (aFirst - bFirst) + " during " + stage);
+                    }
+                } else {
+                    bFirst = beforeRec.firstChar;
+                    aFirst = frameRecord.firstChar;
+                    if (bFirst !== -1 && aFirst === -1) {
+                        log("boundary-lost frame " + frameRecord.frameId + " firstChar before=" + bFirst + " after=-1 during " + stage);
+                        if (bundle.geometryRestoredFrameIds && bundle.geometryRestoredFrameIds[String(frameRecord.frameId)]) {
+                            pushPageGeometrySplitUnresolved(frameRecord.page, frameRecord.frameId);
+                        } else {
+                            pushPageIssue(frameRecord.page, "boundary-lost frame " + frameRecord.frameId + " during " + stage);
+                        }
+                    } else if (bFirst !== -1 && aFirst !== -1) {
+                        delta = aFirst - bFirst;
+                        if (delta < 0) { delta = -delta; }
+                        if (delta > 2) {
+                            log("boundary-delta frame " + frameRecord.frameId + " firstChar before=" + bFirst + " after=" + aFirst + " delta=" + (aFirst - bFirst) + " during " + stage);
+                            pushPageIssue(frameRecord.page, "boundary-delta frame " + frameRecord.frameId + " firstChar delta=" + (aFirst - bFirst) + " during " + stage);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pushUnique(bundle.storyIds, safe(snapshot.storyId));
+}
+
+function buildAcceptanceFilePath(suffix, extension) {
+    var bundle = ensureAcceptanceBundle();
+    return joinWindowsPath(bundle.outputDir, bundle.bundleBase + suffix + extension);
+}
+
+function countIssuesMatching(bundle, prefix) {
+    var i;
+    var count = 0;
+    var issues = bundle.summary.issues;
+    for (i = 0; i < issues.length; i++) {
+        if (String(issues[i]).indexOf(prefix) >= 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+function buildAcceptanceSummaryPayload(bundle) {
+    var pageSummary = {};
+    var manualReviewRequired = [];
+    var storyRepair = {
+        totalStories: 0,
+        storiesWithRepairFailures: 0,
+        attempted: 0,
+        fixed: 0,
+        failed: 0,
+        skipped: 0,
+        aborted: 0
+    };
+    var i;
+    var key;
+    var storyEntry;
+    var summary;
+    var pageRec;
+    var geometrySplitUnresolvedCount = 0;
+
+    for (key in bundle.pages) {
+        if (!bundle.pages.hasOwnProperty(key)) {
+            continue;
+        }
+        pageRec = bundle.pages[key];
+        pageSummary[key] = {
+            pass: !!pageRec.pass,
+            issueCount: pageRec.issues.length,
+            issues: pageRec.issues.slice(0),
+            frameSampleCount: pageRec.frames.length,
+            geometrySplitUnresolved: pageRec.geometrySplitUnresolved ? pageRec.geometrySplitUnresolved.slice(0) : []
+        };
+        if (pageRec.geometrySplitUnresolved && pageRec.geometrySplitUnresolved.length) {
+            pushUnique(manualReviewRequired, "page " + key);
+            geometrySplitUnresolvedCount += pageRec.geometrySplitUnresolved.length;
+        }
+    }
+
+    for (i = 0; i < bundle.stories.length; i++) {
+        storyEntry = bundle.stories[i];
+        if (!storyEntry || !storyEntry.repair) {
+            continue;
+        }
+        storyRepair.totalStories += 1;
+        storyRepair.attempted += Number(storyEntry.repair.attempted || 0);
+        storyRepair.fixed += Number(storyEntry.repair.fixed || 0);
+        storyRepair.failed += Number(storyEntry.repair.failed || 0);
+        storyRepair.skipped += Number(storyEntry.repair.skipped || 0);
+        if (storyEntry.repair.aborted) {
+            storyRepair.aborted += 1;
+        }
+        if (storyEntry.repair.failed || storyEntry.repair.aborted) {
+            storyRepair.storiesWithRepairFailures += 1;
+        }
+    }
+
+    summary = {
+        schemaVersion: bundle.schemaVersion,
+        generatedAt: bundle.generatedAt,
+        documentName: bundle.documentName,
+        logPath: bundle.logPath,
+        outputDir: bundle.outputDir,
+        status: {
+            pass: !!bundle.summary.pass,
+            issueCount: bundle.summary.issues.length,
+            fatalErrorCount: bundle.errors.length,
+            boundaryLostCount: countIssuesMatching(bundle, "boundary-lost"),
+            boundaryDeltaCount: countIssuesMatching(bundle, "boundary-delta"),
+            geometrySplitUnresolvedCount: geometrySplitUnresolvedCount
+        },
+        manualReviewRequired: manualReviewRequired,
+        watchPages: pageSummary,
+        repair: storyRepair,
+        files: {
+            watchPagesJson: buildAcceptanceFilePath("_watch_pages", ".json"),
+            imageDir: bundle.imageOutputDir,
+            imageCount: bundle.images.length,
+            exportCount: bundle.exports.length
+        },
+        issues: bundle.summary.issues.slice(0, 20),
+        errors: bundle.errors.slice(0, 10)
+    };
+    return summary;
+}
+
+function finalizeAcceptanceBundle(targetDoc) {
+    var bundle = ensureAcceptanceBundle();
+    var summaryPath;
+    var watchPath;
+    var summaryPayload;
+    var i;
+    var pageName;
+    if (acceptanceBundleFinalized) {
+        return;
+    }
+    if (targetDoc) {
+        bundle.documentName = safe(targetDoc.name);
+    }
+    bundle.summary.pass = bundle.summary.issues.length === 0;
+    summaryPath = buildAcceptanceFilePath("_summary", ".json");
+    watchPath = buildAcceptanceFilePath("_watch_pages", ".json");
+    summaryPayload = buildAcceptanceSummaryPayload(bundle);
+    writeJsonFileObserved(summaryPath, summaryPayload, "acceptance-summary");
+    writeJsonFileObserved(watchPath, {
+        documentName: bundle.documentName,
+        watchPages: ACCEPTANCE_WATCH_PAGES,
+        imageOutputDir: bundle.imageOutputDir,
+        images: bundle.images,
+        exports: bundle.exports,
+        pages: bundle.pages
+    }, "acceptance-watch-pages");
+    log("Acceptance bundle summary: " + summaryPath);
+    log("Acceptance watch pages: " + watchPath);
+    for (i = 0; i < ACCEPTANCE_WATCH_PAGES.length; i++) {
+        pageName = ACCEPTANCE_WATCH_PAGES[i];
+        if (bundle.pages[pageName] && bundle.pages[pageName].issues.length) {
+            log("Acceptance page " + pageName + " issues: " + bundle.pages[pageName].issues.join(" | "));
+        }
+    }
+    acceptanceBundleFinalized = true;
+}
+
+var safe = utils.safe;
+var pushUnique = utils.pushUnique;
+
+function safeStoryId(story) {
+    try {
+        if (!story) {
+            return "";
+        }
+        return safe(story.id);
+    } catch (e0) {}
+    return "";
+}
+
+function getSelectionStory() {
+    var sel;
+    var item;
+    try {
+        sel = app.selection;
+        if (!sel || !sel.length) {
+            return null;
+        }
+        item = sel.item ? sel.item(0) : sel[0];
+        if (!item) {
+            return null;
+        }
+        if (item.parentStory) {
+            return item.parentStory;
+        }
+        if (item.constructor && item.constructor.name === "TextFrame" && item.parentStory) {
+            return item.parentStory;
+        }
+    } catch (e0) {}
+    return null;
+}
+
+var isUsableStoryObject = StoryUtils.isUsableStoryObject;
+
+function collectRepairableStories(doc) {
+    return StoryUtils.collectRepairableStories(doc, log);
+}
+
+var resolveLiveStoryById = StoryUtils.resolveLiveStoryById;
+
+function sameName(a, b) {
+    return safe(a).toLowerCase() === safe(b).toLowerCase();
+}
+
+function getFieldValue(obj, key) {
+    try {
+        if (!obj) {
+            return null;
+        }
+        return obj[key];
+    } catch (e0) {}
+    return null;
+}
+
+var trySet = utils.trySet;
+
+function mergeCjkFields(sourceStyle, targetStyle) {
+    var i;
+    var key;
+    var value;
+    var props;
+    var propCount;
+    var applied = 0;
+    var skipped = 0;
+    var failed = 0;
+    var batchErrMsg = "";
+    var perFieldErrs = [];
+
+    // Collect fields to apply
+    props = {};
+    propCount = 0;
+    for (i = 0; i < CJK_FIELD_NAMES.length; i++) {
+        key = CJK_FIELD_NAMES[i];
+        value = getFieldValue(sourceStyle, key);
+        if (value === null || typeof value === "undefined") {
+            skipped += 1;
+            continue;
+        }
+        props[key] = value;
+        propCount += 1;
+    }
+
+    if (propCount === 0) {
+        return { applied: applied, skipped: skipped, failed: failed, perFieldErrs: perFieldErrs };
+    }
+
+    // Batch assignment: one bridge call -> one layout invalidation instead of 10.
+    try {
+        targetStyle.properties = props;
+        return { applied: propCount, skipped: skipped, failed: failed, perFieldErrs: perFieldErrs };
+    } catch (eBatch) {
+        batchErrMsg = safe(eBatch && eBatch.message ? eBatch.message : eBatch);
+    }
+
+    // Fallback: set fields individually with per-field error capture
+    for (key in props) {
+        if (props.hasOwnProperty(key)) {
+            try {
+                targetStyle[key] = props[key];
+                applied += 1;
+            } catch (ePF) {
+                failed += 1;
+                perFieldErrs.push(safe(key) + ": " + safe(ePF && ePF.message ? ePF.message : ePF));
+            }
+        }
+    }
+    if (batchErrMsg) {
+        perFieldErrs.unshift("batch: " + batchErrMsg);
+    }
+    return { applied: applied, skipped: skipped, failed: failed, perFieldErrs: perFieldErrs };
+}
+
+function getParagraphStyleName(styleObj) {
+    try {
+        if (styleObj && styleObj.name !== undefined && styleObj.name !== null) {
+            return safe(styleObj.name);
+        }
+    } catch (e0) {}
+    return "";
+}
+
+function collectStoryParagraphStyles(story, importedSourceStyle) {
+    var out = [];
+    var seen = {};
+
+    function pushParaStyle(styleObj) {
+        var styleName = getParagraphStyleName(styleObj);
+        if (!styleName) return;
+        if (importedSourceStyle && sameName(styleName, getParagraphStyleName(importedSourceStyle))) return;
+        if (seen[styleName]) return;
+        seen[styleName] = true;
+        out.push(styleObj);
+    }
+
+    function walkParagraphs(paragraphs) {
+        if (!paragraphs || !paragraphs.length) return;
+        for (var i = 0; i < paragraphs.length; i++) {
+            var para = typeof paragraphs.item === "function" ? paragraphs.item(i) : paragraphs[i];
+            if (!para) continue;
+            var styleObj = null;
+            try { styleObj = para.appliedParagraphStyle; } catch (e0) {}
+            pushParaStyle(styleObj);
+        }
+    }
+
+    if (!story) return out;
+
+    // Story-level paragraphs (regular text frames)
+    walkParagraphs(story.paragraphs);
+
+    // #CJK-TABLE-CELLS (2026-05-26): table cell paragraphs live OUTSIDE
+    // story.paragraphs in story.tables[].cells[].paragraphs. The
+    // original collection walk missed them, so the CJK field merge
+    // never reached styles used only inside tables — visible symptom:
+    // table content keeps Source Han composer/language/mojikumi while
+    // body text gets the CJK upgrade.
+    try {
+        var tables = story.tables;
+        var nT = 0;
+        try { nT = tables.length; } catch (eTL) {}
+        for (var ti = 0; ti < nT; ti++) {
+            var tbl = null;
+            try { tbl = (typeof tables.item === "function") ? tables.item(ti) : tables[ti]; } catch (eTI) {}
+            if (!tbl) continue;
+            var cells = null;
+            try { cells = tbl.cells; } catch (eCC) {}
+            var nC = 0;
+            try { nC = cells.length; } catch (eCL) {}
+            for (var ci = 0; ci < nC; ci++) {
+                var cell = null;
+                try { cell = (typeof cells.item === "function") ? cells.item(ci) : cells[ci]; } catch (eCI) {}
+                if (!cell) continue;
+                try { walkParagraphs(cell.paragraphs); } catch (eCP) {}
+            }
+        }
+    } catch (eTabs) {}
+
+    return out;
+}
+
+var getCollectionItem = utils.getCollectionItem;
+
+function restoreTargetDocumentFocus(targetDoc) {
+    var win = null;
+
+    if (!targetDoc) {
+        return false;
+    }
+
+    try {
+        if (targetDoc.layoutWindows && targetDoc.layoutWindows.length) {
+            win = getCollectionItem(targetDoc.layoutWindows, 0);
+        }
+    } catch (e0) {}
+
+    if (!win) {
+        try {
+            if (targetDoc.windows && targetDoc.windows.length) {
+                win = getCollectionItem(targetDoc.windows, 0);
+            }
+        } catch (e1) {}
+    }
+
+    if (win) {
+        try {
+            if (typeof win.activate === "function") {
+                win.activate();
+                return true;
+            }
+        } catch (e2) {}
+        try {
+            app.activeWindow = win;
+            return true;
+        } catch (e3) {}
+    }
+
+    try {
+        if (typeof targetDoc.activate === "function") {
+            targetDoc.activate();
+            return true;
+        }
+    } catch (e4) {}
+
+    return false;
+}
+
+function showStatusDialog(messageText) {
+    var dlg;
+    var col;
+    var parts;
+    var i;
+
+    if (RunnerConfig.shouldSuppressDialogs(app)) {
+        return false;
+    }
+
+    try {
+        dlg = app.dialogs.add({ name: "CJK Style Apply" });
+        col = dlg.dialogColumns.add();
+        parts = String(messageText).split(/\r?\n|\r/);
+        for (i = 0; i < parts.length; i++) {
+            col.staticTexts.add({ staticLabel: parts[i] });
+        }
+        dlg.show();
+        dlg.destroy();
+        return true;
+    } catch (e0) {
+        try {
+            if (dlg) {
+                dlg.destroy();
+            }
+        } catch (e1) {}
+    }
+
+    try {
+        alert(messageText);
+        return true;
+    } catch (e2) {}
+
+    return false;
+}
+
+function buildStatusText() {
+    var preview = [];
+    var i;
+    if (cjkImportBroken) {
+        preview.push("⚠⚠ CJK IMPORT BROKEN — KINSOKU (避头尾) NOT APPLIED ⚠⚠");
+        preview.push(cjkImportBrokenDetail);
+        preview.push("Donor style lost its CJK config on import. Fix lib/CJK.idml: the donor");
+        preview.push("paragraph style must self-define CJK fields LOCALLY (not via root inheritance).");
+        preview.push("");
+    }
+    preview.push("CJK style apply finished.");
+    preview.push(statusLine || "Done.");
+    preview.push("Output:");
+    preview.push(OUT_PATH);
+    if (acceptanceBundle) {
+        preview.push("Acceptance:");
+        preview.push(buildAcceptanceFilePath("_summary", ".json"));
+    }
+    preview.push("");
+    preview.push("Preview:");
+    for (i = 0; i < lines.length && i < 10; i++) {
+        preview.push(lines[i]);
+    }
+    return preview.join("\r");
+}
+
+var captureStorySnapshot = SnapshotUtils.captureStorySnapshot;
+
+function logStorySnapshot(prefix, snapshot) {
+    SnapshotUtils.logStorySnapshot(prefix, snapshot, log);
+    recordSnapshotForAcceptance(prefix, snapshot);
+}
+
+var serializeStorySnapshot = SnapshotUtils.serializeStorySnapshot;
+
+function saveBeforeSnapshot(targetDoc, storyIds) {
+    var snapshots = {};
+    var storyOrder = [];
+    var i, storyId, liveStory, snap, outJson;
+
+    for (i = 0; i < storyIds.length; i++) {
+        storyId = storyIds[i];
+        liveStory = resolveLiveStoryById(targetDoc, storyId);
+        if (!isUsableStoryObject(liveStory)) {
+            log("saveBeforeSnapshot skip storyId=" + storyId + " reason=invalid");
+            continue;
+        }
+        snap = captureStorySnapshot(liveStory);
+        SnapshotUtils.expandGeometrySplitFramesPreApply(liveStory, snap, "snapshot[" + i + "]", log);
+        snapshots[storyId] = serializeStorySnapshot(snap);
+        storyOrder.push(storyId);
+    }
+
+    outJson = {
+        schemaVersion: 1,
+        capturedAt: new Date().toISOString ? new Date().toISOString() : String(new Date()),
+        documentName: safe(targetDoc.name),
+        storyCount: storyOrder.length,
+        storyOrder: storyOrder,
+        stories: snapshots
+    };
+
+    var snapshotPaths = SnapshotWriter.buildSnapshotPaths(targetDoc.name, DATA_DIR);
+    var snapshotJson = JSON.stringify(outJson, null, 2);
+
+    if (writeTextFileObserved(snapshotPaths.docSpecific, snapshotJson, "before-snapshot-doc")) {
+        log("Before-snapshot saved: " + snapshotPaths.docSpecific);
+    }
+    if (writeTextFileObserved(snapshotPaths.latest, snapshotJson, "before-snapshot-latest")) {
+        log("Before-snapshot saved (latest): " + snapshotPaths.latest + " (" + storyOrder.length + " stories)");
+    }
+    return storyOrder.length;
+}
+
+function processStory(targetStory, importedSourceStyle, labelPrefix) {
+    var beforeSnapshot;
+    var afterSnapshot;
+    var targetStyles;
+    var mergeTotals;
+    var mergeResult;
+    var styleObj;
+    var i;
+
+    beforeSnapshot = captureStorySnapshot(targetStory);
+    if (!isUsableStoryObject(targetStory)) {
+        log("Acceptance story skip: " + labelPrefix + " reason=invalid story object");
+        pushBundleIssue(labelPrefix + " invalid story object");
+        return;
+    }
+
+    log("Acceptance story start: " + labelPrefix + " storyId=" + safeStoryId(targetStory));
+    logStorySnapshot(labelPrefix + "_before", beforeSnapshot);
+
+    SnapshotUtils.expandGeometrySplitFramesPreApply(targetStory, beforeSnapshot, labelPrefix, log);
+
+    targetStyles = collectStoryParagraphStyles(targetStory, importedSourceStyle);
+    mergeTotals = { styles: targetStyles.length, applied: 0, skipped: 0, failed: 0 };
+    for (i = 0; i < targetStyles.length; i++) {
+        styleObj = targetStyles[i];
+        var sn = getParagraphStyleName(styleObj);
+        if (sn && mergedStyleNames[sn]) {
+            mergeTotals.skipped += CJK_FIELD_NAMES.length;
+            continue;
+        }
+        mergeResult = mergeCjkFields(importedSourceStyle, styleObj);
+        if (sn) {
+            mergedStyleNames[sn] = true;
+        }
+        mergeTotals.applied += mergeResult.applied;
+        mergeTotals.skipped += mergeResult.skipped;
+        mergeTotals.failed += mergeResult.failed;
+    }
+    log(labelPrefix + " merged target styles: " + safe(mergeTotals.styles));
+    log(labelPrefix + " merged CJK fields applied: " + safe(mergeTotals.applied));
+    log(labelPrefix + " merged CJK fields skipped: " + safe(mergeTotals.skipped));
+    log(labelPrefix + " merged CJK fields failed: " + safe(mergeTotals.failed));
+
+    try {
+        targetStory.recompose();
+    } catch (e0) {}
+    log(labelPrefix + " target story recomposed after merge.");
+
+    afterSnapshot = captureStorySnapshot(targetStory);
+    logStorySnapshot(labelPrefix + "_after_apply", afterSnapshot);
+
+    // Repair is now handled by repair_after_apply.idjs (ordinalRepairPass)
+    // which runs after all stories are processed and text cleanup is complete.
+
+    log("Acceptance story finish: " + labelPrefix + " storyId=" + safe(beforeSnapshot.storyId));
+}
+
+async function askCleanupOptions() {
+    var dlg;
+    var col;
+    var cbSoft;
+    var cbSpaces;
+    var cbCollapse;
+    var confirmed;
+    var result;
+
+    // #AUTO-CJK-CLEANUP (2026-05-26): AutomationBridge pre-seed for the
+    // Text Pre-processing dialog. When MCP / bridge run with
+    // automationOptions = { removeSoftReturns, removeSpaces,
+    // collapseEmptyLines } the dialog is fully skipped (defaults true if
+    // any field omitted).
+    var autoOpts = null;
+    try { autoOpts = await AutomationBridge.readAutomationOptions("cjk_style_apply"); }
+    catch (eAB) {}
+    if (autoOpts && (
+        Object.prototype.hasOwnProperty.call(autoOpts, "removeSoftReturns") ||
+        Object.prototype.hasOwnProperty.call(autoOpts, "removeSpaces") ||
+        Object.prototype.hasOwnProperty.call(autoOpts, "collapseEmptyLines"))) {
+        return {
+            removeSoftReturns:  (autoOpts.removeSoftReturns !== false),
+            removeSpaces:       (autoOpts.removeSpaces !== false),
+            collapseEmptyLines: (autoOpts.collapseEmptyLines !== false)
+        };
+    }
+
+    if (RunnerConfig.isRunnerActive(app)) {
+        return RunnerConfig.getCleanupOptions(app, {
+            removeSoftReturns: true,
+            removeSpaces: true,
+            collapseEmptyLines: true
+        });
+    }
+
+    try {
+        dlg = app.dialogs.add({ name: "Text Pre-processing" });
+        col = dlg.dialogColumns.add();
+        col.staticTexts.add({ staticLabel: "Options (all enabled by default):" });
+        cbSoft     = col.checkboxControls.add({ staticLabel: "Remove soft line breaks (Shift+Enter)",       checkedState: true });
+        cbCollapse = col.checkboxControls.add({ staticLabel: "Collapse consecutive empty lines (spaces too)", checkedState: true });
+        cbSpaces   = col.checkboxControls.add({ staticLabel: "Remove spaces between CJK and ASCII",          checkedState: true });
+        confirmed = dlg.show();
+        result = confirmed
+            ? {
+                removeSoftReturns: !!cbSoft.checkedState,
+                removeSpaces: !!cbSpaces.checkedState,
+                collapseEmptyLines: !!cbCollapse.checkedState
+            }
+            : null;
+        dlg.destroy();
+        return result;
+    } catch (e0) {
+        try { if (dlg) { dlg.destroy(); } } catch (e1) {}
+        return { removeSoftReturns: true, removeSpaces: true, collapseEmptyLines: true };
+    }
+}
+
+async function main() {
+    var targetDoc;
+    var targetStory;
+    var targetStories;
+    var liveStory;
+    var sourceStyleNames;
+    var sourceStyleName;
+    var importedSourceStyle;
+    var cleanupOpts;
+    var cleanupSoftCount;
+    var cleanupSpaceCount;
+    var cleanupSymbolPunctCount;
+    var cleanupCollapseCount;
+    var i;
+    var runnerActive;
+
+    // UXP panel-double-click bootstrap: when __dirname is unavailable in the
+    // Adobe native idjs loader, lib/runtime_paths.js can't auto-derive
+    // BASE_DIR at module-load time. Resolve it now from app.activeScript
+    // (async, only available inside main()), then RECOMPUTE the path
+    // constants captured at top-of-module.
+    if (!RuntimePaths.getBaseDir()) {
+        await RuntimePaths.bootstrap();
+        try {
+            var __diag = RuntimePaths.getBootstrapDiag && RuntimePaths.getBootstrapDiag();
+            if (__diag) {
+                log("BOOTSTRAP DIAG: hasApp=" + safe(__diag.hasApp)
+                    + " hasActiveScript=" + safe(__diag.hasActiveScript)
+                    + " awaitedType=" + safe(__diag.awaitedType)
+                    + " keys=" + safe(__diag.awaitedKeys)
+                    + " pathRaw=" + safe(__diag.pathRaw)
+                    + " pathFinal=" + safe(__diag.pathFinal)
+                    + " err=" + safe(__diag.err));
+            }
+        } catch (eDiag) { log("BOOTSTRAP DIAG read err: " + safe(eDiag.message)); }
+        BASE_DIR = RuntimePaths.getBaseDir();
+        DATA_DIR = RuntimePaths.getDataDir();
+        SOURCE_FILE_PATH = joinWindowsPath(joinWindowsPath(BASE_DIR, "lib"), "CJK.idml");
+        DEFAULT_OUT_PATH = joinWindowsPath(RuntimePaths.getLogDir(), "cjk_style_apply_output.txt");
+        OUT_PATH = RunnerConfig.getOutputPath(app, DEFAULT_OUT_PATH);
+        log("BOOTSTRAP RESULT: BASE_DIR=" + safe(BASE_DIR) + " SOURCE=" + safe(SOURCE_FILE_PATH));
+    }
+
+    log("=== CJK Style Apply ===");
+
+    if (!app.documents.length) {
+        statusLine = "No open document.";
+        log(statusLine);
+        return;
+    }
+
+    targetDoc = app.activeDocument;
+    targetDocRef = targetDoc;
+    ensureAcceptanceBundle().documentName = safe(targetDoc.name);
+    runnerActive = RunnerConfig.isRunnerActive(app);
+    log("Target document: " + safe(targetDoc.name));
+
+    cleanupOpts = await askCleanupOptions();
+    if (!cleanupOpts) {
+        statusLine = "Cancelled.";
+        log(statusLine);
+        return;
+    }
+
+    targetStory = runnerActive ? null : getSelectionStory();
+    if (runnerActive) {
+        targetStories = collectRepairableStories(targetDoc);
+        log("Mode: all repairable stories (runner mode)");
+        log("Repairable stories: " + safe(targetStories.length));
+        if (!targetStories.length) {
+            statusLine = "No repairable stories found.";
+            log(statusLine);
+            return;
+        }
+    } else if (targetStory) {
+        targetStories = [safe(targetStory.id)];
+        log("Mode: selected story");
+    } else {
+        targetStories = collectRepairableStories(targetDoc);
+        log("Mode: all repairable stories");
+        log("Repairable stories: " + safe(targetStories.length));
+        if (!targetStories.length) {
+            statusLine = "No repairable stories found.";
+            log(statusLine);
+            return;
+        }
+    }
+
+    log("Source file: " + SOURCE_FILE_PATH);
+    try {
+        sourceDoc = StyleImport.openSourceDocument(SOURCE_FILE_PATH);
+    } catch (e0) {
+        statusLine = "Failed to open source document.";
+        log(statusLine);
+        log("Open error: " + safe(e0 && e0.message ? e0.message : e0));
+        return;
+    }
+    log("Source document opened.");
+
+    sourceStyleNames = StyleImport.listParagraphStyles(sourceDoc, true);
+    log("Source styles: " + sourceStyleNames.length);
+    if (!sourceStyleNames.length) {
+        statusLine = "No non-default paragraph styles in source.";
+        log(statusLine);
+        return;
+    }
+
+    sourceStyleName = DEFAULT_SOURCE_STYLE_NAME;
+    if (sourceStyleNames.indexOf(sourceStyleName) < 0) {
+        sourceStyleName = sourceStyleNames[0];
+    }
+    log("Selected source style: " + sourceStyleName);
+
+    StyleImport.closeDocNoSave(sourceDoc);
+    sourceDoc = null;
+    log("Source document closed.");
+    log("Target focus restored after close: " + safe(restoreTargetDocumentFocus(targetDoc)));
+
+    // === Single-undo wrap (2026-05-27): everything that mutates the doc
+    // — style import, text cleanup, per-story CJK field merge, and the
+    // delegated frame repair — runs inside one `app.doScript(ENTIRE_SCRIPT)`
+    // block so a single Ctrl/Cmd+Z reverts the whole CJK style apply.
+    //
+    // Previously: importTextStylesOfficial + N cleanup ops + N processStory
+    // calls + a SEPARATE runRepair (which opens its own ENTIRE_SCRIPT) each
+    // produced their own undo history items (6+ entries for a 4-story doc).
+    // Switched runRepair → runRepairCore for the same reason: runRepairCore
+    // is the caller-wrapped variant that skips its own doScript open.
+    //
+    // Async-safety: every operation inside the wrap is synchronous in UXP
+    // (style import, find/changeText, paragraph-style property writes,
+    // FrameRepair's main()). The source-doc open/close + snapshot writes
+    // remain ASYNC and live outside the wrap.
+    var __abortReason = null;
+    var __doScriptOk = true;
+    try {
+        app.doScript(function () {
+            StyleImport.importTextStylesOfficial(targetDoc, SOURCE_FILE_PATH);
+            log("Official text style import complete.");
+            log("Target focus restored after import: " + safe(restoreTargetDocumentFocus(targetDoc)));
+
+            importedSourceStyle = StyleImport.findParagraphStyleByName(targetDoc, sourceStyleName);
+            if (!importedSourceStyle) {
+                __abortReason = "Imported source style not found in target document. Expected: " + sourceStyleName;
+                return;
+            }
+
+            // #CJK-IMPORT-GUARD (2026-06-29): importStyles rebases the donor's
+            // BasedOn to the target's Latin [No paragraph style], so any CJK
+            // config the donor only INHERITED from the source root is dropped.
+            // CJK.idml's donor style is authored to self-define its CJK fields
+            // locally so the config survives import. This guard reads the
+            // post-import donor and turns the otherwise-silent "merged N/0/0 but
+            // every field empty" failure LOUD if that self-definition is ever
+            // lost (e.g. a future template edit reverts to root inheritance).
+            try {
+                var __cjkRaw = {};
+                for (var __ci = 0; __ci < CJK_FIELD_NAMES.length; __ci++) {
+                    __cjkRaw[CJK_FIELD_NAMES[__ci]] = getFieldValue(importedSourceStyle, CJK_FIELD_NAMES[__ci]);
+                }
+                var __cjkDx = CjkFieldCheck.diagnoseCjkImport(__cjkRaw);
+                log("CJK donor import check: kinsokuSet=" + safe(__cjkDx.kinsokuSet)
+                    + " composer=" + safe(__cjkDx.composer)
+                    + " appliedLanguage=" + safe(__cjkDx.appliedLanguage)
+                    + " mojikumi=" + safe(__cjkDx.mojikumi)
+                    + " kinsokuType=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.kinsokuType))
+                    + " kinsokuHangType=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.kinsokuHangType))
+                    + " bunriKinshi=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.bunriKinshi))
+                    + " rensuuji=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.rensuuji))
+                    + " treatIdeographicSpaceAsSpace=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.treatIdeographicSpaceAsSpace))
+                    + " allowArbitraryHyphenation=" + safe(CjkFieldCheck.normalizeFieldValue(__cjkRaw.allowArbitraryHyphenation)));
+                if (__cjkDx.broken) {
+                    cjkImportBroken = true;
+                    cjkImportBrokenDetail = "kinsokuSet=" + safe(__cjkDx.kinsokuSet)
+                        + " composer=" + safe(__cjkDx.composer)
+                        + " appliedLanguage=" + safe(__cjkDx.appliedLanguage);
+                    log("CJK IMPORT BROKEN: donor style '" + safe(sourceStyleName)
+                        + "' has NO kinsoku config after import (kinsokuSet=" + safe(__cjkDx.kinsokuSet)
+                        + "). Kinsoku (避头尾) will NOT take effect. Fix: ensure lib/CJK.idml's donor"
+                        + " style self-defines CJK fields LOCALLY (not via root BasedOn inheritance).");
+                    pushBundleIssue("CJK import broken: donor '" + safe(sourceStyleName)
+                        + "' lost kinsoku config (kinsokuSet=" + safe(__cjkDx.kinsokuSet) + ")");
+                }
+            } catch (eGuard) {
+                log("CJK donor import check failed: " + safe(eGuard && eGuard.message ? eGuard.message : eGuard));
+            }
+
+            // Snapshot BEFORE cleanup + style apply so repair targets the
+            // original layout. Writes JSON to disk (no doc mutation).
+            saveBeforeSnapshot(targetDoc, targetStories);
+
+            // Text cleanup: remove soft returns + collapse empty paragraphs
+            // + remove CJK-ASCII spaces. Runs after snapshot so repair sees
+            // pre-cleanup geometry, before style apply so font-metric reflow
+            // is the only remaining delta.
+            if (cleanupOpts.removeSoftReturns) {
+                cleanupSoftCount = TextCleanup.removeSoftReturns(targetDoc);
+                log("Cleanup: " + safe(cleanupSoftCount) + " soft line break(s) removed.");
+            }
+            if (cleanupOpts.collapseEmptyLines) {
+                cleanupCollapseCount = TextCleanup.collapseEmptyParagraphs(targetDoc);
+                log("Cleanup: " + safe(cleanupCollapseCount) + " empty-line run(s) collapsed.");
+            }
+            if (cleanupOpts.removeSpaces) {
+                cleanupSpaceCount = TextCleanup.removeCjkAsciiSpaces(targetDoc);
+                log("Cleanup: " + safe(cleanupSpaceCount) + " CJK-ASCII space(s) removed.");
+                // TODO #20: same default-on `removeSpaces` gate also strips the
+                // half-width-symbol ↔ full-width-punctuation boundary space that
+                // removeCjkAsciiSpaces misses (e.g. ")␣、" -> ")、"). No new toggle.
+                cleanupSymbolPunctCount = TextCleanup.removeSymbolPunctSpaces(targetDoc);
+                log("Cleanup: " + safe(cleanupSymbolPunctCount) + " symbol/punctuation boundary space(s) removed.");
+            }
+
+            for (i = 0; i < targetStories.length; i++) {
+                log("Story loop enter: index=" + safe(i) + " storyId=" + safe(targetStories[i]));
+                try {
+                    liveStory = resolveLiveStoryById(targetDoc, targetStories[i]);
+                    if (!isUsableStoryObject(liveStory)) {
+                        log("Story loop skip: index=" + safe(i) + " storyId=" + safe(targetStories[i]) + " reason=story no longer valid");
+                        pushBundleIssue("story[" + i + "] missing live story " + safe(targetStories[i]));
+                        continue;
+                    }
+                    processStory(liveStory, importedSourceStyle, "story[" + i + "]");
+                    log("Story loop exit: index=" + safe(i) + " storyId=" + safe(targetStories[i]));
+                } catch (eStory) {
+                    log("Story loop skip: index=" + safe(i) + " storyId=" + safe(targetStories[i]) + " reason=" + safe(eStory && eStory.message ? eStory.message : eStory));
+                    pushBundleIssue("story[" + i + "] skipped after exception");
+                }
+            }
+
+            // Overwrite para_deltas with empty object so repair uses zero
+            // deltas. CJK style merge doesn't change paragraph count.
+            var PARA_DELTAS_PATH = joinPath(DATA_DIR, "para_deltas_latest.json");
+            if (writeTextFileObserved(PARA_DELTAS_PATH, "{}", "para-deltas-latest")) {
+                log("Cleared para_deltas_latest.json (overwritten with empty object).");
+            }
+
+            // Delegate frame repair via runRepairCore — the caller-wrapped
+            // variant. Skips its own doScript open so its work joins THIS
+            // undo block instead of producing a separate history item.
+            log("=== Delegating repair to lib/repair_after_apply.js (runRepairCore — inside our undo block) ===");
+            try {
+                var repairModule = require("./lib/repair_after_apply.js");
+                var repairResult = repairModule.runRepairCore({ baseDir: BASE_DIR, dataDir: DATA_DIR });
+                log("repair completed: " + safe(repairResult && repairResult.statusLine));
+            } catch (eRepair) {
+                log("repair FAILED: " + safe(eRepair && eRepair.message ? eRepair.message : eRepair));
+                pushBundleIssue("repair failed: " + safe(eRepair && eRepair.message ? eRepair.message : eRepair));
+            }
+        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, "CJK Style Apply");
+    } catch (eDoScript) {
+        __doScriptOk = false;
+        var __dsMsg = safe(eDoScript && eDoScript.message ? eDoScript.message : eDoScript);
+        log("doScript wrapper FAILED: " + __dsMsg);
+        pushBundleIssue("doScript wrapper failed: " + __dsMsg);
+    }
+
+    if (__abortReason) {
+        statusLine = __abortReason;
+        log(statusLine);
+        return;
+    }
+
+    finalizeAcceptanceBundle(targetDoc);
+
+    log("Target focus restored at end: " + safe(restoreTargetDocumentFocus(targetDoc)));
+
+    statusLine = "CJK style applied and repaired for " + safe(targetStories.length) + " story(s).";
+    if (cjkImportBroken) {
+        // Operator-visible loud failure: the deepest layer of this bug is that
+        // an empty merge passed silently behind a "merged N/0/0" fake-green.
+        statusLine = "⚠ KINSOKU NOT APPLIED — donor CJK config lost on import ("
+            + cjkImportBrokenDetail + "). 避头尾未生效；修 lib/CJK.idml 让 donor 本地自定义 CJK 字段。 ["
+            + statusLine + "]";
+    }
+}
+
+// Top-level await — IIFE breaks the bridge runner's async handshake.
+await main().catch(function (e) {
+    statusLine = "FAILED: " + (e && e.message ? e.message : e);
+    log(statusLine);
+    try { ensureAcceptanceBundle().errors.push(statusLine); } catch (eAB) {}
+    try { pushBundleIssue(statusLine); } catch (ePB) {}
+});
+
+try {
+    StyleImport.closeDocNoSave(sourceDoc);
+} catch (e0) {}
+
+try {
+    if (acceptanceBundle) {
+        finalizeAcceptanceBundle(targetDocRef);
+    }
+} catch (e1) {
+    log("Acceptance bundle finalize failed: " + safe(e1 && e1.message ? e1.message : e1));
+}
+
+writeTextFileObserved(OUT_PATH, lines.join("\n"), "cjk-style-apply-log");
+// Skip the trailing summary dialog when running headlessly. Without this
+// the bridge / MCP run blocks on the modal until someone clicks OK.
+if (!AutomationBridge.isAutomatedRun("cjk_style_apply")) {
+    showStatusDialog(buildStatusText());
+}

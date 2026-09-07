@@ -1,0 +1,479 @@
+"use strict";
+/**
+ * set_selection_weight.idjs — operator: select text → pick a target weight →
+ * set the selection to that weight, with the concrete (font, weight) sourced from
+ * brand_config. Creates the character style on the fly when the weight is absent
+ * from the doc; routes a mixed Han+Latin selection per-script via a selection-scoped
+ * changeGrep overlay.
+ *
+ * Design/spec: _DESIGN_weight-setter.md (arch-approved D1–D5; codex-audit R1–R4).
+ * Apply mechanism HOST-CONFIRMED by probe 20260703_01_changegrep_charstyle_scope:
+ *   changeGrep+appliedCharacterStyle applies + range-scopes; clearOverrides(CHARACTER_ONLY)
+ *   spares paragraph overrides; base+overlay routes per-char incl. full-width punct.
+ * End-to-end host-verified: Latin-primary / Han-primary / homogeneous / idempotent.
+ * impl-audit (3 voices) closed: (P1) single finalizer routes ALL exits through log +
+ * headless recordAutomationResult; (P1) apply failures THROW inside doScript so
+ * ENTIRE_SCRIPT rolls back atomically (no partial mutation); (P3) created≠reused.
+ *
+ * Entry (CLAUDE.md gate #4): top-level `await main()`, explicit require, NO IIFE.
+ * Dual entry: bridge (automationOptions {weight, brandConfigPath?}) + manual (dialog).
+ * fail-closed: rare/hard cases loud-exit (never silent — every exit logs + records).
+ */
+
+var RuntimePaths = require("./lib/runtime_paths.js");
+var BASE_DIR = RuntimePaths.getBaseDir();
+
+var indesign = require("indesign");
+var app = indesign.app;
+var NothingEnum = indesign.NothingEnum;
+var OverrideType = indesign.OverrideType;
+var ScriptLanguage = indesign.ScriptLanguage;
+var UndoModes = indesign.UndoModes;
+var UserInteractionLevels = indesign.UserInteractionLevels;
+var fs = require("fs");
+
+var Pairs = require("./lib/font_mapping_pairs.js");
+var Wiring = require("./lib/import_byPair_wiring.js");
+var SSB = require("./lib/style_sheet_builder.js");
+var SSBI = SSB._internal;
+var DocScan = require("./lib/font_mapping_doc_scan.js");
+var ScriptClass = require("./lib/script_classifier.js");
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+var AutomationBridge = null;
+try { AutomationBridge = require("./lib/automation_bridge.js"); } catch (e) {}
+
+var SCRIPT_ID = "set_selection_weight";
+var _docDir = ""; // set early in main() so EVERY exit (incl. fail) can writeLog
+
+// GREP routing (routing SoT constants from lib; local overlay adds full-width CJK punct).
+var GREP_LATIN = SSB.GREP_LATIN_PATTERN;
+var HAN_CLASS = "[\\x{4E00}-\\x{9FFF}\\x{3400}-\\x{4DBF}\\x{F900}-\\x{FAFF}]";
+var FW_PUNCT = "[\\x{3000}-\\x{303F}\\x{FF00}-\\x{FF65}]";
+var WS_CJK_OVERLAY = "(?:" + HAN_CLASS + "|" + FW_PUNCT + ")+";
+
+var MAIN = ScriptClass.MAIN;     // { CJK, LATIN, ... }
+var SHARED = ScriptClass.SHARED; // { NUMERIC, PUNCT, WHITESPACE, OTHER }
+
+// ── log accumulator ─────────────────────────────────────────────
+var _log = [];
+function log(m) { _log.push(String(m)); try { console.log("[set-weight] " + m); } catch (e) {} }
+function _safe(fn, d) { try { return fn(); } catch (e) { return d; } }
+async function _safe2(fn, d) { try { return await fn(); } catch (e) { return d; } }
+function _isValid(o) { return _safe(function () { return !!o.isValid; }, false); }
+function dirOf(p) { if (!p) return ""; var s = String(p); var i = Math.max(s.lastIndexOf("\\"), s.lastIndexOf("/")); return i >= 0 ? s.slice(0, i) : ""; }
+
+// ── unicode / script classification (detection ≡ GREP routing ranges) ──
+function iterCodepoints(text, cb) {
+  for (var i = 0; i < text.length; i++) {
+    var cp = text.charCodeAt(i);
+    if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < text.length) {
+      var lo = text.charCodeAt(i + 1);
+      if (lo >= 0xDC00 && lo <= 0xDFFF) { cp = ((cp - 0xD800) << 10) + (lo - 0xDC00) + 0x10000; i++; }
+    }
+    cb(cp);
+  }
+}
+function isHan(cp) { return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF); }
+function isLatinLetter(cp) { return (cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A) || (cp >= 0xC0 && cp <= 0x24F); }
+function bucketOf(cp) {
+  if (isHan(cp)) return "Han";
+  if (isLatinLetter(cp)) return "Latin";
+  var m = ScriptClass.classifyCodepoint(cp);
+  if (m === SHARED.NUMERIC || m === SHARED.PUNCT || m === SHARED.WHITESPACE) return "shared";
+  return "unsupported"; // any MAIN not Han/Latin (kana/Ext-B/1E00-1EFF/Hangul/…) + SHARED.OTHER
+}
+
+// ── brand_config lang → font roster helpers (lang-agnostic) ──
+function langsOf(config, fam) {
+  var out = [], fbl = (config && config.fonts_by_language) || {};
+  for (var lang in fbl) {
+    if (!Object.prototype.hasOwnProperty.call(fbl, lang)) continue;
+    var arr = fbl[lang];
+    if (!Array.isArray(arr)) continue;
+    for (var i = 0; i < arr.length; i++) { if (arr[i] && arr[i].font === fam) { out.push(lang); break; } }
+  }
+  return out;
+}
+function rosterOf(config, fam) {
+  var seen = {}, out = [], langs = langsOf(config, fam), fbl = (config && config.fonts_by_language) || {};
+  for (var i = 0; i < langs.length; i++) {
+    var arr = fbl[langs[i]] || [];
+    for (var j = 0; j < arr.length; j++) {
+      if (arr[j] && arr[j].font === fam && !Object.prototype.hasOwnProperty.call(seen, arr[j].weight)) {
+        seen[arr[j].weight] = true; out.push(arr[j].weight);
+      }
+    }
+  }
+  return out;
+}
+
+// ── selection read (doScript-free) ──
+var TEXT_SEL_CTORS = { Text: 1, Characters: 1, Word: 1, TextStyleRange: 1, Paragraph: 1, InsertionPoint: 1 };
+function readSelectionRange() {
+  var sel = _safe(function () { return app.selection; }, null);
+  if (!sel || !sel.length) return null;
+  var item = _safe(function () { return sel.item ? sel.item(0) : sel[0]; }, null);
+  if (!item) return null;
+  var ctor = _safe(function () { return String(item.constructor.name); }, "");
+  if (!TEXT_SEL_CTORS[ctor]) return null;               // TextFrame etc. → reject
+  var len = _safe(function () { return item.characters.length; }, 0);
+  if (!len) return null;                                // zero-length InsertionPoint → reject
+  return item;
+}
+
+// ── per-script current font/weight from the range's textStyleRanges ──
+function collectPerScriptFonts(range) {
+  var famSet = { Han: {}, Latin: {} }, cur = { Han: null, Latin: null };
+  var tsrs = _safe(function () { return range.textStyleRanges; }, null);
+  var n = _safe(function () { return tsrs.length; }, 0);
+  for (var t = 0; t < n; t++) {
+    (function (t) {
+      var tsr = _safe(function () { return tsrs.item(t); }, null);
+      if (!tsr) return;
+      var ff = _safe(function () { return DocScan.readTsrFontFamilyStyle(tsr); }, null);
+      if (!ff || !ff.family) return;
+      var content = _safe(function () { return String(tsr.contents); }, "");
+      var hasHan = false, hasLatin = false;
+      iterCodepoints(content, function (cp) {
+        var b = bucketOf(cp);
+        if (b === "Han") { famSet.Han[ff.family] = true; hasHan = true; }
+        else if (b === "Latin") { famSet.Latin[ff.family] = true; hasLatin = true; }
+      });
+      if (hasHan && !cur.Han) cur.Han = { family: ff.family, style: ff.style };
+      if (hasLatin && !cur.Latin) cur.Latin = { family: ff.family, style: ff.style };
+    })(t);
+  }
+  return { famSet: famSet, cur: cur };
+}
+function famCount(obj) { var n = 0; for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) n++; } return n; }
+
+// ── non-primary (mixed) target: alias-expanded, lang-robust, deterministic ──
+function resolveNonPrimary(config, curFamPrimary, chosenWeight, curFamOther, rosterOther) {
+  var pLangs = langsOf(config, curFamPrimary), oLangs = langsOf(config, curFamOther);
+  var hits = {};
+  for (var i = 0; i < pLangs.length; i++) {
+    for (var j = 0; j < oLangs.length; j++) {
+      var proj = _safe(function () { return Pairs.projectByPairWithIndex(config.pairs, pLangs[i], oLangs[j], config); }, []);
+      var lookup = Pairs.makeCjkWeightLookup(proj, config);
+      var hit = _safe(function () { return lookup(curFamPrimary, chosenWeight); }, null);
+      if (hit && hit.dstFont && hit.dstWeight) hits[hit.dstFont + "\t" + hit.dstWeight] = { font: hit.dstFont, weight: hit.dstWeight };
+    }
+  }
+  var keys = Object.keys(hits);
+  if (keys.length === 1) return { font: hits[keys[0]].font, weight: hits[keys[0]].weight, via: "pair" };
+  if (keys.length > 1) return { loud: "cross-direction pair ambiguity for non-primary weight: " + keys.join(" / ") };
+  // fallback: exact → styleAlias-class(guarded) → first
+  for (var k = 0; k < rosterOther.length; k++) if (rosterOther[k] === chosenWeight) return { font: curFamOther, weight: chosenWeight, via: "fallback-exact" };
+  var ca = DocScan.styleAlias(chosenWeight);
+  if (ca != null) for (var m = 0; m < rosterOther.length; m++) if (DocScan.styleAlias(rosterOther[m]) === ca) return { font: curFamOther, weight: rosterOther[m], via: "fallback-class", warn: true };
+  if (rosterOther.length) return { font: curFamOther, weight: rosterOther[0], via: "fallback-first", warn: true };
+  return { loud: "no available weight for non-primary script family " + curFamOther };
+}
+
+// ── CS create/reuse (doScript) — returns {cs, name, created} (created=actually added,
+//    not reused; impl-audit P3 so idempotent reruns don't misreport "created") ──
+function ensureWeightCS(workDoc, scriptTag, inst) {
+  var name = "_T_c_w_" + scriptTag + "_" + SSBI._sanitize(inst.family) + "_" + SSBI._sanitize(inst.fontStyle) +
+    "_" + SSBI._shortHash(inst.family + "\t" + inst.fontStyle);
+  var created = false;
+  var cs = _safe(function () { return workDoc.characterStyles.itemByName(name); }, null);
+  if (!cs || !_isValid(cs)) {
+    cs = _safe(function () { return workDoc.characterStyles.add({ name: name }); }, null);
+    if (cs) created = true;
+    else cs = _safe(function () { return workDoc.characterStyles.itemByName(name); }, null);
+  }
+  if (!cs || !_isValid(cs)) return null;
+  SSBI._writeStyleFontTabName(cs, inst.family, inst.fontStyle);
+  return { cs: cs, name: name, created: created };
+}
+
+function clearGrepPrefs() {
+  try { app.findGrepPreferences = NothingEnum.NOTHING; } catch (e) {}
+  try { app.changeGrepPreferences = NothingEnum.NOTHING; } catch (e) {}
+}
+
+// ── apply (doScript) — HOST-CONFIRMED probe 20260703_01. Apply failures THROW so the
+//    enclosing ENTIRE_SCRIPT doScript rolls back ATOMICALLY (no half-applied selection,
+//    impl-audit P1). Caller catches the throw → loud fail. ──
+function applyWeightToRange(range, primaryCS, nonPrimaryCS, mixed, primaryScript, report) {
+  // pre-apply scan: replaced char styles (exclude own _T_c_w_ → idempotent)
+  var replaced = [];
+  var tsrs = _safe(function () { return range.textStyleRanges; }, null);
+  var n = _safe(function () { return tsrs.length; }, 0);
+  for (var t = 0; t < n; t++) {
+    var nm = _safe(function () { return String(tsrs.item(t).appliedCharacterStyle.name); }, "");
+    if (nm && nm !== "[None]" && nm.indexOf("_T_c_w_") !== 0 && replaced.indexOf(nm) < 0) replaced.push(nm);
+  }
+  report.replacedCharStyles = replaced;
+  if (replaced.length) {
+    var _m = "replaced char styles: " + replaced.join(", ") + " (non-font attrs not preserved)";
+    log("pre-apply: " + _m); report.warnings.push(_m);
+  }
+
+  // clearOverrides is load-bearing: a direct char-level font override shadows the CS.
+  // A failure means the weight may not become visible → THROW (atomic rollback).
+  try { range.clearOverrides(OverrideType.CHARACTER_ONLY); }
+  catch (e) { throw new Error("clearOverrides failed (weight would not apply): " + String(e && e.message || e)); }
+
+  range.appliedCharacterStyle = primaryCS;
+  report.applied = report.applied || {};
+  report.applied[primaryScript === "Han" ? "han" : "latin"] = true;
+
+  if (mixed) {
+    var overlayPattern = (primaryScript === "Han") ? GREP_LATIN : WS_CJK_OVERLAY;
+    clearGrepPrefs();
+    try {
+      app.findGrepPreferences.findWhat = overlayPattern;
+      app.changeGrepPreferences.appliedCharacterStyle = nonPrimaryCS;
+      range.changeGrep();
+      report.applied[primaryScript === "Han" ? "latin" : "han"] = true;
+    } catch (e) {
+      throw new Error("overlay changeGrep failed (non-primary script not routed): " + String(e && e.message || e));
+    } finally { clearGrepPrefs(); }
+  }
+}
+
+// ── SDK dropdown weight picker (precedent reorganize_dialog.js) ──
+function pickWeightDialog(rosterList, defaultIdx) {
+  var prev = _safe(function () { return app.scriptPreferences.userInteractionLevel; }, null);
+  try { app.scriptPreferences.userInteractionLevel = UserInteractionLevels.INTERACT_WITH_ALL; } catch (e) {}
+  var dlg = null, chosen = null;
+  try {
+    dlg = app.dialogs.add({ name: "Set Selection Weight" });
+    var col = dlg.dialogColumns.add();
+    col.staticTexts.add({ staticLabel: "Target weight:" });
+    var row = col.dialogRows.add();
+    var dd = row.dropdowns.add({ stringList: rosterList, selectedIndex: (defaultIdx >= 0 ? defaultIdx : 0) });
+    var ok = dlg.show();
+    var idx = ok ? Number(dd.selectedIndex) : -1;
+    if (ok && idx >= 0 && idx < rosterList.length) chosen = rosterList[idx];
+  } catch (e) { log("dialog err: " + String(e && e.message || e)); }
+  finally {
+    try { if (dlg) dlg.destroy(); } catch (e) {}
+    if (prev != null) try { app.scriptPreferences.userInteractionLevel = prev; } catch (e) {}
+  }
+  return chosen;
+}
+
+function defaultIndexFor(rosterList, curWeight) {
+  if (!curWeight) return 0;
+  for (var i = 0; i < rosterList.length; i++) if (rosterList[i] === curWeight) return i;
+  var ca = DocScan.styleAlias(curWeight);
+  if (ca != null) for (var j = 0; j < rosterList.length; j++) if (DocScan.styleAlias(rosterList[j]) === ca) return j;
+  return 0;
+}
+
+// ── config discovery (doScript-free, async) ──
+function readJsonValidated(path) {
+  var raw = _safe(function () { return fs.readFileSync(path, "utf-8"); }, null);
+  if (!raw) return null;
+  var cfg = _safe(function () { return JSON.parse(raw); }, null);
+  if (!cfg) return null;
+  var v = _safe(function () { return Pairs.validateBrandConfig(cfg); }, null);
+  return (v && v.ok) ? cfg : null;
+}
+async function pickConfigFile() {
+  try {
+    var lfs = require("uxp").storage.localFileSystem;
+    var f = await lfs.getFileForOpening({ types: ["json"] });
+    if (f && f.nativePath) return String(f.nativePath);
+  } catch (e) {}
+  return null;
+}
+
+// ── status dialog (headless-suppressed) ──
+function showStatus(report) {
+  if (report.headless) return;
+  var lines = [report.ok ? "Weight set." : ("Not applied: " + (report.reason || "")), ""];
+  if (report.ok) {
+    lines.push("primary=" + report.primaryScript + " weight=" + report.chosenWeight + (report.mixed ? " (mixed)" : ""));
+    if (report.created && report.created.length) lines.push("created: " + report.created.join(", "));
+    if (report.reused && report.reused.length) lines.push("reused: " + report.reused.join(", "));
+    if (report.replacedCharStyles && report.replacedCharStyles.length) lines.push("replaced CS: " + report.replacedCharStyles.join(", "));
+  }
+  if (report.warnings && report.warnings.length) lines.push("warnings: " + report.warnings.join(" | "));
+  var prev = _safe(function () { return app.scriptPreferences.userInteractionLevel; }, null);
+  try { app.scriptPreferences.userInteractionLevel = UserInteractionLevels.INTERACT_WITH_ALL; } catch (e) {}
+  var dlg = null;
+  try {
+    dlg = app.dialogs.add({ name: "Set Selection Weight" });
+    var col = dlg.dialogColumns.add();
+    for (var i = 0; i < lines.length; i++) col.staticTexts.add({ staticLabel: lines[i] || " " });
+    dlg.show();
+  } catch (e) {} finally {
+    try { if (dlg) dlg.destroy(); } catch (e) {}
+    if (prev != null) try { app.scriptPreferences.userInteractionLevel = prev; } catch (e) {}
+  }
+}
+
+async function writeLog(docDir, report) {
+  try {
+    await ScriptLogPaths.ensureLogDirAsync(docDir);
+    var p = ScriptLogPaths.resolveLogPath(docDir, SCRIPT_ID);
+    fs.writeFileSync(p, _log.join("\n") + "\n\n=== REPORT ===\n" + JSON.stringify(report, null, 2) + "\n", "utf-8");
+    report.log_path = p;
+  } catch (e) { report.log_error = String(e && e.message || e); }
+}
+
+// ── SINGLE finalizer — EVERY exit (fail / success / fatal) routes through here so a
+//    fail-closed guard is loud even headless (writes log + records automation result).
+//    Mirrors apply_brand_style_preset.idjs _finish. (impl-audit P1 A-class.) ──
+async function finish(report) {
+  await writeLog(_docDir, report);
+  if (report.headless && AutomationBridge && AutomationBridge.recordAutomationResult) {
+    try { await AutomationBridge.recordAutomationResult(SCRIPT_ID, { ok: !!report.ok, summary: report }); } catch (e) {}
+  }
+  showStatus(report);
+  return report;
+}
+async function fail(report, reason) { report.ok = false; report.reason = reason; log("EXIT: " + reason); return await finish(report); }
+
+// ── main ──
+async function main() {
+  var report = { ok: false, headless: false, errors: [], warnings: [], created: [], reused: [] };
+
+  // bootstrap (double-click: __dirname undefined → resolve from app.activeScript)
+  if (!RuntimePaths.getBaseDir()) { await RuntimePaths.bootstrap(); BASE_DIR = RuntimePaths.getBaseDir(); }
+  log("=== Set Selection Weight ===");
+
+  // headless detection BEFORE reading opts (a malformed payload must NOT silently
+  // degrade to the manual dialog path → bridge deadlock; impl-audit P2/P3).
+  var payloadPending = false;
+  if (AutomationBridge && AutomationBridge.peekAutomationOptions) {
+    var pk = await _safe2(function () { return AutomationBridge.peekAutomationOptions(SCRIPT_ID); }, null);
+    payloadPending = !!(pk && pk.present);
+  }
+  var opts = {}, optsErr = null;
+  if (AutomationBridge) {
+    try { opts = (await AutomationBridge.readAutomationOptions(SCRIPT_ID)) || {}; }
+    catch (e) { optsErr = String(e && e.message || e); }
+  }
+  report.headless = payloadPending || !!(AutomationBridge && AutomationBridge.isAutomatedRun && AutomationBridge.isAutomatedRun(SCRIPT_ID));
+  if (optsErr) return fail(report, "Automation payload malformed JSON: " + optsErr);
+
+  if (!app.documents.length) return fail(report, "No open document.");
+  var doc = app.activeDocument;
+
+  // resolve docDir EARLY so every subsequent exit can writeLog (impl-audit P1).
+  var nativePath = null;
+  try { var fn = await doc.fullName; if (fn && fn.nativePath) { nativePath = String(fn.nativePath); _docDir = dirOf(nativePath); } } catch (e) {}
+
+  // selection
+  var range = readSelectionRange();
+  if (!range) return fail(report, "Select some text first (a text range, not a frame).");
+  var selText = _safe(function () { return String(range.contents); }, "");
+
+  // config
+  var config = null;
+  var candPaths = [];
+  if (opts.brandConfigPath) candPaths.push(String(opts.brandConfigPath));
+  var built = _safe(function () { return Wiring.buildBrandConfigCandidatePaths(nativePath, _docDir); }, []) || [];
+  for (var c = 0; c < built.length; c++) candPaths.push(built[c].path);
+  for (var pi = 0; pi < candPaths.length && !config; pi++) config = readJsonValidated(candPaths[pi]);
+  if (!config && !report.headless) { var picked = await pickConfigFile(); if (picked) config = readJsonValidated(picked); }
+  if (!config) return fail(report, "No valid brand_config found (searched " + candPaths.length + " path(s)).");
+
+  // script composition
+  var counts = { Han: 0, Latin: 0, shared: 0, unsupported: 0 };
+  var firstMain = null;
+  iterCodepoints(selText, function (cp) { var b = bucketOf(cp); counts[b]++; if (!firstMain && (b === "Han" || b === "Latin")) firstMain = b; });
+  if (counts.unsupported > 0) return fail(report, "Selection contains unsupported script (only Chinese/Han + Latin supported).");
+  if (counts.Han === 0 && counts.Latin === 0) return fail(report, "Selection has no Han/Latin text to set a weight on.");
+
+  var mixed = counts.Han > 0 && counts.Latin > 0;
+  var primaryScript = (counts.Han === counts.Latin) ? firstMain : (counts.Han > counts.Latin ? "Han" : "Latin");
+  var otherScript = primaryScript === "Han" ? "Latin" : "Han";
+  report.mixed = mixed; report.primaryScript = primaryScript;
+
+  // per-script current family (+ multi-family guard)
+  var pf = collectPerScriptFonts(range);
+  if (famCount(pf.famSet.Han) > 1 || famCount(pf.famSet.Latin) > 1) return fail(report, "Selection spans multiple fonts within one script; select uniform-font text.");
+  var curPrimary = pf.cur[primaryScript];
+  if (!curPrimary || !curPrimary.family) return fail(report, "Could not read the selection's " + primaryScript + " font.");
+
+  // roster + config membership (each present script — non-primary needs a roster too)
+  var presentScripts = [];
+  if (counts.Han > 0) presentScripts.push("Han");
+  if (counts.Latin > 0) presentScripts.push("Latin");
+  for (var s = 0; s < presentScripts.length; s++) {
+    var scr = presentScripts[s], cf = pf.cur[scr];
+    if (!cf || !cf.family) return fail(report, "Could not read the selection's " + scr + " font.");
+    if (langsOf(config, cf.family).length === 0) return fail(report, "Selection font '" + cf.family + "' is not in brand_config.");
+  }
+  var rosterPrimary = rosterOf(config, curPrimary.family);
+  if (!rosterPrimary.length) return fail(report, "No weights configured for '" + curPrimary.family + "'.");
+
+  // pick weight
+  var chosenWeight;
+  if (report.headless) {
+    chosenWeight = opts.weight;
+    if (!chosenWeight || rosterPrimary.indexOf(chosenWeight) < 0) return fail(report, "automationOptions.weight '" + chosenWeight + "' not in roster [" + rosterPrimary.join(", ") + "].");
+  } else {
+    chosenWeight = pickWeightDialog(rosterPrimary, defaultIndexFor(rosterPrimary, curPrimary.style));
+    if (!chosenWeight) return fail(report, "Cancelled.");
+  }
+  report.chosenWeight = chosenWeight;
+
+  // resolve concrete (font, weight) per script
+  var facePrimary = { font: curPrimary.family, weight: chosenWeight };
+  var faceOther = null;
+  if (mixed) {
+    var curOther = pf.cur[otherScript];
+    var rosterOther = rosterOf(config, curOther.family);
+    var r = resolveNonPrimary(config, curPrimary.family, chosenWeight, curOther.family, rosterOther);
+    if (r.loud) return fail(report, r.loud);
+    faceOther = { font: r.font, weight: r.weight };
+    if (r.warn) report.warnings.push("non-primary (" + otherScript + ") weight via " + r.via + ": " + r.font + " " + r.weight);
+  }
+
+  // preflight installed (no post-commit sweep in this operator → fail-closed on missing)
+  var instPrimary = _safe(function () { return SSBI._resolveInstalledFontName(doc, facePrimary.font, facePrimary.weight); }, null);
+  if (!instPrimary) return fail(report, "Brand font not installed: " + facePrimary.font + " " + facePrimary.weight + ". Install it or pick an installed weight.");
+  var instOther = null;
+  if (mixed) {
+    instOther = _safe(function () { return SSBI._resolveInstalledFontName(doc, faceOther.font, faceOther.weight); }, null);
+    if (!instOther) return fail(report, "Brand font not installed: " + faceOther.font + " " + faceOther.weight + ".");
+  }
+
+  // ── single-undo doScript: create CS(s) + apply. Apply failures throw → ENTIRE_SCRIPT
+  //    rolls back atomically; the throw surfaces here as a loud fail. ──
+  var abort = null;
+  try {
+    app.doScript(function () {
+      if (!_isValid(range)) { abort = "Selection is no longer valid."; return; }
+      var primaryTag = primaryScript === "Han" ? "Han" : "Latin";
+      var pcs = ensureWeightCS(doc, primaryTag, instPrimary);
+      if (!pcs) { abort = "Failed to create character style for " + instPrimary.family + " " + instPrimary.fontStyle; return; }
+      (pcs.created ? report.created : report.reused).push(pcs.name);
+      var ncs = null;
+      if (mixed) {
+        var otherTag = otherScript === "Han" ? "Han" : "Latin";
+        var nn = ensureWeightCS(doc, otherTag, instOther);
+        if (!nn) { abort = "Failed to create character style for " + instOther.family + " " + instOther.fontStyle; return; }
+        (nn.created ? report.created : report.reused).push(nn.name); ncs = nn.cs;
+      }
+      applyWeightToRange(range, pcs.cs, ncs, mixed, primaryScript, report);
+    }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, "Set Selection Weight");
+  } catch (eDS) {
+    // ENTIRE_SCRIPT rolled back → nothing applied; report is authoritative-failed.
+    report.applied = {}; report.created = []; report.reused = [];
+    return fail(report, "apply failed (rolled back): " + String(eDS && eDS.message || eDS));
+  }
+
+  if (abort) return fail(report, abort);
+  report.ok = true;
+  log("OK: " + primaryScript + " " + chosenWeight + (mixed ? " (mixed)" : "") + " created=[" + report.created.join(",") + "] reused=[" + report.reused.join(",") + "]");
+
+  return await finish(report);
+}
+
+var __result = null;
+try { __result = await main(); }
+catch (eTop) {
+  var fatal = String(eTop && (eTop.stack || eTop.message) || eTop);
+  try { log("FATAL: " + fatal); } catch (e) {}
+  var r = { ok: false, fatal: fatal, reason: "fatal: " + fatal, errors: [fatal], warnings: [], created: [], reused: [],
+    headless: !!(AutomationBridge && AutomationBridge.isAutomatedRun && AutomationBridge.isAutomatedRun(SCRIPT_ID)) };
+  try { __result = await finish(r); } catch (e) { __result = r; }
+}
+module.exports = __result;

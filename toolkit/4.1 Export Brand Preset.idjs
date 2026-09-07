@@ -1,0 +1,398 @@
+"use strict";
+
+/**
+ * export_brand_style_preset.idjs — 8D-ext-G operator #7 (the EXPORT half).
+ *
+ * Captures the active document's tuned `_T_p_*` paragraph-style definitions
+ * into a brand-level `brand_style_preset.json`, so the geometry (size /
+ * leading / indents / spacing / justification / composer / color / rules) can
+ * be re-applied onto a sibling document via apply_brand_style_preset.idjs.
+ *
+ * READ-ONLY on the document — it builds a preset FROM the styles, it does NOT
+ * mutate them. The single app.doScript(ENTIRE_SCRIPT) wrap exists ONLY for
+ * (a) a consistent force-POINTS measurement-unit context while reading numeric
+ * dims and (b) a clean single-undo boundary; nothing is written to the doc.
+ *
+ * Entry (CLAUDE.md gate #4): double-click via Scripts Panel wraps the whole
+ * file in an implicit async fn — so `var app = require("indesign").app` (the
+ * bridge auto-injects it; double-click does NOT) + top-level `await main()`,
+ * NO IIFE. Dual entry: bridge (automationOptions) + manual (defaults, no input
+ * dialog — one-click UI deferred per spec :2719).
+ *
+ *   bridge: automationOptions = {
+ *     presetPath: "Z:\\…\\Client-A_brand_style_preset.json",  // GUARANTEED-(a) explicit out path
+ *     brandName: "Client-A",                  // names the stable-anchor basename (GUARANTEED-(b))
+ *     docPath: "Z:\\…\\Client-A_Doc1.indd",   // doc to capture FROM; default = activeDocument
+ *     tolerance: { fontSize_pt, leading_pt, indent_pt, space_pt },  // ACTUAL per-dim tol (A2)
+ *     refuseOnDuplicate: false           // differing-payload dup-key: warn (default) vs refuse
+ *   }
+ *   manual: active doc → stable anchor (saved .indd dir) brand_style_preset.json.
+ *
+ * Output: brand_style_preset.json at the resolved brand-level path + a summary
+ * log via lib/script_log_paths.js. Returns the summary object.
+ *
+ * ── host-verify-pending (this file CANNOT be Node-tested — needs live InDesign) ──
+ * A host run (InDesign + a pipeline-built doc with tuned `_T_p_*` styles) must
+ * confirm:
+ *   1. STYLE CAPTURE — doc.allParagraphStyles enumerates grouped `_T_p_*`
+ *      styles (JS-Array `[i]` indexing, gate #2); ps.label reads the stamped
+ *      creation fingerprint synchronously; ps.fillColor / ps.ruleAbove* read as
+ *      Color object / rule props (captureColor/captureRule shapes correct).
+ *   2. FORCE-POINTS effect (A2) — on a non-POINTS-prefs doc (viewPreferences =
+ *      MM/INCHES, or a leaked scriptPreferences.measurementUnit), the captured
+ *      pointSize/indents/spacing are POINTS-correct (no 72× drift); dual-pin
+ *      restore leaves prefs untouched afterward.
+ *   3. OUTPUT WRITTEN — fs.writeFileSync lands the JSON at the resolved path;
+ *      validatePreset passes; re-export is byte-stable (same content_hash).
+ *   4. AUTOMATION PATH — readAutomationOptions("export_brand_style_preset")
+ *      delivers {presetPath, brandName, …}; recordAutomationResult round-trips.
+ *   5. UNSAVED-doc legible-fail — never-saved doc + no presetPath → clean
+ *      "needs a saved doc or presetPath" report, no null-path crash.
+ */
+
+var indesign = require("indesign");
+var app = (typeof globalThis !== "undefined" && globalThis.app)
+    ? globalThis.app
+    : indesign.app;
+var ScriptLanguage = indesign.ScriptLanguage;
+var UndoModes = indesign.UndoModes;
+var MeasurementUnits = indesign.MeasurementUnits;
+var fs = require("fs");
+
+var SCIO = require("./lib/style_config_io.js");
+var glue = require("./lib/brand_preset_export_glue.js");
+var VS = require("./lib/visual_snapshot.js");
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+
+var captureColor = VS._internal.captureColor;
+var captureRule = VS._internal.captureRule;   // exported additively (G→r7 PIN)
+
+var AutomationBridge = null;
+try { AutomationBridge = require("./lib/automation_bridge.js"); } catch (e) {}
+
+var SCRIPT_ID = "export_brand_style_preset";
+var EXPORTER_TAG = "export_brand_style_preset/8D-ext-G";
+
+// ─── log accumulator ────────────────────────────────────────────────
+
+var _logLines = [];
+function plog(m) {
+    var line = "[export-preset] " + m;
+    _logLines.push(line);
+    try { console.log(line); } catch (e) {}
+}
+
+// ─── doc resolution (DOM by name, never ===) ─────────────────────────
+
+async function _resolveDocByPath(pathStr) {
+    if (!pathStr) return null;
+    var base = String(pathStr).replace(/^.*[\\/]/, "");
+    for (var i = 0; i < app.documents.length; i++) {
+        var d = app.documents.item(i);
+        try { if (String(d.name) === base) return d; } catch (e) {}
+    }
+    try {
+        var uxp = require("uxp");
+        var lfs = uxp.storage.localFileSystem;
+        var url = "file:///" + String(pathStr).replace(/\\/g, "/").replace(/^\/+/, "");
+        var entry = await lfs.getEntryWithUrl(url);
+        return await app.open(entry);
+    } catch (eOpen) {
+        return null;
+    }
+}
+
+// ─── brand-name resolution (automationOptions → co-located brand_config) ─
+// fable r1 P1: the candidate-order + field-priority logic is HOISTED into the
+// shared glue (glue.resolveBrandName) so apply mirrors it byte-identically — no
+// operator-private fork. fs stays here (gate #3) as the injected reader. NULL →
+// fixed-basename fallback (glue.presetBasename handles).
+function _readJsonSync(p) {
+    var raw = null;
+    try { raw = fs.readFileSync(p, "utf-8"); } catch (e) { return null; }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (eP) { return null; }
+}
+async function _resolveBrandName(docDir, opts) {
+    opts = opts || {};
+    return glue.resolveBrandName(docDir, opts._docName || "", _readJsonSync, opts.brandName);
+}
+
+// ─── live per-style payload read (sync; runs inside force-POINTS doScript) ─
+// fable r1 (gimpl3) P2: the field-set + shape logic is HOISTED into the shared
+// glue (glue.readStylePayload) so EXPORT and APPLY read the IDENTICAL shape from
+// a live style — export-writes-shape === apply-reads-shape forever, no
+// mirror-drift. captureColor/captureRule stay host-side, injected (gate #3).
+
+var STYLE_READ_DEPS = { captureColor: captureColor, captureRule: captureRule };
+
+function _readStylePayload(ps) { return glue.readStylePayload(ps, STYLE_READ_DEPS); }
+
+// ─── _T_p_* collection: glue.collectTPStyles (gate #2 grouped walk; fable r1
+//     P2 — no name-keyed dedup so distinct same-named grouped styles survive) ──
+
+// ─── build one entry from a style (label → keys, live → payload) ──────
+
+function _buildEntry(ps, capture) {
+    var label = ""; try { label = String(ps.label || ""); } catch (e) {}
+    var matchKey = SCIO.deriveMatchKey(label);
+    if (!matchKey) return null;            // foreign / prefix-less / non-JSON label → skip+report
+    var creationKey = SCIO.parseCreationKey(label);
+    var name = ""; try { name = String(ps.name); } catch (e) {}
+    var payload = SCIO.buildPayload(capture);
+    var role = glue.roleFromStyleName(name);
+    var qualKey = SCIO.deriveQualKey({
+        role: role,
+        fillColor: capture.fillColor,
+        justification: capture.justification
+    });
+    return {
+        name: name,
+        match_key: matchKey,
+        role: role,
+        qual_key: qualKey,
+        payload: payload,
+        _resolved_font: creationKey
+            ? { family: creationKey.latinFamily || null, style: creationKey.latinStyle || null }
+            : null
+    };
+}
+
+// ─── main ─────────────────────────────────────────────────────────────
+
+async function main() {
+    var opts = null;
+    if (AutomationBridge) {
+        try { opts = await AutomationBridge.readAutomationOptions(SCRIPT_ID); }
+        catch (e) { opts = null; }
+    }
+    opts = opts || {};
+    var refuseOnDuplicate = !!opts.refuseOnDuplicate;
+
+    // 1. resolve doc (by name, never ===)
+    var doc = null;
+    if (opts.docPath) { doc = await _resolveDocByPath(opts.docPath); }
+    if (!doc) { try { doc = app.activeDocument; } catch (eA) {} }
+    if (!doc) {
+        var noDoc = glue.buildSummary({ ok: false, reason: "no active document", pathSource: "none" });
+        plog("ABORT: no active document");
+        // fable r1 P3: route through _finish like every other abort path so a
+        // bridge run on an empty host still logs + recordAutomationResult.
+        // ScriptLogPaths handles empty docDir via temp fallback.
+        await _finish(noDoc, "");
+        return noDoc;
+    }
+    var docName = ""; try { docName = String(doc.name); } catch (eN) {}
+
+    // 2. resolve output path OUTSIDE the doScript block (doc.fullName is a
+    //    Promise — gate #3; await + read .nativePath here, never inside sync).
+    var nativePath = null;
+    try {
+        var fn = await doc.fullName;
+        if (fn && fn.nativePath) nativePath = String(fn.nativePath);
+    } catch (eFN) { nativePath = null; }
+    var docDir = glue.dirOf(nativePath);
+
+    var brandName = await _resolveBrandName(docDir, { brandName: opts.brandName, _docName: docName });
+    var pathRes = glue.resolvePresetPath({
+        explicitPresetPath: opts.presetPath,
+        docNativePath: nativePath,
+        brandName: brandName
+    });
+    if (!pathRes.ok) {
+        plog("ABORT: " + pathRes.error);
+        var failSum = glue.buildSummary({
+            ok: false, reason: pathRes.error, pathSource: pathRes.source,
+            sourceDocument: { name: docName, source_hash: null }
+        });
+        await _finish(failSum, docDir);
+        return failSum;
+    }
+    var outputPath = pathRes.path;
+    plog("doc=" + docName + " out=" + outputPath + " (" + pathRes.source + ") brand=" + (brandName || "(none)"));
+
+    // 3. capture all _T_p_* inside ONE force-POINTS ENTIRE_SCRIPT doScript.
+    //    READ-ONLY — the doScript is for measurement-unit context + a clean
+    //    undo boundary only (nothing is written to the doc).
+    var tpStyles = glue.collectTPStyles(doc);
+    var entries = [];
+    var skippedForeign = 0;
+    var captureNote = { scanned: tpStyles.length };
+
+    function doCapture() {
+        SCIO.withPointsMeasurement(
+            { app: app, doc: doc, MeasurementUnits: MeasurementUnits },
+            function () {
+                for (var i = 0; i < tpStyles.length; i++) {
+                    var ps = tpStyles[i];
+                    var capture = _readStylePayload(ps);
+                    var entry = _buildEntry(ps, capture);
+                    if (!entry) { skippedForeign++; continue; }
+                    entries.push(entry);
+                }
+            }
+        );
+    }
+    try {
+        app.doScript(doCapture, ScriptLanguage.JAVASCRIPT, undefined,
+            UndoModes.ENTIRE_SCRIPT, "Export Brand Style Preset");
+    } catch (eDS) {
+        plog("doScript failed (" + (eDS && eDS.message || eDS) + ") — retry raw");
+        try { doCapture(); } catch (eRaw) {
+            plog("raw capture failed: " + (eRaw && eRaw.message || eRaw));
+        }
+    }
+    plog("scanned=" + tpStyles.length + " captured=" + entries.length + " skippedForeign=" + skippedForeign);
+
+    // 4. uniqueness collapse (byte-equal → fold one; differing → diagnostic)
+    var collapse = SCIO.collapseEntries(entries);
+    var policy = glue.classifyCollapse(collapse, refuseOnDuplicate);
+    var warnings = [];
+    if (policy.collapsedGroups.length) {
+        plog("collapsed " + policy.collapsedGroups.length + " byte-equal match_key group(s)");
+    }
+    if (policy.hasDuplicate) {
+        for (var di = 0; di < policy.diagnostics.length; di++) {
+            warnings.push(policy.diagnostics[di].message);
+            plog("DUP-KEY: " + policy.diagnostics[di].message);
+        }
+    }
+
+    var baseSummary = {
+        outputPath: outputPath,
+        pathSource: pathRes.source,
+        sourceDocument: { name: docName, source_hash: null },
+        stylesScanned: tpStyles.length,
+        stylesCaptured: entries.length,
+        skippedForeign: skippedForeign,
+        collapsedGroups: policy.collapsedGroups,
+        diagnostics: policy.diagnostics,
+        warnings: warnings
+    };
+
+    // Guard: nothing to export → do NOT clobber an existing preset.
+    if (entries.length === 0) {
+        // fable r1 P4: branch the reason — "0 _T_p_* found" vs "N scanned, all
+        // foreign-skipped" (the summary counters disambiguate, but so should the
+        // headline).
+        var emptySum = glue.buildSummary(_merge(baseSummary, {
+            ok: true, written: false,
+            reason: glue.emptyExportReason(tpStyles.length, skippedForeign)
+        }));
+        plog(skippedForeign > 0
+            ? ("no captured styles — all " + skippedForeign + " _T_p_* foreign-skipped, nothing written")
+            : "no _T_p_* styles — nothing written");
+        await _finish(emptySum, docDir);
+        return emptySum;
+    }
+
+    // Refuse path (opt-in): differing-payload duplicate-key + refuseOnDuplicate.
+    if (policy.refuse) {
+        var refusedSum = glue.buildSummary(_merge(baseSummary, {
+            ok: false, written: false, refused: true,
+            reason: "differing-payload duplicate match_key(s) and refuseOnDuplicate=true — not written"
+        }));
+        plog("REFUSED write (duplicate-key, refuseOnDuplicate=true)");
+        await _finish(refusedSum, docDir);
+        return refusedSum;
+    }
+
+    // 5. build preset (#1 buildPreset) — inject preset_id + timestamps here.
+    var presetId = glue.derivePresetId(brandName, docName);
+    var nowIso = new Date().toISOString();
+    var matchKeys = [];
+    for (var mi = 0; mi < collapse.entries.length; mi++) matchKeys.push(collapse.entries[mi].match_key);
+    var derivationOpts = {
+        tolerance: opts.tolerance || SCIO.DEFAULT_TOLERANCE,   // ACTUAL per-dim tol (A2)
+        splitMasterFromBody: true,
+        spacePreservingMerge: true,
+        dims: "default"
+    };
+    var preset = SCIO.buildPreset({
+        presetId: presetId,
+        entries: collapse.entries,
+        sourceDocument: { name: docName, source_hash: SCIO.computeSourceHash(matchKeys) },
+        derivationOpts: derivationOpts,
+        exporterCommit: EXPORTER_TAG,
+        createdAt: nowIso,
+        updatedAt: nowIso
+    });
+
+    // 6. validate BEFORE writing.
+    var validation = SCIO.validatePreset(preset);
+    if (!validation.ok) {
+        var invalidSum = glue.buildSummary(_merge(baseSummary, {
+            ok: false, written: false,
+            reason: "validatePreset failed: " + validation.errors.join("; "),
+            presetId: presetId, presetContentHash: preset.preset_content_hash,
+            derivationId: preset.derivation_id, entryCount: collapse.entries.length,
+            validation: validation
+        }));
+        plog("VALIDATION FAILED: " + validation.errors.join("; "));
+        await _finish(invalidSum, docDir);
+        return invalidSum;
+    }
+    for (var wi = 0; wi < validation.warnings.length; wi++) warnings.push(validation.warnings[wi]);
+
+    // 7. write the preset JSON (direct write — atomic rename is UXP-denylisted).
+    var written = false, writeErr = null;
+    try {
+        fs.writeFileSync(outputPath, JSON.stringify(preset, null, 2), "utf-8");
+        written = true;
+    } catch (eW) {
+        writeErr = String(eW && eW.message || eW);
+        plog("WRITE FAILED: " + writeErr);
+    }
+
+    var summary = glue.buildSummary(_merge(baseSummary, {
+        ok: written,
+        written: written,
+        reason: writeErr ? ("write failed: " + writeErr) : null,
+        sourceDocument: { name: docName, source_hash: preset.source_document.source_hash },
+        presetId: presetId,
+        presetContentHash: preset.preset_content_hash,
+        derivationId: preset.derivation_id,
+        entryCount: collapse.entries.length,
+        validation: validation,
+        warnings: warnings
+    }));
+    plog("DONE written=" + written + " entries=" + collapse.entries.length
+        + " preset_id=" + presetId + " content_hash=" + preset.preset_content_hash);
+    await _finish(summary, docDir);
+    return summary;
+}
+
+// shallow merge b over a (new object)
+function _merge(a, b) {
+    var out = {};
+    var k;
+    for (k in a) { if (Object.prototype.hasOwnProperty.call(a, k)) out[k] = a[k]; }
+    for (k in b) { if (Object.prototype.hasOwnProperty.call(b, k)) out[k] = b[k]; }
+    return out;
+}
+
+// log + automation result, best-effort.
+async function _finish(summary, docDir) {
+    summary.ts = summary.ts || _nowIso();
+    try {
+        await ScriptLogPaths.ensureLogDirAsync(docDir);
+        var logPath = ScriptLogPaths.resolveLogPath(docDir, SCRIPT_ID);
+        var body = _logLines.join("\n") + "\n\n=== SUMMARY ===\n" + JSON.stringify(summary, null, 2) + "\n";
+        fs.writeFileSync(logPath, body, "utf-8");
+        summary.log_path = logPath;
+    } catch (eLog) {
+        summary.log_error = String(eLog && eLog.message || eLog);
+    }
+    if (AutomationBridge && AutomationBridge.isAutomatedRun && AutomationBridge.isAutomatedRun(SCRIPT_ID)
+        && AutomationBridge.recordAutomationResult) {
+        try { await AutomationBridge.recordAutomationResult(SCRIPT_ID, { ok: !!summary.ok, summary: summary }); }
+        catch (eAR) {}
+    }
+}
+
+function _nowIso() { try { return new Date().toISOString(); } catch (e) { return null; } }
+
+var __result = null;
+try { __result = await main(); }
+catch (eTop) { __result = { ok: false, fatal: String(eTop && (eTop.stack || eTop.message) || eTop) }; }
+module.exports = __result;

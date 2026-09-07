@@ -1,0 +1,4083 @@
+"use strict";
+
+/**
+ * export_translation_package.idjs — UXP version
+ *
+ * Export an offline translation package:
+ * - preview.pdf
+ * - segments.json
+ * - translations_template.json
+ */
+
+var indesign = require("indesign");
+var app = indesign.app;
+var ScriptLanguage = indesign.ScriptLanguage;
+var UndoModes = indesign.UndoModes;
+var ExportFormat = indesign.ExportFormat;
+var SaveOptions = indesign.SaveOptions;
+var MeasurementUnits = indesign.MeasurementUnits;
+var Leading = indesign.Leading;
+var fs = require("fs");
+var uxp = require("uxp");
+var lfs = uxp.storage.localFileSystem;
+
+var common = require("./lib/translation_common.js");
+var RuntimePaths = require("./lib/runtime_paths.js");
+var FileUtils = require("./lib/file_utils.js");
+var getCollectionItem = require("./lib/utils.js").getCollectionItem;
+var VisualSnapshot = require("./lib/visual_snapshot.js");
+var ScriptClassifier = require("./lib/script_classifier.js");
+var EmphasisExtractor = require("./lib/emphasis_extractor.js");
+var EmphasisReport = require("./lib/emphasis_report.js");
+var AutomationBridge = require("./lib/automation_bridge.js");
+var ZipCore = require("./lib/zip_core.js");
+var ImportStateStore = require("./lib/import_state_store.js");
+var ExportDialog = require("./lib/export_dialog.js");
+var ProjectMetaLabel = require("./lib/project_meta_label.js");
+var ProjectMetaUxp = require("./lib/project_meta_uxp.js");
+var ProjectMetaAssemble = require("./lib/project_meta_assemble.js");
+var LangScriptTable = require("./lib/lang_script_table.js");
+var VersionCarry = require("./lib/version_carry.js");
+var VersionManifest = require("./lib/version_manifest.js");
+var ProjectUid = require("./lib/project_uid.js");
+
+// Canonical source/target language options for the export dialog — codes from
+// lib/lang_script_table.js (single source of truth, shared with the webapp's
+// PROJECT_LANGUAGES); names are cosmetic labels mirroring the webapp display.
+var __LANG_NAMES = {
+    en: "English", fr: "French", es: "Spanish", de: "German",
+    "zh-CN": "Chinese Simplified", "zh-TW": "Chinese Traditional", "zh-HK": "Chinese Traditional (HK)",
+    ja: "Japanese", ko: "Korean", th: "Thai", ar: "Arabic"
+};
+function __buildLangOptions() {
+    var codes = Object.keys(LangScriptTable.LANG_SCRIPT_TABLE || {});
+    var out = [];
+    for (var i = 0; i < codes.length; i++) {
+        out.push({ code: codes[i], label: (__LANG_NAMES[codes[i]] || codes[i]) + " (" + codes[i] + ")" });
+    }
+    return out;
+}
+var ProcessingDialog = require("./lib/processing_dialog.js");
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+
+// 模块级 processing 句柄 —— main() 把自己的 ProcessingDialog 实例
+// 暴露到这里，万一 main 抛 fatal，顶层 finally 也能兜底关掉，不让
+// "Processing..." 弹窗一直挂着。
+var __topLevelProcessing = null;
+
+// Unpack common functions used throughout
+var readUtf8File = common.readUtf8File;
+var writeUtf8File = common.writeUtf8File;
+var normalizeSoftBreaks = common.normalizeSoftBreaks;
+var hashDjb2Hex = common.hashDjb2Hex;
+var normalizeText = common.normalizeText;
+var sourceHashForText = common.sourceHashForText;
+var isSpecialControlCharCode = common.isSpecialControlCharCode;
+var isAnchoredObjectOnlyText = common.isAnchoredObjectOnlyText;
+var paragraphTextNoReturn = common.paragraphTextNoReturn;
+var objectTypeName = common.objectTypeName;
+var isTypeName = common.isTypeName;
+var findAncestorByType = common.findAncestorByType;
+var getPageIndexFromContainer = common.getPageIndexFromContainer;
+var detectTableCellMetaForParagraph = common.detectTableCellMetaForParagraph;
+var buildTableCellMetaFromObjects = common.buildTableCellMetaFromObjects;
+var tableCellSyntheticIndex = common.tableCellSyntheticIndex;
+var getXmlAttr = common.getXmlAttr;
+var pad2 = common.pad2;
+var pad3 = common.pad3;
+var utcIsoNow = common.utcIsoNow;
+var compactTimestampNow = common.compactTimestampNow;
+
+var SCHEMA_VERSION = "translation-mvp-1";
+var EXPORT_SCRIPT_REV = "2026-02-24-table-cells-v7";
+var XML_TAG_NAME = "TranslationSegment";
+var XML_TID_ATTR = "tid";
+var TID_FALLBACK_BLOCK_RATIO = 0.05;
+var _masterPageMap = null;
+
+// JSONUtil removed — UXP has native JSON.parse/JSON.stringify
+// ==================== Helpers ====================
+
+function stripFileExtension(name) {
+    var idx = name.lastIndexOf(".");
+    if (idx > 0) {
+        return name.substring(0, idx);
+    }
+    return name;
+}
+
+function sanitizeForPath(name) {
+    return name.replace(/[\\\/:\*\?"<>\|]/g, "_");
+}
+
+function toFiniteNumber(v) {
+    var n = Number(v);
+    return isFinite(n) ? n : NaN;
+}
+
+function uniqueSortedNumbers(arr) {
+    var seen = {};
+    var out = [];
+    var i, key;
+    for (i = 0; i < arr.length; i++) {
+        key = String(arr[i]);
+        if (!seen[key]) {
+            seen[key] = true;
+            out.push(arr[i]);
+        }
+    }
+    out.sort(function (a, b) { return a - b; });
+    return out;
+}
+
+// normalizeForHash removed -- use normalizeText from translation_common.jsxinc
+// (unified: strips BOM + zero-width + U+0007 + soft breaks, consistent with import side)
+
+// hashDjb2Hex, normalizeText, sourceHashForText -> translation_common.jsxinc
+
+function ensureFolder(folder) {
+    if (!folder.exists) {
+        return folder.create();
+    }
+    return true;
+}
+
+// writeUtf8File, normalizeSoftBreaks, isSpecialControlCharCode -> translation_common.jsxinc
+
+function isWhitespaceCharCode(code) {
+    return code === 9 || code === 10 || code === 13 || code === 32 || code === 160;
+}
+
+function isControlOnlyText(text) {
+    var s = safeString(text);
+    var hasControl = false;
+    var i, code;
+    for (i = 0; i < s.length; i++) {
+        code = s.charCodeAt(i);
+        if (isSpecialControlCharCode(code)) {
+            hasControl = true;
+            continue;
+        }
+        if (isWhitespaceCharCode(code)) {
+            continue;
+        }
+        return false;
+    }
+    return hasControl;
+}
+
+// isAnchoredObjectOnlyText -> translation_common.jsxinc
+
+function detectSegmentKindFromText(text) {
+    var s = safeString(text);
+    // U+FFFC = anchored inline object (chart, table, image) - non-translatable
+    if (isAnchoredObjectOnlyText(s)) {
+        return "control_anchor";
+    }
+    if (!isControlOnlyText(s)) {
+        return "text";
+    }
+    if (s.indexOf(String.fromCharCode(0x16)) >= 0) {
+        return "table_anchor";
+    }
+    return "control_anchor";
+}
+
+// isTypeName, findAncestorByType -> translation_common.jsxinc
+
+// detectTableCellMetaForParagraph -> translation_common.jsxinc
+// buildTableCellMetaFromObjects -> translation_common.jsxinc
+// (export uses _masterPageMap global; getPageIndexFromContainer in common takes it as param)
+
+// getPageIndexFromContainer: export callers pass _masterPageMap as 2nd arg
+
+function paragraphStableKey(para, storyId, paraIdx) {
+    var paraId = "";
+    var idx = Number(paraIdx);
+    var cellMeta = arguments.length > 3 ? arguments[3] : null;
+    var tableId = Number(cellMeta && cellMeta.table_id);
+    var tableIndex = Number(cellMeta && cellMeta.table_index);
+    var row = Number(cellMeta && cellMeta.cell_row);
+    var col = Number(cellMeta && cellMeta.cell_col);
+    var cp = Number(cellMeta && cellMeta.cell_para_index);
+    var tableKey = "";
+    var tableKeyPart = "";
+    if (isFinite(tableId) && tableId >= 0 && isFinite(row) && row >= 0 && isFinite(col) && col >= 0) {
+        tableKeyPart = "id_" + String(tableId);
+    } else if (isFinite(tableIndex) && tableIndex >= 0 && isFinite(row) && row >= 0 && isFinite(col) && col >= 0) {
+        tableKeyPart = "idx_" + String(tableIndex);
+    }
+    if (tableKeyPart) {
+        tableKey = "table_" + tableKeyPart;
+        if (!isFinite(cp) || cp < 0) {
+            cp = isFinite(idx) && idx >= 0 ? idx : 0;
+        }
+        return "story_" + safeString(storyId) + "_" + tableKey + "_r" + String(row) + "_c" + String(col) + "_p" + String(cp);
+    }
+    try {
+        paraId = safeString(para.id);
+    } catch (e0) {
+        paraId = "";
+    }
+    if (paraId) {
+        return "pid_" + paraId;
+    }
+    return "story_" + safeString(storyId) + "_para_" + safeString(paraIdx);
+}
+
+// tableCellSyntheticIndex -> translation_common.js (shared with v2_pipeline label writer)
+
+function paragraphIndexHintForTid(para, fallbackIdx) {
+    var idx = Number(fallbackIdx);
+    var paraIdNum = NaN;
+    var paraIdxNum = NaN;
+    var cellMeta = arguments.length > 2 ? arguments[2] : null;
+    if (!isFinite(idx) || idx < 0) {
+        idx = 0;
+    }
+    if (cellMeta) {
+        return tableCellSyntheticIndex(cellMeta, idx);
+    }
+    try {
+        paraIdNum = Number(para.id);
+    } catch (e0) {
+        paraIdNum = NaN;
+    }
+    if (isFinite(paraIdNum) && paraIdNum >= 0) {
+        return paraIdNum;
+    }
+    try {
+        paraIdxNum = Number(para.index);
+    } catch (e1) {
+        paraIdxNum = NaN;
+    }
+    if (isFinite(paraIdxNum) && paraIdxNum >= 0) {
+        return paraIdxNum;
+    }
+    return idx;
+}
+
+function storyIdForParagraph(para, fallbackStoryId) {
+    var storyIdNum = Number(fallbackStoryId);
+    var s = null;
+    var candidate = NaN;
+    if (!isFinite(storyIdNum)) {
+        storyIdNum = -1;
+    }
+    try {
+        s = para.parentStory;
+    } catch (e0) {
+        s = null;
+    }
+    if (s && s.isValid) {
+        try {
+            candidate = Number(s.id);
+        } catch (e1) {
+            candidate = NaN;
+        }
+        if (isFinite(candidate)) {
+            storyIdNum = candidate;
+        }
+    }
+    return storyIdNum;
+}
+
+function paragraphUidForParagraph(para) {
+    var uid = NaN;
+    try {
+        uid = Number(para.id);
+    } catch (e0) {
+        uid = NaN;
+    }
+    if (isFinite(uid) && uid >= 0) {
+        return uid;
+    }
+    return -1;
+}
+
+function segmentParagraphIndexForOutput(para, fallbackIdx, tableCellMeta) {
+    var idx = Number(fallbackIdx);
+    if (tableCellMeta) {
+        return paragraphIndexHintForTid(para, fallbackIdx, tableCellMeta);
+    }
+    if (!isFinite(idx) || idx < 0) {
+        return 0;
+    }
+    return idx;
+}
+
+function lineRectsForTableCellParagraph(para) {
+    var rects = [];
+    var table = null;
+    var story = null;
+    var frame = null;
+    var gb = null;
+
+    if (!para || !para.isValid) {
+        return rects;
+    }
+
+    table = findAncestorByType(para, "Table", 14);
+    if (table && table.isValid) {
+        try {
+            story = table.parentStory;
+        } catch (e0) {
+            story = null;
+        }
+    }
+
+    if (story && story.isValid) {
+        try {
+            if (story.textContainers && story.textContainers.length > 0) {
+                frame = getCollectionItem(story.textContainers, 0);
+            }
+        } catch (e1) {
+            frame = null;
+        }
+    }
+
+    if (!frame || !frame.isValid) {
+        try {
+            if (para.parentTextFrames && para.parentTextFrames.length > 0) {
+                frame = para.parentTextFrames[0];
+            }
+        } catch (e2) {
+            frame = null;
+        }
+    }
+
+    if (!frame || !frame.isValid) {
+        return rects;
+    }
+
+    try {
+        gb = frame.geometricBounds;
+        if (gb && gb.length >= 4) {
+            rects.push({
+                page_index: getPageIndexFromContainer(frame, _masterPageMap),
+                x0: toFiniteNumber(gb[1]),
+                y0: toFiniteNumber(gb[0]),
+                x1: toFiniteNumber(gb[3]),
+                y1: toFiniteNumber(gb[2])
+            });
+        }
+    } catch (e3) {}
+
+    return rects;
+}
+
+function pageIndexesFromLineRects(rects) {
+    var pageIndexes = [];
+    var i;
+    if (!rects) {
+        return pageIndexes;
+    }
+    for (i = 0; i < rects.length; i++) {
+        pageIndexes.push(rects[i].page_index);
+    }
+    return uniqueSortedNumbers(pageIndexes);
+}
+
+function attachTableCellMetaToSegment(segObj, tableCellMeta) {
+    if (!segObj || !tableCellMeta) {
+        return;
+    }
+    segObj.table_id = tableCellMeta.table_id;
+    segObj.table_index = tableCellMeta.table_index;
+    segObj.table_uid = tableCellMeta.table_uid;
+    segObj.cell_uid = tableCellMeta.cell_uid;
+    segObj.cell_row = tableCellMeta.cell_row;
+    segObj.cell_col = tableCellMeta.cell_col;
+    segObj.row_span = tableCellMeta.row_span;
+    segObj.col_span = tableCellMeta.col_span;
+    segObj.cell_para_index = tableCellMeta.cell_para_index;
+    segObj.cell_para_count = tableCellMeta.cell_para_count;
+}
+
+// Capture paragraph-level leading. Returns:
+//   { leading_pt, leading_ratio, leading_auto }
+//   - leading_pt > 0 and leading_ratio === 0: explicit absolute leading in pt
+//   - leading_pt === 0 and leading_ratio > 0: AUTO leading with resolved ratio
+//   - both zero: unreadable (rare; only when both para.leading and the style's
+//     autoLeadingPercentage are inaccessible)
+//
+// Strategy: try to parse para.leading as a sane pt number (0 < n < 1000).
+// Anything else — AUTO sentinels (FourCC 1635019116), enum objects, NothingEnum
+// for mixed leading, throws — routes to AUTO and resolves the ratio from the
+// applied paragraph style's autoLeadingPercentage (default 120). This is more
+// robust than enum-identity comparison, which behaves inconsistently in UXP.
+function captureLeading(para) {
+    var leadingPt = 0;
+    var leadingRatio = 0;
+    var isAuto = false;
+    var raw;
+    var rawIsSanePt = false;
+    try {
+        raw = para.leading;
+        var n = toFiniteNumber(raw);
+        if (isFinite(n) && n > 0 && n < 1000) {
+            leadingPt = n;
+            rawIsSanePt = true;
+        }
+    } catch (e0) {}
+    if (!rawIsSanePt) {
+        // Treat anything that isn't a normal pt number as AUTO and resolve via
+        // the applied paragraph style. Fall back to 120% (InDesign default) if
+        // the style or its property is inaccessible.
+        isAuto = true;
+        var pct = 120;
+        try {
+            var styled = para.appliedParagraphStyle;
+            if (styled) {
+                var p = toFiniteNumber(styled.autoLeadingPercentage);
+                if (isFinite(p) && p > 0) pct = p;
+            }
+        } catch (e1) {}
+        leadingRatio = pct / 100;
+    }
+    if (!isFinite(leadingPt) || leadingPt <= 0) leadingPt = 0;
+    if (!isFinite(leadingRatio) || leadingRatio <= 0) leadingRatio = 0;
+    return { leading_pt: leadingPt, leading_ratio: leadingRatio, leading_auto: isAuto };
+}
+
+// #34 G1 (export side): doc-level hyperlink index. Built once per
+// extractSegments() invocation, keyed by storyId (as string). Each
+// entry is an array of hyperlink records:
+//   { storyStartIdx, storyEndIdx, url, name, text }
+//
+// Filled by _collectDocHyperlinksByStory(doc) before the per-paragraph
+// loop; consumed by buildSegmentObjectFromParagraph to attach
+// `source_links[]` (paragraph-relative offsets) to each segment so the
+// webapp can render them as underlined anchors on the source side.
+//
+// Only HyperlinkTextSource → HyperlinkURLDestination links are
+// captured for v1 — PageItem-source / Text-destination / Page-
+// destination need re-targeting we don't have yet.
+var _docHyperlinkByStory = null;
+
+function _collectDocHyperlinksByStory(doc) {
+    var byStory = {};
+    var hl;
+    try { hl = doc.hyperlinks; } catch (e) { return byStory; }
+    var n = 0; try { n = hl.length; } catch (e2) {}
+    for (var i = 0; i < n; i++) {
+        var h;
+        try { h = hl.item(i); } catch (e3) { continue; }
+        if (!h) continue;
+        var srcKind = ""; try { srcKind = h.source && h.source.constructor.name; } catch (e4) {}
+        if (srcKind !== "HyperlinkTextSource") continue;
+        var destKind = ""; try { destKind = h.destination && h.destination.constructor.name; } catch (e5) {}
+        if (destKind !== "HyperlinkURLDestination") continue;
+        var url = ""; try { url = String(h.destination.destinationURL); } catch (e6) {}
+        if (!url) continue;
+        var rec = {
+            name:           "",
+            url:            url,
+            storyStartIdx:  -1,
+            storyEndIdx:    -1,
+            text:           ""
+        };
+        try { rec.name = String(h.name); } catch (e7) {}
+        var sid = "";
+        try {
+            var st = h.source.sourceText;
+            if (!st) continue;
+            try { sid = String(st.parentStory.id); } catch (e8) {}
+            if (!sid) continue;
+            try { rec.storyStartIdx = st.characters.item(0).index; } catch (e9) {}
+            try {
+                var nc = st.characters.length;
+                if (nc > 0) rec.storyEndIdx = st.characters.item(nc - 1).index;
+            } catch (e10) {}
+            try { rec.text = String(st.contents); } catch (e11) {}
+        } catch (e12) { continue; }
+        if (rec.storyStartIdx < 0 || rec.storyEndIdx < 0) continue;
+        if (!byStory[sid]) byStory[sid] = [];
+        byStory[sid].push(rec);
+    }
+    return byStory;
+}
+
+// Find hyperlinks that intersect a paragraph's story-relative char
+// range, then project to paragraph-relative offsets. Records output
+// shape: { offset, length, url, name, text }.
+function _linksForParagraph(para, storyId) {
+    if (!_docHyperlinkByStory) return [];
+    var key = String(storyId);
+    var bucket = _docHyperlinkByStory[key];
+    if (!bucket || !bucket.length) return [];
+    var paraStart = -1, paraEnd = -1;
+    try { paraStart = para.characters.item(0).index; } catch (e) { return []; }
+    try {
+        var nch = para.characters.length;
+        if (nch > 0) paraEnd = para.characters.item(nch - 1).index;
+    } catch (e2) { return []; }
+    if (paraStart < 0 || paraEnd < paraStart) return [];
+    var out = [];
+    for (var i = 0; i < bucket.length; i++) {
+        var rec = bucket[i];
+        // Skip hyperlinks that don't overlap the paragraph at all.
+        if (rec.storyEndIdx < paraStart) continue;
+        if (rec.storyStartIdx > paraEnd) continue;
+        // Clamp to paragraph boundary (rare: hyperlink crosses para break)
+        var clampedStart = Math.max(rec.storyStartIdx, paraStart);
+        var clampedEnd   = Math.min(rec.storyEndIdx,   paraEnd);
+        if (clampedEnd < clampedStart) continue;
+        var paraOffset = clampedStart - paraStart;
+        var paraLength = clampedEnd - clampedStart + 1;   // inclusive endIdx
+        if (paraLength <= 0) continue;
+        out.push({
+            offset:  paraOffset,
+            length:  paraLength,
+            url:     rec.url,
+            name:    rec.name,
+            // sourceText slice corresponding to clamped range — useful for
+            // sanity-checking webapp render against actual contents
+            text:    rec.text.slice(clampedStart - rec.storyStartIdx, clampedEnd - rec.storyStartIdx + 1),
+            // #E2E-4: visual_underline = the link should display with a
+            // visible underline on import, even when the source paragraph's
+            // character.underline is false. InDesign auto-underlines
+            // hyperlinks in PDF export, so users expect the round-trip to
+            // preserve that visual. Always true for now (no per-link DOM
+            // signal distinguishes "designer wanted no underline" from
+            // "InDesign default underline"); import side honors this by
+            // applying `range.underline=true` as a character-level override.
+            visual_underline: true
+        });
+    }
+    // #E2E-5: Merge adjacent same-URL links into a single record. Designers
+    // sometimes split one logical link into multiple Hyperlink objects on
+    // contiguous ranges (we saw this on Client-A Product-3: "Client-A Product-3...Elite" +
+    // "®*万事达卡®*" → two records with identical URL). Keeping them split
+    // forces the webapp / import to handle them separately and produces
+    // visually inconsistent underline runs. Merging is purely cosmetic for
+    // the export contract but improves downstream UX.
+    out.sort(function (a, b) { return a.offset - b.offset; });
+    var merged = [];
+    for (var mi = 0; mi < out.length; mi++) {
+        var cur = out[mi];
+        var prev = merged[merged.length - 1];
+        if (prev && prev.url === cur.url && prev.offset + prev.length === cur.offset) {
+            prev.length += cur.length;
+            prev.text   = (prev.text || "") + (cur.text || "");
+            // visual_underline = prev OR cur (if either side requested it)
+            if (cur.visual_underline) prev.visual_underline = true;
+            // keep prev.name (first wins)
+        } else {
+            merged.push(cur);
+        }
+    }
+    return merged;
+}
+
+function buildSegmentObjectFromParagraph(para, storyId, paraIdx, tid, tableCellMeta) {
+    var src = paragraphTextNoReturn(para);
+    var paraStyle = "[None]";
+    var rects = lineRectsForParagraph(para);
+    var inlineStyles = extractInlineStyles(para);
+    var norm = normalizeText(src);
+    var hiddenMeta = hiddenStateForParagraph(para);
+    var pointSize = 0;
+    var leading = captureLeading(para);
+    var segmentKind;
+    var translatable;
+    var targetPolicy;
+    var segObj;
+
+    if ((!rects || rects.length === 0) && tableCellMeta) {
+        rects = lineRectsForTableCellParagraph(para);
+    }
+    if (!rects) {
+        rects = [];
+    }
+
+    try {
+        paraStyle = para.appliedParagraphStyle.name;
+    } catch (e0) {}
+
+    try {
+        if (para && para.characters && para.characters.length > 0) {
+            var _charCount = para.characters.length;
+            var _scanLimit = _charCount < 8 ? _charCount : 8;
+            for (var _ci = 0; _ci < _scanLimit; _ci++) {
+                try {
+                    var _ch = getCollectionItem(para.characters, _ci);
+                    if (!_ch) continue;
+                    var _ps = toFiniteNumber(_ch.pointSize);
+                    if (isFinite(_ps) && _ps > 0) {
+                        pointSize = _ps;
+                        break;
+                    }
+                } catch (ePSc) {}
+            }
+        }
+        if ((!isFinite(pointSize) || pointSize <= 0) && para && para.appliedParagraphStyle) {
+            pointSize = toFiniteNumber(para.appliedParagraphStyle.pointSize);
+        }
+    } catch (ePS) {}
+    if (!isFinite(pointSize) || pointSize <= 0) pointSize = 0;
+
+    if (tableCellMeta && !isControlOnlyText(src)) {
+        segmentKind = "table_cell";
+    } else {
+        segmentKind = detectSegmentKindFromText(src);
+    }
+    translatable = isSegmentKindTranslatable(segmentKind);
+    targetPolicy = targetPolicyForSegmentKind(segmentKind);
+    if (hiddenMeta && hiddenMeta.hidden) {
+        translatable = false;
+        targetPolicy = "preserve_source";
+    }
+
+    // Phase 1: visual snapshots — character-level (format) + paragraph-level
+    var formatSnapshot = null;
+    var paragraphSnapshot = null;
+    try { formatSnapshot = VisualSnapshot.captureFormatSnapshot(para); } catch (eFS) { formatSnapshot = null; }
+    try { paragraphSnapshot = VisualSnapshot.captureParagraphSnapshot(para); } catch (ePS2) { paragraphSnapshot = null; }
+
+    // #34: project any doc-level hyperlinks intersecting this para
+    // into paragraph-relative offsets so the webapp can render them
+    // as underlined anchors on the source side. Empty when no link
+    // touches this para or the doc-hyperlink index hasn't been built
+    // (legacy call paths). Output shape: [{offset,length,url,name,text}].
+    var sourceLinks = [];
+    try { sourceLinks = _linksForParagraph(para, storyId); } catch (eLk) {}
+
+    segObj = {
+        tid: tid,
+        story_id: storyId,
+        paragraph_index: segmentParagraphIndexForOutput(para, paraIdx, tableCellMeta),
+        paragraph_uid: paragraphUidForParagraph(para),
+        source_text: src,
+        segment_kind: segmentKind,
+        translatable: translatable,
+        target_policy: targetPolicy,
+        paragraph_style: paraStyle,
+        page_indexes: pageIndexesFromLineRects(rects),
+        line_rects: rects,
+        line_rects_norm: [],
+        point_size: pointSize,
+        leading_pt: leading.leading_pt,
+        leading_ratio: leading.leading_ratio,
+        leading_auto: leading.leading_auto,
+        inline_styles: inlineStyles,
+        format_snapshot: formatSnapshot,
+        paragraph_snapshot: paragraphSnapshot,
+        source_hash: hashDjb2Hex(norm),
+        is_hidden_object: !!(hiddenMeta && hiddenMeta.hidden),
+        hidden_reason: hiddenMeta && hiddenMeta.reason ? hiddenMeta.reason : "",
+        source_links: sourceLinks
+    };
+    // char_rects_norm (contract §10): raw per-char rects, only for translatable
+    // non-empty segments (spec §6). Normalized + CR-1-aligned later in
+    // attachNormalizedCharRects (shares line_rects' per-page mode). `_char_rects_raw`
+    // is a transient field, deleted after normalization (never serialized).
+    if (translatable && src && src.length > 0) {
+        try { segObj._char_rects_raw = charRectsForParagraph(para); }
+        catch (eCRR) { segObj._char_rects_raw = null; }
+    }
+    if (tableCellMeta) {
+        attachTableCellMetaToSegment(segObj, tableCellMeta);
+    }
+    return segObj;
+}
+
+function isSegmentKindTranslatable(kind) {
+    var k = safeString(kind);
+    return k === "text" || k === "table_cell";
+}
+
+function targetPolicyForSegmentKind(kind) {
+    if (isSegmentKindTranslatable(kind)) {
+        return "translate";
+    }
+    return "preserve_source";
+}
+
+function controlOnlyTemplateNoteForKind(kind) {
+    var k = safeString(kind);
+    if (k === "table_anchor") {
+        return "AUTO: table anchor (control-only), non-translatable.";
+    }
+    return "AUTO: control-only anchor, non-translatable.";
+}
+
+function pctText(value) {
+    var n = Number(value);
+    if (!isFinite(n)) {
+        return "0.00%";
+    }
+    return (n * 100).toFixed(2) + "%";
+}
+
+function tidDiagPush(state, storyId, paraIdx, status, method, tid, message) {
+    state.tidDiagnostics.push({
+        story_id: storyId,
+        paragraph_index: paraIdx,
+        status: status,
+        method: method,
+        tid: tid || "",
+        message: message || ""
+    });
+}
+
+function buildTidDiagnosticsLog(state) {
+    var lines = [];
+    var ratio = state.tidTotal > 0 ? state.tidFallback / state.tidTotal : 0;
+    var i, row;
+
+    lines.push("tid_total\t" + state.tidTotal);
+    lines.push("tid_fallback\t" + state.tidFallback);
+    lines.push("tid_fallback_ratio\t" + ratio.toFixed(6));
+    lines.push("tid_fallback_ratio_human\t" + pctText(ratio));
+    lines.push("tid_fallback_block_ratio\t" + state.tidFallbackBlockRatio.toFixed(6));
+    lines.push("");
+    lines.push("story_id\tparagraph_index\tstatus\tmethod\ttid\tmessage");
+
+    for (i = 0; i < state.tidDiagnostics.length; i++) {
+        row = state.tidDiagnostics[i];
+        lines.push(
+            String(row.story_id) + "\t" +
+            String(row.paragraph_index) + "\t" +
+            String(row.status) + "\t" +
+            String(row.method) + "\t" +
+            String(row.tid || "").replace(/\t/g, " ") + "\t" +
+            String(row.message || "").replace(/\t/g, " ").replace(/\r?\n/g, " ")
+        );
+    }
+
+    return lines.join("\n");
+}
+
+function safeString(v) {
+    if (v === undefined || v === null) {
+        return "";
+    }
+    return String(v);
+}
+
+// objectTypeName, paragraphTextNoReturn -> translation_common.jsxinc
+
+// Returns paragraph text with trailing \r stripped but soft breaks preserved.
+// ETX (\u0003) is normalized to \n so there is only one separator type internally.
+function paragraphTextRaw(para) {
+    var text = "";
+    if (!para || !para.isValid) {
+        return text;
+    }
+    try {
+        text = para.contents;
+    } catch (e0) {
+        text = "";
+    }
+    if (text.length > 0 && text.charAt(text.length - 1) === "\r") {
+        text = text.substring(0, text.length - 1);
+    }
+    return text;
+}
+
+// Check if raw paragraph text contains forced line breaks (\n or \u0003).
+function hasSoftBreaks(rawText) {
+    return rawText.indexOf("\n") >= 0 || rawText.indexOf("\u0003") >= 0;
+}
+
+// Split raw paragraph text at forced line breaks.
+// Returns { pieces: string[], separators: string[] }
+// pieces.length === separators.length + 1.
+function splitAtSoftBreaks(rawText) {
+    var pieces = [];
+    var separators = [];
+    var current = "";
+    var i, ch;
+    for (i = 0; i < rawText.length; i++) {
+        ch = rawText.charAt(i);
+        if (ch === "\n" || ch === "\u0003") {
+            pieces.push(current);
+            separators.push(ch);
+            current = "";
+        } else {
+            current += ch;
+        }
+    }
+    pieces.push(current);
+    return { pieces: pieces, separators: separators };
+}
+
+// Distribute an array of line rects among sub-segments by matching
+// cumulative character offsets in the raw paragraph text.
+// Each forced line break terminates an InDesign line object, so line
+// boundaries align with sub-segment boundaries.
+function distributeLineRectsToSubSegments(para, pieces, allRects) {
+    var subRects = [];
+    var i, j, line, lines, lineLen, cursor, subIdx;
+    var breakpoints = [];
+    var cumLen = 0;
+
+    // Build breakpoints: character offset where each sub-segment starts.
+    // breakpoints[0] = 0, breakpoints[1] = len(piece0) + 1 (separator), etc.
+    for (i = 0; i < pieces.length; i++) {
+        breakpoints.push(cumLen);
+        // +1 for the separator char between pieces (except after last piece)
+        cumLen += pieces[i].length + (i < pieces.length - 1 ? 1 : 0);
+    }
+
+    // Initialize empty rect arrays for each sub-segment.
+    for (i = 0; i < pieces.length; i++) {
+        subRects.push([]);
+    }
+
+    // Try to read line objects to get character lengths for precise mapping.
+    try {
+        lines = para.lines;
+    } catch (e0) {
+        lines = null;
+    }
+
+    if (lines && lines.length > 0) {
+        // Map each line to a sub-segment by cumulative character offset.
+        // lines.length may differ from allRects.length when some line rects
+        // were skipped due to invalid coordinates.  Use min(lines, rects) for
+        // the offset-based pass, then distribute any remaining rects.
+        cursor = 0;
+        subIdx = 0;
+        var matchCount = Math.min(lines.length, allRects.length);
+        for (i = 0; i < matchCount; i++) {
+            line = getCollectionItem(lines, i);
+            lineLen = 0;
+            try {
+                lineLen = line.contents ? line.contents.length : 0;
+            } catch (e1) {
+                lineLen = 0;
+            }
+            // Advance subIdx if cursor has passed the next breakpoint.
+            while (subIdx < pieces.length - 1
+                    && cursor >= breakpoints[subIdx + 1]) {
+                subIdx++;
+            }
+            subRects[subIdx].push(allRects[i]);
+            cursor += lineLen;
+        }
+        // If there are leftover rects (more rects than lines), append them
+        // to the last sub-segment that received any rect.
+        for (i = matchCount; i < allRects.length; i++) {
+            subRects[subIdx].push(allRects[i]);
+        }
+    } else if (allRects.length > 0 && pieces.length > 0) {
+        // No line objects available: distribute rects proportionally by
+        // piece character length so each sub-segment gets at least one
+        // rect if possible, rather than dumping all on head.
+        var totalChars = 0;
+        for (i = 0; i < pieces.length; i++) {
+            totalChars += pieces[i].length;
+        }
+        if (totalChars > 0 && allRects.length >= pieces.length) {
+            var rectIdx = 0;
+            for (i = 0; i < pieces.length; i++) {
+                var share = Math.max(1, Math.round(allRects.length * pieces[i].length / totalChars));
+                if (i === pieces.length - 1) {
+                    share = allRects.length - rectIdx;
+                }
+                for (j = 0; j < share && rectIdx < allRects.length; j++) {
+                    subRects[i].push(allRects[rectIdx]);
+                    rectIdx++;
+                }
+            }
+        } else {
+            // Too few rects to split meaningfully: give all to head.
+            subRects[0] = allRects;
+        }
+    }
+
+    return subRects;
+}
+
+function getPrimaryTextFrameForParagraph(para) {
+    var frame = null;
+    var story = null;
+    if (!para || !para.isValid) {
+        return null;
+    }
+    try {
+        if (para.parentTextFrames && para.parentTextFrames.length > 0) {
+            frame = para.parentTextFrames[0];
+        }
+    } catch (e0) {
+        frame = null;
+    }
+    if (frame && frame.isValid) {
+        return frame;
+    }
+    try {
+        story = para.parentStory;
+        if (story && story.isValid && story.textContainers && story.textContainers.length > 0) {
+            frame = getCollectionItem(story.textContainers, 0);
+        }
+    } catch (e1) {
+        frame = null;
+    }
+    if (frame && frame.isValid) {
+        return frame;
+    }
+    return null;
+}
+
+function detectHiddenStateForContainer(container) {
+    var current = container;
+    var depth = 0;
+    while (current && depth < 24) {
+        try {
+            if (current.hidden === true) {
+                return { hidden: true, reason: depth === 0 ? "object_hidden" : "ancestor_hidden" };
+            }
+        } catch (e0) {}
+        try {
+            if (current.visible === false) {
+                return { hidden: true, reason: depth === 0 ? "object_not_visible" : "ancestor_not_visible" };
+            }
+        } catch (e1) {}
+        try {
+            if (current.itemLayer && current.itemLayer.isValid && current.itemLayer.visible === false) {
+                return { hidden: true, reason: "layer_hidden" };
+            }
+        } catch (e2) {}
+        try {
+            if (current.parentLayer && current.parentLayer.isValid && current.parentLayer.visible === false) {
+                return { hidden: true, reason: "layer_hidden" };
+            }
+        } catch (e3) {}
+        try {
+            if (!current.parent || current.parent === current) {
+                break;
+            }
+            current = current.parent;
+        } catch (e4) {
+            break;
+        }
+        depth += 1;
+    }
+    return { hidden: false, reason: "" };
+}
+
+function hiddenStateForParagraph(para) {
+    var frame = getPrimaryTextFrameForParagraph(para);
+    if (!frame || !frame.isValid) {
+        return { hidden: false, reason: "" };
+    }
+    return detectHiddenStateForContainer(frame);
+}
+
+/**
+ * Build a map from master-page ID to a virtual page index.
+ * Virtual indices start at doc.pages.length so they don't clash
+ * with real document page indices.
+ * Returns { byId: { pageId: virtualIdx, ... }, list: [ { spread_name, page_offset, virtual_index } ] }
+ */
+function buildMasterPageMap(doc) {
+    var map = { byId: {}, list: [] };
+    var spreads = doc.masterSpreads;
+    var nextIdx = doc.pages.length;
+    var i, j, spread, pages, pg, pgId;
+    for (i = 0; i < spreads.length; i++) {
+        spread = getCollectionItem(spreads, i);
+        if (!spread || !spread.isValid) {
+            continue;
+        }
+        pages = spread.pages;
+        for (j = 0; j < pages.length; j++) {
+            pg = getCollectionItem(pages, j);
+            if (!pg || !pg.isValid) {
+                continue;
+            }
+            pgId = -1;
+            try { pgId = pg.id; } catch (eId) { continue; }
+            map.byId[String(pgId)] = nextIdx;
+            map.list.push({
+                spread_name: String(spread.name || spread.namePrefix || ""),
+                page_offset: j,
+                virtual_index: nextIdx
+            });
+            nextIdx++;
+        }
+    }
+    return map;
+}
+
+// getPageIndexFromContainer -> translation_common.jsxinc (parameterized with masterPageMap)
+
+function pageLabelFromIndex(idx) {
+    if (idx < 0) {
+        return "";
+    }
+    return String(idx + 1);
+}
+
+function linkStatusToState(statusValue, hasLink) {
+    if (!hasLink) {
+        return "no_link";
+    }
+    try {
+        if (statusValue === LinkStatus.NORMAL) {
+            return "linked";
+        }
+    } catch (e0) {}
+    try {
+        if (statusValue === LinkStatus.LINK_EMBEDDED) {
+            return "embedded";
+        }
+    } catch (e1) {}
+    try {
+        if (statusValue === LinkStatus.LINK_MISSING) {
+            return "missing";
+        }
+    } catch (e2) {}
+    try {
+        if (statusValue === LinkStatus.LINK_OUT_OF_DATE) {
+            return "out_of_date";
+        }
+    } catch (e3) {}
+    return "unknown";
+}
+
+function hasAiExtension(name) {
+    var n = safeString(name).toLowerCase();
+    return /\.ai$/.test(n) || /\.ait$/.test(n);
+}
+
+function looksLikeIllustratorAsset(linkType, assetName, graphicType, linkState) {
+    var lt = safeString(linkType).toLowerCase();
+    var an = safeString(assetName).toLowerCase();
+    var gt = safeString(graphicType).toLowerCase();
+
+    if (lt.indexOf("illustrator") >= 0) {
+        return true;
+    }
+    if (hasAiExtension(an)) {
+        return true;
+    }
+    // Embedded placed pages are ambiguous (AI/PDF/etc). Keep them as manual candidates.
+    if ((linkState === "embedded" || linkState === "no_link") && gt.indexOf("importedpage") >= 0) {
+        return true;
+    }
+    return false;
+}
+
+function getPageIndexForGraphic(graphic) {
+    var idx = -1;
+    var parentObj = null;
+    var pg, pgId;
+    try {
+        parentObj = graphic.parent;
+    } catch (e0) {
+        parentObj = null;
+    }
+    if (parentObj && parentObj.isValid) {
+        idx = getPageIndexFromContainer(parentObj, _masterPageMap);
+    }
+    if (idx < 0) {
+        try {
+            pg = graphic.parentPage;
+            if (pg && pg.isValid) {
+                if (_masterPageMap) {
+                    pgId = String(pg.id);
+                    if (_masterPageMap.byId.hasOwnProperty(pgId)) {
+                        return _masterPageMap.byId[pgId];
+                    }
+                }
+                idx = pg.documentOffset;
+            }
+        } catch (e1) {
+            idx = -1;
+        }
+    }
+    return idx;
+}
+
+function getBoundsObject(bounds) {
+    if (!bounds || bounds.length < 4) {
+        return null;
+    }
+    return {
+        y0: toFiniteNumber(bounds[0]),
+        x0: toFiniteNumber(bounds[1]),
+        y1: toFiniteNumber(bounds[2]),
+        x1: toFiniteNumber(bounds[3])
+    };
+}
+
+function getVisibleBoundsObject(container) {
+    var bounds = null;
+    if (!container || !container.isValid) {
+        return null;
+    }
+    try {
+        bounds = container.visibleBounds;
+    } catch (e0) {
+        bounds = null;
+    }
+    return getBoundsObject(bounds);
+}
+
+function getPageBoundsObject(container) {
+    var page = null;
+    var bounds = null;
+    if (!container || !container.isValid) {
+        return null;
+    }
+    try {
+        page = container.parentPage;
+    } catch (e0) {
+        page = null;
+    }
+    if (!page || !page.isValid) {
+        return null;
+    }
+    try {
+        bounds = page.bounds;
+    } catch (e1) {
+        bounds = null;
+    }
+    return getBoundsObject(bounds);
+}
+
+function normalizeBoundsWithinPage(boundsObj, pageBoundsObj) {
+    var width, height;
+    if (!boundsObj || !pageBoundsObj) {
+        return null;
+    }
+    width = pageBoundsObj.x1 - pageBoundsObj.x0;
+    height = pageBoundsObj.y1 - pageBoundsObj.y0;
+    if (!(width > 0) || !(height > 0)) {
+        return null;
+    }
+    return {
+        nx0: (boundsObj.x0 - pageBoundsObj.x0) / width,
+        ny0: (boundsObj.y0 - pageBoundsObj.y0) / height,
+        nx1: (boundsObj.x1 - pageBoundsObj.x0) / width,
+        ny1: (boundsObj.y1 - pageBoundsObj.y0) / height
+    };
+}
+
+function fileExistsAtPath(pathValue) {
+    if (!pathValue) { return false; }
+    try { fs.lstatSync(pathValue); return true; } catch (e0) {}
+    return false;
+}
+
+function linkStatusRawString(statusValue) {
+    try {
+        return safeString(statusValue);
+    } catch (e0) {}
+    return "";
+}
+
+function linkNeededRawString(link) {
+    try {
+        return safeString(link && link.needed);
+    } catch (e0) {}
+    return "";
+}
+
+function canLinkMethod(link, methodName) {
+    try {
+        return !!(link && typeof link[methodName] === "function");
+    } catch (e0) {}
+    return false;
+}
+
+function recoverabilityForAiLink(link, linkState, linkPath) {
+    var canUnembed = canLinkMethod(link, "unembed");
+    var hasPath = !!safeString(linkPath);
+    var pathExists = hasPath && fileExistsAtPath(linkPath);
+    if (linkState === "linked" || linkState === "out_of_date") {
+        return pathExists ? "linked_source_ready" : "linked_path_missing";
+    }
+    if (linkState === "embedded") {
+        if (!canUnembed) {
+            return "embedded_no_unembed";
+        }
+        if (hasPath) {
+            return pathExists ? "embedded_recoverable_candidate" : "embedded_path_unreachable";
+        }
+        return "embedded_candidate_unknown";
+    }
+    if (linkState === "missing") {
+        return "missing";
+    }
+    if (linkState === "no_link") {
+        return "no_link";
+    }
+    return pathExists ? "linked_source_ready" : "unknown";
+}
+
+function collectAiManualRows(doc) {
+    var rows = [];
+    var graphics = doc.allGraphics;
+    var i, g, link, hasLink, linkType, assetName, linkStatus, linkState, linkPath;
+    var graphicType, pageIdx, pageLabel, parentObj, objectId, graphicId, taskId, note;
+    var includeAsAi, placedBounds, pageBounds, placedBoundsNorm, linkStatusRaw, linkNeededRaw, recoverability;
+    var pathExists, canUnembed;
+
+    for (i = 0; i < graphics.length; i++) {
+        g = getCollectionItem(graphics, i);
+        if (!g || !g.isValid) {
+            continue;
+        }
+
+        link = null;
+        hasLink = false;
+        linkType = "";
+        assetName = "";
+        linkStatus = "";
+        linkPath = "";
+        linkStatusRaw = "";
+        linkNeededRaw = "";
+        recoverability = "unknown";
+        pathExists = false;
+        canUnembed = false;
+
+        try {
+            link = g.itemLink;
+            hasLink = !!(link && link.isValid);
+        } catch (e0) {
+            link = null;
+            hasLink = false;
+        }
+
+        if (hasLink) {
+            try { linkType = safeString(link.linkType); } catch (e1) {}
+            try { assetName = safeString(link.name); } catch (e2) {}
+            try { linkStatus = link.status; } catch (e3) {}
+            try { linkPath = safeString(link.filePath); } catch (e4) {}
+            try { linkStatusRaw = linkStatusRawString(link.status); } catch (e5) {}
+            try { linkNeededRaw = linkNeededRawString(link); } catch (e6) {}
+        }
+
+        if (!assetName) {
+            try { assetName = safeString(g.name); } catch (e5) {}
+        }
+
+        graphicType = objectTypeName(g);
+        linkState = linkStatusToState(linkStatus, hasLink);
+        includeAsAi = looksLikeIllustratorAsset(linkType, assetName, graphicType, linkState);
+        if (!includeAsAi) {
+            continue;
+        }
+
+        pageIdx = getPageIndexForGraphic(g);
+        pageLabel = pageLabelFromIndex(pageIdx);
+        parentObj = null;
+        objectId = "";
+        graphicId = "";
+        try { parentObj = g.parent; } catch (e6) { parentObj = null; }
+        if (parentObj && parentObj.isValid) {
+            try { objectId = safeString(parentObj.id); } catch (e7) {}
+        }
+        try { graphicId = safeString(g.id); } catch (e8) {}
+        placedBounds = getVisibleBoundsObject(parentObj);
+        pageBounds = getPageBoundsObject(parentObj);
+        placedBoundsNorm = normalizeBoundsWithinPage(placedBounds, pageBounds);
+        pathExists = fileExistsAtPath(linkPath);
+        canUnembed = canLinkMethod(link, "unembed");
+        recoverability = recoverabilityForAiLink(link, linkState, linkPath);
+
+        taskId = "ai_task_" + pad3(rows.length + 1);
+        note = "MANUAL_CAPTURE_REQUIRED";
+        if (linkState === "missing") {
+            note = "LINK_MISSING_MANUAL_CAPTURE";
+        } else if (linkState === "embedded") {
+            note = "EMBEDDED_MANUAL_CAPTURE";
+        } else if (linkState === "no_link") {
+            note = "NO_LINK_MANUAL_CAPTURE";
+        }
+
+        rows.push({
+            task_id: taskId,
+            page: pageLabel,
+            page_index: pageIdx,
+            object_id: objectId,
+            graphic_id: graphicId,
+            asset_name: assetName,
+            link_state: linkState,
+            link_status_raw: linkStatusRaw,
+            link_needed_raw: linkNeededRaw,
+            link_type: linkType,
+            link_path: linkPath,
+            path_exists: pathExists,
+            recoverability: recoverability,
+            can_unembed: canUnembed,
+            placed_bounds: placedBounds,
+            placed_bounds_norm: placedBoundsNorm,
+            source_text: "[MANUAL_CAPTURE]",
+            target_text: "",
+            status: "todo_manual",
+            note: note
+        });
+    }
+
+    return rows;
+}
+
+function collectPageGeometries(doc) {
+    var out = [];
+    var pages = doc.pages;
+    var i, j, page, gb, pageIdx, spread, mpPages, pgId;
+
+    for (i = 0; i < pages.length; i++) {
+        page = getCollectionItem(pages, i);
+        if (!page || !page.isValid) {
+            continue;
+        }
+
+        gb = null;
+        try {
+            gb = page.bounds; // [top, left, bottom, right] in spread coords
+        } catch (e0) {
+            gb = null;
+        }
+
+        pageIdx = -1;
+        try {
+            pageIdx = page.documentOffset;
+        } catch (e1) {
+            pageIdx = i;
+        }
+
+        if (!gb || gb.length < 4) {
+            out.push({
+                page_index: pageIdx,
+                x0: 0,
+                y0: 0,
+                x1: 1000,
+                y1: 1400
+            });
+            continue;
+        }
+
+        out.push({
+            page_index: pageIdx,
+            x0: toFiniteNumber(gb[1]),
+            y0: toFiniteNumber(gb[0]),
+            x1: toFiniteNumber(gb[3]),
+            y1: toFiniteNumber(gb[2])
+        });
+    }
+
+    // Append master page geometries using virtual indices from _masterPageMap.
+    if (_masterPageMap) {
+        for (i = 0; i < doc.masterSpreads.length; i++) {
+            spread = getCollectionItem(doc.masterSpreads, i);
+            if (!spread || !spread.isValid) { continue; }
+            mpPages = spread.pages;
+            for (j = 0; j < mpPages.length; j++) {
+                page = getCollectionItem(mpPages, j);
+                if (!page || !page.isValid) { continue; }
+                pageIdx = -1;
+                try {
+                    pgId = String(page.id);
+                    if (_masterPageMap.byId.hasOwnProperty(pgId)) {
+                        pageIdx = _masterPageMap.byId[pgId];
+                    }
+                } catch (eM) { continue; }
+                if (pageIdx < 0) { continue; }
+                gb = null;
+                try { gb = page.bounds; } catch (e2) { gb = null; }
+                if (!gb || gb.length < 4) {
+                    out.push({
+                        page_index: pageIdx,
+                        is_master_page: true,
+                        x0: 0, y0: 0, x1: 1000, y1: 1400
+                    });
+                } else {
+                    out.push({
+                        page_index: pageIdx,
+                        is_master_page: true,
+                        x0: toFiniteNumber(gb[1]),
+                        y0: toFiniteNumber(gb[0]),
+                        x1: toFiniteNumber(gb[3]),
+                        y1: toFiniteNumber(gb[2])
+                    });
+                }
+            }
+        }
+    }
+
+    return out;
+}
+
+function buildPageGeometryMap(pageGeometries) {
+    var map = {};
+    var i, g, p, x0, y0, x1, y1;
+
+    for (i = 0; i < pageGeometries.length; i++) {
+        g = pageGeometries[i];
+        if (!g) {
+            continue;
+        }
+        p = Number(g.page_index);
+        if (!isFinite(p)) {
+            continue;
+        }
+        x0 = toFiniteNumber(g.x0);
+        y0 = toFiniteNumber(g.y0);
+        x1 = toFiniteNumber(g.x1);
+        y1 = toFiniteNumber(g.y1);
+        if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) {
+            continue;
+        }
+        if (x1 < x0) {
+            map[p] = { x0: x1, y0: Math.min(y0, y1), x1: x0, y1: Math.max(y0, y1) };
+        } else {
+            map[p] = { x0: x0, y0: Math.min(y0, y1), x1: x1, y1: Math.max(y0, y1) };
+        }
+    }
+    return map;
+}
+
+function clamp01(n) {
+    if (!isFinite(n)) {
+        return 0;
+    }
+    if (n < 0) {
+        return 0;
+    }
+    if (n > 1) {
+        return 1;
+    }
+    return n;
+}
+
+// 6-decimal rounding for char_rects_norm coords (contract §10, arch 2026-07-05):
+// at 612pt page width, 1e-6 normalized = 0.0006pt = sub-pixel, so lossless for
+// glyph fit; halves the unzipped serialized size vs full float precision. Only
+// applied to char rects (line_rects_norm keeps its established precision).
+function round6(n) {
+    if (!isFinite(n)) { return 0; }
+    return Math.round(n * 1e6) / 1e6;
+}
+
+function rectToNormalized(rect, pageGeom, mode) {
+    var x0, y0, x1, y1, w, h, nx0, ny0, nx1, ny1, tmp;
+    if (!rect || !pageGeom) {
+        return null;
+    }
+
+    x0 = toFiniteNumber(rect.x0);
+    y0 = toFiniteNumber(rect.y0);
+    x1 = toFiniteNumber(rect.x1);
+    y1 = toFiniteNumber(rect.y1);
+    if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) {
+        return null;
+    }
+
+    if (x1 < x0) {
+        tmp = x0;
+        x0 = x1;
+        x1 = tmp;
+    }
+    if (y1 < y0) {
+        tmp = y0;
+        y0 = y1;
+        y1 = tmp;
+    }
+
+    w = Math.abs(pageGeom.x1 - pageGeom.x0);
+    h = Math.abs(pageGeom.y1 - pageGeom.y0);
+    if (!isFinite(w) || !isFinite(h) || w < 0.001 || h < 0.001) {
+        return null;
+    }
+
+    if (mode === "local") {
+        nx0 = x0 / w;
+        ny0 = y0 / h;
+        nx1 = x1 / w;
+        ny1 = y1 / h;
+    } else {
+        nx0 = (x0 - pageGeom.x0) / w;
+        ny0 = (y0 - pageGeom.y0) / h;
+        nx1 = (x1 - pageGeom.x0) / w;
+        ny1 = (y1 - pageGeom.y0) / h;
+    }
+
+    return {
+        page_index: Number(rect.page_index),
+        nx0: nx0,
+        ny0: ny0,
+        nx1: nx1,
+        ny1: ny1
+    };
+}
+
+function normalizedRectScore(nr) {
+    var score = 0;
+    var cx, cy;
+    if (!nr) {
+        return -1000;
+    }
+    if (!isFinite(nr.nx0) || !isFinite(nr.nx1) || !isFinite(nr.ny0) || !isFinite(nr.ny1)) {
+        return -1000;
+    }
+    if (nr.nx1 <= nr.nx0 || nr.ny1 <= nr.ny0) {
+        return -100;
+    }
+
+    cx = (nr.nx0 + nr.nx1) / 2;
+    cy = (nr.ny0 + nr.ny1) / 2;
+
+    if (cx >= -0.2 && cx <= 1.2 && cy >= -0.2 && cy <= 1.2) {
+        score += 4;
+    }
+    if (nr.nx0 >= -0.15 && nr.nx1 <= 1.15 && nr.ny0 >= -0.15 && nr.ny1 <= 1.15) {
+        score += 3;
+    }
+    if (nr.nx0 >= -0.02 && nr.nx1 <= 1.02 && nr.ny0 >= -0.02 && nr.ny1 <= 1.02) {
+        score += 2;
+    }
+    return score;
+}
+
+function chooseRectModeForPage(rects, pageGeom) {
+    var spreadScore = 0;
+    var localScore = 0;
+    var i, r, ns, nl;
+
+    if (!rects || rects.length === 0 || !pageGeom) {
+        return "spread";
+    }
+    for (i = 0; i < rects.length; i++) {
+        r = rects[i];
+        ns = rectToNormalized(r, pageGeom, "spread");
+        nl = rectToNormalized(r, pageGeom, "local");
+        spreadScore += normalizedRectScore(ns);
+        localScore += normalizedRectScore(nl);
+    }
+    if (localScore > spreadScore + 1) {
+        return "local";
+    }
+    return "spread";
+}
+
+function attachNormalizedLineRects(segments, pageGeomMap, state) {
+    var pageBuckets = {};
+    var pageModes = {};
+    var modeStats = { spread: 0, local: 0 };
+    var i, j, seg, rect, p, key, g, mode, nr;
+
+    for (i = 0; i < segments.length; i++) {
+        seg = segments[i];
+        if (!seg || !seg.line_rects) {
+            continue;
+        }
+        for (j = 0; j < seg.line_rects.length; j++) {
+            rect = seg.line_rects[j];
+            p = Number(rect.page_index);
+            if (!isFinite(p)) {
+                continue;
+            }
+            key = String(p);
+            if (!pageBuckets[key]) {
+                pageBuckets[key] = [];
+            }
+            pageBuckets[key].push(rect);
+        }
+    }
+
+    for (key in pageBuckets) {
+        if (!pageBuckets.hasOwnProperty(key)) {
+            continue;
+        }
+        g = pageGeomMap[key];
+        if (!g) {
+            pageModes[key] = "spread";
+            continue;
+        }
+        pageModes[key] = chooseRectModeForPage(pageBuckets[key], g);
+    }
+
+    for (i = 0; i < segments.length; i++) {
+        seg = segments[i];
+        seg.line_rects_norm = [];
+        if (!seg || !seg.line_rects) {
+            continue;
+        }
+        for (j = 0; j < seg.line_rects.length; j++) {
+            rect = seg.line_rects[j];
+            p = Number(rect.page_index);
+            if (!isFinite(p)) {
+                continue;
+            }
+            key = String(p);
+            g = pageGeomMap[key];
+            if (!g) {
+                continue;
+            }
+            mode = pageModes[key] || "spread";
+            nr = rectToNormalized(rect, g, mode);
+            if (!nr) {
+                continue;
+            }
+
+            var nminX = Math.min(nr.nx0, nr.nx1);
+            var nmaxX = Math.max(nr.nx0, nr.nx1);
+            var nminY = Math.min(nr.ny0, nr.ny1);
+            var nmaxY = Math.max(nr.ny0, nr.ny1);
+            nr.nx0 = clamp01(nminX);
+            nr.nx1 = clamp01(nmaxX);
+            nr.ny0 = clamp01(nminY);
+            nr.ny1 = clamp01(nmaxY);
+            if (nr.nx1 - nr.nx0 < 0.0001 || nr.ny1 - nr.ny0 < 0.0001) {
+                continue;
+            }
+            seg.line_rects_norm.push({
+                page_index: nr.page_index,
+                nx0: nr.nx0,
+                ny0: nr.ny0,
+                nx1: nr.nx1,
+                ny1: nr.ny1
+            });
+        }
+    }
+
+    for (key in pageModes) {
+        if (!pageModes.hasOwnProperty(key)) {
+            continue;
+        }
+        if (pageModes[key] === "local") {
+            modeStats.local += 1;
+        } else {
+            modeStats.spread += 1;
+        }
+    }
+    state.pageRectCoordModes = pageModes;
+    state.pageRectCoordModeStats = modeStats;
+
+    // ── char_rects_norm (contract §10 / char_rects_norm_v1) ──────────────────
+    // Normalize the per-char raw rects using the SAME per-page mode as
+    // line_rects (so char[i] rects align with the line rect they sit in — the
+    // spec's coordinate-frame guarantee: char[0].nx0 == its line rect's nx0).
+    // CR-1 (load-bearing): emit char_rects_norm ONLY when exactly
+    // source_text.length content-aligned rects are producible; any gap
+    // (unreadable geom, length shortfall, content drift from soft-break
+    // normalization) → OMIT the field so the webapp falls back to
+    // line_rects_norm. char_rects_norm[i] therefore always ↔ source_text[i].
+    var charStats = { segments_with_char_rects: 0, total_char_rects: 0,
+                      fallback_no_raw: 0, fallback_len: 0, fallback_content: 0, fallback_geom: 0 };
+    for (i = 0; i < segments.length; i++) {
+        seg = segments[i];
+        if (!seg) { continue; }
+        var craw = seg._char_rects_raw;
+        try { delete seg._char_rects_raw; } catch (eDelC) { seg._char_rects_raw = undefined; }
+        var srcT = seg.source_text || "";
+        if (srcT.length === 0) { continue; }              // empty → no field (spec: [])
+        if (!seg.translatable) { continue; }              // spec §6: translatable only (no stat)
+        if (!craw || !craw.length) { charStats.fallback_no_raw += 1; continue; }
+        if (craw.length < srcT.length) { charStats.fallback_len += 1; continue; }
+        var cn = [];
+        var okAlign = true;
+        var failKind = "";
+        for (var ck = 0; ck < srcT.length; ck++) {
+            var rr = craw[ck];
+            if (!rr) { okAlign = false; failKind = "geom"; break; }
+            // CR-1 content check: the raw paragraph char must equal source_text[ck].
+            // Diverges only when normalizeSoftBreaks collapsed a break/space run
+            // (source_text differs from the raw char stream) → safe fallback.
+            if (rr.c !== srcT.charAt(ck)) { okAlign = false; failKind = "content"; break; }
+            var cpp = Number(rr.page_index);
+            if (!isFinite(cpp)) { okAlign = false; failKind = "geom"; break; }
+            var cgg = pageGeomMap[String(cpp)];
+            if (!cgg) { okAlign = false; failKind = "geom"; break; }
+            var cmm = pageModes[String(cpp)] || "spread";
+            var nrc = rectToNormalized(rr, cgg, cmm);
+            if (!nrc) { okAlign = false; failKind = "geom"; break; }
+            var cxa = Math.min(nrc.nx0, nrc.nx1), cxb = Math.max(nrc.nx0, nrc.nx1);
+            var cya = Math.min(nrc.ny0, nrc.ny1), cyb = Math.max(nrc.ny0, nrc.ny1);
+            cn.push({ pi: nrc.page_index, nx0: round6(clamp01(cxa)), nx1: round6(clamp01(cxb)), ny0: round6(clamp01(cya)), ny1: round6(clamp01(cyb)) });
+        }
+        if (okAlign && cn.length === srcT.length) {
+            seg.char_rects_norm = cn;
+            charStats.segments_with_char_rects += 1;
+            charStats.total_char_rects += cn.length;
+        } else if (failKind === "content") {
+            charStats.fallback_content += 1;
+        } else {
+            charStats.fallback_geom += 1;
+        }
+    }
+    state.charRectStats = charStats;
+}
+
+// ==================== XML tid ====================
+function ensureXmlTag(doc, tagName) {
+    var tag;
+    try {
+        tag = doc.xmlTags.itemByName(tagName);
+        if (!tag || !tag.isValid) {
+            tag = doc.xmlTags.add(tagName);
+        }
+    } catch (e) {
+        tag = doc.xmlTags.add(tagName);
+    }
+    return tag;
+}
+
+function ensureXmlRootElement(doc, state) {
+    var root = null;
+    var rootTag = null;
+    try {
+        if (doc.xmlElements && doc.xmlElements.length > 0) {
+            root = getCollectionItem(doc.xmlElements, 0);
+            if (root && root.isValid) {
+                return root;
+            }
+        }
+    } catch (e0) {}
+
+    try {
+        rootTag = ensureXmlTag(doc, "Root");
+        root = doc.xmlElements.add(rootTag);
+        return root;
+    } catch (e1) {
+        state.warnings.push("failed to ensure xml root: " + e1.message);
+    }
+    return null;
+}
+
+// getXmlAttr -> translation_common.jsxinc
+
+function setXmlAttr(element, attrName, attrValue) {
+    var attr;
+    if (!element || !element.isValid) {
+        return false;
+    }
+    try {
+        attr = element.xmlAttributes.itemByName(attrName);
+        if (attr && attr.isValid) {
+            attr.value = attrValue;
+            return true;
+        }
+    } catch (e1) {}
+
+    try {
+        element.xmlAttributes.add(attrName, attrValue);
+        return true;
+    } catch (e2) {}
+    return false;
+}
+
+function nextTid(state) {
+    state.tidCounter += 1;
+    var suffix = String(state.tidCounter);
+    while (suffix.length < 6) {
+        suffix = "0" + suffix;
+    }
+    return "tid_" + state.tidSeed + "_" + suffix;
+}
+
+function getAssociatedElementCandidates(para) {
+    var candidates = [];
+    var el;
+
+    try {
+        el = para.associatedXMLElement;
+        if (el && el.isValid) {
+            candidates.push({ element: el, method: "para.associatedXMLElement" });
+        }
+    } catch (e0) {}
+
+    try {
+        if (para.texts && para.texts.length > 0) {
+            el = getCollectionItem(para.texts, 0).associatedXMLElement;
+            if (el && el.isValid) {
+                candidates.push({ element: el, method: "para.texts[0].associatedXMLElement" });
+            }
+        }
+    } catch (e1) {}
+
+    return candidates;
+}
+
+function ensureUniqueElementCandidate(candidates) {
+    var seen = {};
+    var out = [];
+    var i, key;
+    for (i = 0; i < candidates.length; i++) {
+        key = "";
+        try {
+            key = String(candidates[i].element.id);
+        } catch (e0) {
+            key = String(i);
+        }
+        if (!seen[key]) {
+            seen[key] = true;
+            out.push(candidates[i]);
+        }
+    }
+    return out;
+}
+
+function tryMarkupWithElement(para, xmlRoot, xmlTag, state, storyId, paraIdx, useTextObject) {
+    var marker = null;
+    var method = useTextObject ? "para.texts[0].markup(xmlelement)" : "para.markup(xmlelement)";
+    var message = "";
+
+    if (!xmlRoot || !xmlRoot.isValid) {
+        return { ok: false, element: null, method: method, message: "xmlRoot invalid" };
+    }
+
+    try {
+        marker = xmlRoot.xmlElements.add(xmlTag);
+    } catch (e0) {
+        return { ok: false, element: null, method: method, message: "xmlElements.add failed: " + e0.message };
+    }
+
+    try {
+        if (useTextObject) {
+            if (!(para.texts && para.texts.length > 0)) {
+                message = "para.texts missing";
+                try { marker.remove(); } catch (eR0) {}
+                return { ok: false, element: null, method: method, message: message };
+            }
+            getCollectionItem(para.texts, 0).markup(marker);
+        } else {
+            para.markup(marker);
+        }
+        return { ok: true, element: marker, method: method, message: "" };
+    } catch (e1) {
+        message = e1.message;
+        try { marker.remove(); } catch (eR1) {}
+        return { ok: false, element: null, method: method, message: message };
+    }
+}
+
+function ensureParagraphTid(para, xmlTag, xmlRoot, state, storyId, paraIdx, allowWriteTid) {
+    var candidates = [];
+    var element = null;
+    var tid = "";
+    var method = "";
+    var writeOk = false;
+    var verifyTid = "";
+    var generatedTid = "";
+    var markErr = "";
+    var fallbackTid;
+
+    if (allowWriteTid === undefined) {
+        allowWriteTid = true;
+    }
+
+    state.tidTotal += 1;
+
+    candidates = getAssociatedElementCandidates(para);
+    candidates = ensureUniqueElementCandidate(candidates);
+
+    // Prefer existing associated element first.
+    if (candidates.length > 0) {
+        element = candidates[0].element;
+        method = candidates[0].method;
+    }
+
+    // If no element attached, try markup through text object first, then paragraph.
+    if ((!element || !element.isValid) && allowWriteTid) {
+        var m1 = tryMarkupWithElement(para, xmlRoot, xmlTag, state, storyId, paraIdx, true);
+        if (m1.ok) {
+            element = m1.element;
+            method = m1.method;
+        } else if (m1.message) {
+            markErr += "[text.markup] " + m1.message + " ";
+        }
+    }
+    if ((!element || !element.isValid) && allowWriteTid) {
+        var m2 = tryMarkupWithElement(para, xmlRoot, xmlTag, state, storyId, paraIdx, false);
+        if (m2.ok) {
+            element = m2.element;
+            method = m2.method;
+        } else if (m2.message) {
+            markErr += "[para.markup] " + m2.message + " ";
+        }
+    }
+
+    // One more readback attempt after markup operations.
+    if ((!element || !element.isValid) && allowWriteTid) {
+        candidates = getAssociatedElementCandidates(para);
+        candidates = ensureUniqueElementCandidate(candidates);
+        if (candidates.length > 0) {
+            element = candidates[0].element;
+            method = candidates[0].method + ".readback";
+        }
+    }
+
+    if (element && element.isValid) {
+        tid = getXmlAttr(element, XML_TID_ATTR);
+        if (tid) {
+            tidDiagPush(state, storyId, paraIdx, "ok", method, tid, "reused");
+            return tid;
+        }
+
+        if (allowWriteTid) {
+            generatedTid = nextTid(state);
+            writeOk = setXmlAttr(element, XML_TID_ATTR, generatedTid);
+            if (!writeOk) {
+                state.warnings.push("tid attr write failed story " + storyId + " para " + paraIdx);
+                tidDiagPush(state, storyId, paraIdx, "fallback", method, "", "setXmlAttr failed");
+            } else {
+                verifyTid = getXmlAttr(element, XML_TID_ATTR);
+                if (verifyTid) {
+                    tidDiagPush(state, storyId, paraIdx, "ok", method, verifyTid, "written+verified");
+                    return verifyTid;
+                }
+                tidDiagPush(state, storyId, paraIdx, "fallback", method, "", "attr verify empty");
+            }
+        } else {
+            markErr += "[read_only] existing tid not found ";
+        }
+    } else if (!allowWriteTid) {
+        markErr += "[read_only] no associated xml element ";
+    }
+
+    fallbackTid = "fallback_" + storyId + "_" + paraIdx;
+    state.tidFallback += 1;
+    state.warnings.push("fallback tid used for story " + storyId + " para " + paraIdx);
+    tidDiagPush(
+        state,
+        storyId,
+        paraIdx,
+        "fallback",
+        method || "none",
+        fallbackTid,
+        markErr || (allowWriteTid ? "no valid xml element" : "no existing tid in read-only mode")
+    );
+    return fallbackTid;
+}
+
+// ==================== Segment extraction ====================
+function extractInlineStyles(para) {
+    var spans = [];
+    var ranges, i, range, text, cr, styleName, start, end;
+    var offset = 0;
+
+    try {
+        ranges = para.textStyleRanges;
+    } catch (e0) {
+        ranges = null;
+    }
+
+    if (!ranges) {
+        return spans;
+    }
+
+    for (i = 0; i < ranges.length; i++) {
+        range = ranges[i];
+        text = "";
+        styleName = "[None]";
+
+        try {
+            text = range.contents;
+        } catch (e1) {
+            text = "";
+        }
+
+        cr = text.indexOf("\r");
+        if (cr >= 0) {
+            text = text.substring(0, cr);
+        }
+        if (text.length === 0) {
+            continue;
+        }
+
+        try {
+            styleName = range.appliedCharacterStyle.name;
+        } catch (e2) {
+            styleName = "[None]";
+        }
+
+        start = offset;
+        end = offset + text.length;
+        if (styleName && styleName !== "[None]") {
+            spans.push({
+                start: start,
+                end: end,
+                char_style: styleName,
+                text: text
+            });
+        }
+        offset = end;
+    }
+
+    return spans;
+}
+
+function lineRectsForParagraph(para) {
+    var rects = [];
+    var lines, i, line, x0, x1, y0, y1, baseline, ascent, descent, pageIdx;
+    var frame, gb;
+    var tmp;
+
+    try {
+        lines = para.lines;
+    } catch (e0) {
+        lines = null;
+    }
+
+    if (lines && lines.length > 0) {
+        for (i = 0; i < lines.length; i++) {
+            line = getCollectionItem(lines, i);
+            try { x0 = toFiniteNumber(line.horizontalOffset); } catch (eH0) { x0 = NaN; }
+            try { x1 = toFiniteNumber(line.endHorizontalOffset); } catch (eH1) { x1 = NaN; }
+            try { baseline = toFiniteNumber(line.baseline); } catch (eH2) { baseline = NaN; }
+            try { ascent = toFiniteNumber(line.ascent); } catch (eH3) { ascent = NaN; }
+            try { descent = toFiniteNumber(line.descent); } catch (eH4) { descent = NaN; }
+
+            if (!isFinite(x0) || !isFinite(x1) || !isFinite(baseline) || !isFinite(ascent) || !isFinite(descent)) {
+                continue;
+            }
+
+            y0 = baseline - ascent;
+            y1 = baseline + descent;
+            if (x1 < x0) {
+                tmp = x0;
+                x0 = x1;
+                x1 = tmp;
+            }
+            if (y1 < y0) {
+                tmp = y0;
+                y0 = y1;
+                y1 = tmp;
+            }
+
+            pageIdx = -1;
+            try {
+                if (line.parentTextFrames && line.parentTextFrames.length > 0) {
+                    pageIdx = getPageIndexFromContainer(line.parentTextFrames[0], _masterPageMap);
+                }
+            } catch (e1) {
+                pageIdx = -1;
+            }
+
+            rects.push({
+                page_index: pageIdx,
+                x0: x0,
+                y0: y0,
+                x1: x1,
+                y1: y1
+            });
+        }
+    }
+
+    if (rects.length === 0) {
+        frame = getPrimaryTextFrameForParagraph(para);
+        if (frame && frame.isValid) {
+            try {
+                gb = frame.geometricBounds; // [top, left, bottom, right]
+                rects.push({
+                    page_index: getPageIndexFromContainer(frame, _masterPageMap),
+                    x0: toFiniteNumber(gb[1]),
+                    y0: toFiniteNumber(gb[0]),
+                    x1: toFiniteNumber(gb[3]),
+                    y1: toFiniteNumber(gb[2])
+                });
+            } catch (e3) {}
+        }
+    }
+
+    return rects;
+}
+
+// Per-character raw rectangles for char_rects_norm (contract §10 /
+// char_rects_norm_v1). Mirrors lineRectsForParagraph but emits ONE raw rect per
+// paragraph character in reading order, each carrying its content `c` so the
+// normalization pass can enforce CR-1 (char_rects_norm[i] ↔ source_text[i]).
+// Sync (runs inside the extractSegments doScript). Wrap-aware: each char takes
+// its own LINE's vertical extent (baseline±ascent/descent) + page. A char whose
+// geometry is unreadable is pushed as null so positional alignment is preserved
+// (the normalizer then falls that whole segment back to line_rects).
+function charRectsForParagraph(para) {
+    var out = [];
+    var lines;
+    try { lines = para.lines; } catch (e0) { return out; }
+    if (!lines || lines.length === 0) { return out; }
+    var i, line, baseline, ascent, descent, y0, y1, pageIdx, chars, nc, ci, ch, x0, x1, cc, tmp;
+    for (i = 0; i < lines.length; i++) {
+        line = getCollectionItem(lines, i);
+        if (!line) { continue; }
+        try { baseline = toFiniteNumber(line.baseline); } catch (eB) { baseline = NaN; }
+        try { ascent = toFiniteNumber(line.ascent); } catch (eA) { ascent = NaN; }
+        try { descent = toFiniteNumber(line.descent); } catch (eD) { descent = NaN; }
+        if (!isFinite(baseline) || !isFinite(ascent) || !isFinite(descent)) {
+            // Whole line unreadable → emit nulls for its chars to hold alignment.
+            try {
+                var nchSkip = line.characters ? line.characters.length : 0;
+                for (var sk = 0; sk < nchSkip; sk++) out.push(null);
+            } catch (eSk) {}
+            continue;
+        }
+        y0 = baseline - ascent;
+        y1 = baseline + descent;
+        if (y1 < y0) { tmp = y0; y0 = y1; y1 = tmp; }
+        pageIdx = -1;
+        try {
+            if (line.parentTextFrames && line.parentTextFrames.length > 0) {
+                pageIdx = getPageIndexFromContainer(line.parentTextFrames[0], _masterPageMap);
+            }
+        } catch (eP) { pageIdx = -1; }
+        chars = null;
+        try { chars = line.characters; } catch (eC) { chars = null; }
+        nc = 0; try { nc = chars ? chars.length : 0; } catch (eN) { nc = 0; }
+        for (ci = 0; ci < nc; ci++) {
+            ch = getCollectionItem(chars, ci);
+            if (!ch) { out.push(null); continue; }
+            try { x0 = toFiniteNumber(ch.horizontalOffset); } catch (eX0) { x0 = NaN; }
+            try { x1 = toFiniteNumber(ch.endHorizontalOffset); } catch (eX1) { x1 = NaN; }
+            cc = ""; try { cc = String(ch.contents); } catch (eCC) { cc = ""; }
+            out.push({ page_index: pageIdx, x0: x0, y0: y0, x1: x1, y1: y1, c: cc });
+        }
+    }
+    return out;
+}
+
+function extractSegments(doc, state, pageGeomMap, allowWriteTid) {
+    var segments = [];
+    var segmentsByTid = {};
+    var segmentsByParaKey = {};
+    var tableRefMap = {};
+    // #34: build doc-level hyperlink index once before the per-paragraph
+    // loop. buildSegmentObjectFromParagraph reads it via _linksForParagraph
+    // to attach source_links[] to each segment.
+    try { _docHyperlinkByStory = _collectDocHyperlinksByStory(doc); } catch (eHLI) { _docHyperlinkByStory = {}; }
+    var stories = doc.stories;
+    var xmlTag = null;
+    var xmlRoot = null;
+    var s, p, t, tk, story, paras, para, tid, paraIdxForTid, paraKey, storyId;
+    var tables, table, cells, cell, cellParas;
+    var tableRefKey;
+    var tableCellMeta;
+    var segObj, existingSeg;
+    var rawText, sbSplit, sbRects, sbI, sbPiece, sbNorm, sbTid, sbSegObj;
+
+    if (allowWriteTid === undefined) {
+        allowWriteTid = true;
+    }
+    if (allowWriteTid) {
+        xmlTag = ensureXmlTag(doc, XML_TAG_NAME);
+        xmlRoot = ensureXmlRootElement(doc, state);
+    } else {
+        try {
+            xmlTag = doc.xmlTags.itemByName(XML_TAG_NAME);
+            if (!xmlTag || !xmlTag.isValid) {
+                xmlTag = null;
+            }
+        } catch (eXmlTag0) {
+            xmlTag = null;
+        }
+        try {
+            if (doc.xmlElements && doc.xmlElements.length > 0) {
+                xmlRoot = getCollectionItem(doc.xmlElements, 0);
+                if (!xmlRoot || !xmlRoot.isValid) {
+                    xmlRoot = null;
+                }
+            }
+        } catch (eXmlRoot0) {
+            xmlRoot = null;
+        }
+    }
+
+    for (s = 0; s < stories.length; s++) {
+        story = getCollectionItem(stories, s);
+        if (!story || !story.isValid) {
+            continue;
+        }
+
+        try {
+            if (!story.textContainers || story.textContainers.length === 0) {
+                continue;
+            }
+            // Skip stories on the _translator_annotations layer
+            var storyLayer = null;
+            try { storyLayer = getCollectionItem(story.textContainers, 0).itemLayer; } catch (esl) {}
+            if (storyLayer && storyLayer.name === "_translator_annotations") {
+                continue;
+            }
+        } catch (e0) {
+            continue;
+        }
+
+        try {
+            paras = story.paragraphs;
+        } catch (e1) {
+            paras = null;
+        }
+        if (!paras || paras.length === 0) {
+            continue;
+        }
+
+        for (p = 0; p < paras.length; p++) {
+            para = getCollectionItem(paras, p);
+            if (!para || !para.isValid) {
+                continue;
+            }
+
+            tableCellMeta = detectTableCellMetaForParagraph(para);
+            if (tableCellMeta && tableCellMeta.table_ref && tableCellMeta.table_ref.isValid) {
+                tableRefKey = "";
+                if (isFinite(tableCellMeta.table_id) && tableCellMeta.table_id >= 0) {
+                    tableRefKey = "id_" + String(tableCellMeta.table_id);
+                } else {
+                    try {
+                        tableRefKey = "obj_" + String(tableCellMeta.table_ref.id);
+                    } catch (eRef0) {
+                        tableRefKey = "";
+                    }
+                }
+                if (tableRefKey && !tableRefMap[tableRefKey]) {
+                    tableRefMap[tableRefKey] = tableCellMeta.table_ref;
+                }
+            }
+            storyId = storyIdForParagraph(para, story.id);
+            paraIdxForTid = paragraphIndexHintForTid(para, p, tableCellMeta);
+            // Never markup anchored-object-only paragraphs (U+FFFC): wrapping
+            // them in XML elements breaks the inline frame anchor and makes the
+            // chart/table/image invisible in rendered output and exported PDFs.
+            tid = ensureParagraphTid(para, xmlTag, xmlRoot, state, storyId, paraIdxForTid,
+                allowWriteTid && !isAnchoredObjectOnlyText(paragraphTextNoReturn(para)));
+            segObj = buildSegmentObjectFromParagraph(para, storyId, p, tid, tableCellMeta);
+            paraKey = paragraphStableKey(para, storyId, paraIdxForTid, tableCellMeta);
+
+            // Soft-break split: if paragraph contains forced line breaks and is
+            // not a table cell, split into sub-segments for exact source matching.
+            rawText = paragraphTextRaw(para);
+            if (!tableCellMeta && hasSoftBreaks(rawText)) {
+                sbSplit = splitAtSoftBreaks(rawText);
+                // #BRIDGE-12: pre-compute char offset of each ORIGINAL piece
+                // within the parent paragraph so we can re-project the
+                // parent's source_links[] onto sub-segments. Each piece
+                // is followed by its separator (typically "\n" =
+                // U+2028 forced-line-break or "" = soft-return),
+                // contributing 1 char between consecutive pieces.
+                var sbOrigOffsets = [];
+                var sbOffCursor = 0;
+                for (var __soi = 0; __soi < sbSplit.pieces.length; __soi++) {
+                    sbOrigOffsets.push(sbOffCursor);
+                    sbOffCursor += sbSplit.pieces[__soi].length;
+                    if (__soi < sbSplit.separators.length) {
+                        sbOffCursor += String(sbSplit.separators[__soi] || "\n").length;
+                    }
+                }
+                // Filter out empty pieces (consecutive line breaks produce these).
+                // Keep track of which original indices survived for rect distribution.
+                var sbNonEmpty = [];
+                var sbNonEmptyOrigIdx = [];
+                for (sbI = 0; sbI < sbSplit.pieces.length; sbI++) {
+                    if (sbSplit.pieces[sbI].replace(/\s+/g, "").length > 0) {
+                        sbNonEmpty.push(sbSplit.pieces[sbI]);
+                        sbNonEmptyOrigIdx.push(sbI);
+                    }
+                }
+                if (sbNonEmpty.length > 1) {
+                    sbRects = distributeLineRectsToSubSegments(para, sbSplit.pieces, segObj.line_rects);
+                    // Build filtered separators: only keep separators between
+                    // consecutive non-empty pieces.  When empty pieces are skipped,
+                    // use the separator that was between the last non-empty and the
+                    // next non-empty (take the first separator in the gap).
+                    var sbFilteredSeps = [];
+                    for (sbI = 0; sbI < sbNonEmpty.length - 1; sbI++) {
+                        // The separator between non-empty[sbI] and non-empty[sbI+1]
+                        // is the one right after the original index of non-empty[sbI].
+                        var sepOrigIdx = sbNonEmptyOrigIdx[sbI];
+                        if (sepOrigIdx < sbSplit.separators.length) {
+                            sbFilteredSeps.push(sbSplit.separators[sepOrigIdx]);
+                        } else {
+                            sbFilteredSeps.push("\n");
+                        }
+                    }
+                    for (sbI = 0; sbI < sbNonEmpty.length; sbI++) {
+                        sbPiece = sbNonEmpty[sbI];
+                        // Collect rects from the original index, plus rects from any
+                        // empty pieces between this and the next non-empty piece.
+                        var sbCombinedRects = [];
+                        var sbOrigStart = sbNonEmptyOrigIdx[sbI];
+                        var sbOrigEnd = sbI < sbNonEmpty.length - 1 ? sbNonEmptyOrigIdx[sbI + 1] : sbSplit.pieces.length;
+                        for (var sbR = sbOrigStart; sbR < sbOrigEnd; sbR++) {
+                            if (sbRects[sbR]) {
+                                for (var sbRR = 0; sbRR < sbRects[sbR].length; sbRR++) {
+                                    sbCombinedRects.push(sbRects[sbR][sbRR]);
+                                }
+                            }
+                        }
+                        sbNorm = normalizeText(sbPiece);
+                        sbTid = tid + "_sb" + String(sbI);
+                        // #BRIDGE-12: project parent source_links onto this
+                        // sub-segment. Compute sub-segment's start/end in
+                        // parent-paragraph coordinates from the cumulative
+                        // offset table, then intersect each link's
+                        // [offset, offset+length) range with [sbStart, sbEnd)
+                        // and rebase the offset to be sub-segment-relative.
+                        // Without this, the webapp / format-paint flow sees
+                        // hyperlinks vanish on any segment that originated
+                        // from a forced-line-break split (e.g. URLs that
+                        // wrap across lines, multi-line link captions).
+                        var sbParaStart = sbOrigOffsets[sbNonEmptyOrigIdx[sbI]];
+                        var sbParaEnd   = sbParaStart + sbPiece.length;
+                        var sbLinks = [];
+                        var __parentLinks = (segObj.source_links && segObj.source_links.length) ? segObj.source_links : [];
+                        for (var __pli = 0; __pli < __parentLinks.length; __pli++) {
+                            var __pl = __parentLinks[__pli];
+                            if (!__pl || typeof __pl.offset !== "number" || typeof __pl.length !== "number") continue;
+                            var __plStart = __pl.offset;
+                            var __plEnd   = __pl.offset + __pl.length;
+                            if (__plEnd <= sbParaStart) continue;
+                            if (__plStart >= sbParaEnd) continue;
+                            var __clipStart = Math.max(__plStart, sbParaStart);
+                            var __clipEnd   = Math.min(__plEnd,   sbParaEnd);
+                            if (__clipEnd <= __clipStart) continue;
+                            var __sbOffset = __clipStart - sbParaStart;
+                            var __sbLength = __clipEnd - __clipStart;
+                            var __linkTxt = "";
+                            try {
+                                if (__pl.text) {
+                                    var __pltStart = __clipStart - __plStart;
+                                    __linkTxt = String(__pl.text).slice(__pltStart, __pltStart + __sbLength);
+                                }
+                            } catch (eLT) { __linkTxt = ""; }
+                            sbLinks.push({
+                                offset: __sbOffset,
+                                length: __sbLength,
+                                url: __pl.url || "",
+                                name: __pl.name || "",
+                                text: __linkTxt,
+                                visual_underline: __pl.visual_underline !== false
+                            });
+                        }
+                        sbSegObj = {
+                            tid: sbTid,
+                            story_id: segObj.story_id,
+                            paragraph_index: segObj.paragraph_index,
+                            paragraph_uid: segObj.paragraph_uid,
+                            source_text: sbPiece,
+                            segment_kind: segObj.segment_kind,
+                            translatable: segObj.translatable,
+                            target_policy: segObj.target_policy,
+                            paragraph_style: segObj.paragraph_style,
+                            page_indexes: pageIndexesFromLineRects(sbCombinedRects),
+                            line_rects: sbCombinedRects,
+                            line_rects_norm: [],
+                            point_size: segObj.point_size,
+                            leading_pt: segObj.leading_pt,
+                            leading_ratio: segObj.leading_ratio,
+                            leading_auto: segObj.leading_auto,
+                            inline_styles: sbI === 0 ? segObj.inline_styles : [],
+                            // Per-sub-segment format_snapshot: clip the parent's
+                            // mixed-format _allRanges/runs to THIS piece's char
+                            // range so the emphasis pass derives this sub-segment's
+                            // OWN baseline (a uniform title piece like "Getting
+                            // Ready"/Semibold no longer inherits the parent's
+                            // lighter baseline with its real format demoted to an
+                            // _auto emphasis run → no longer collapses on import).
+                            format_snapshot: VisualSnapshot.sliceFormatSnapshotToRange(
+                                segObj.format_snapshot, sbParaStart, sbParaEnd),
+                            paragraph_snapshot: segObj.paragraph_snapshot,
+                            source_hash: hashDjb2Hex(sbNorm),
+                            is_hidden_object: segObj.is_hidden_object,
+                            hidden_reason: segObj.hidden_reason,
+                            soft_break_group: tid,
+                            soft_break_index: sbI,
+                            // ORIGINAL piece index (counts EMPTY pieces that the
+                            // sbNonEmpty filter dropped, e.g. a blank middle line
+                            // "TITLE\n\nSUBTITLE"). The import's soft-break-split
+                            // planner cross-checks max(orig_index) === size-1: a
+                            // gap means empties were dropped, so the simple
+                            // sb_k→head+k remap would land a sibling on the blank
+                            // paragraph — planner falls back to merge in that case.
+                            soft_break_orig_index: sbNonEmptyOrigIdx[sbI],
+                            soft_break_separators: sbI === 0 ? sbFilteredSeps : [],
+                            // #BRIDGE-12: projected source_links (parent-paragraph
+                            // links clipped to this sub-segment's char range).
+                            source_links: sbLinks
+                        };
+                        segments.push(sbSegObj);
+                        segmentsByTid[sbTid] = sbSegObj;
+                    }
+                    // Map original tid to first sub-segment as safety net (M-EXP-4)
+                    segmentsByTid[tid] = segments[segments.length - sbNonEmpty.length];
+                    // Skip pushing the original unsplit segment.
+                    segmentsByParaKey[paraKey] = segments[segments.length - sbNonEmpty.length];
+                    continue;
+                }
+            }
+
+            segments.push(segObj);
+            segmentsByTid[tid] = segObj;
+            segmentsByParaKey[paraKey] = segObj;
+        }
+    }
+
+    function harvestTableCellsFromTable(tableObj, storyFallbackId) {
+        var tableStoryId = Number(storyFallbackId);
+        var c, cp, cellObj, paraObj;
+        var localCells = null;
+        var localCellParas = null;
+        if (!tableObj || !tableObj.isValid) {
+            return;
+        }
+        state.tableProbe.tables_seen += 1;
+        try {
+            if (tableObj.parentStory && tableObj.parentStory.isValid) {
+                tableStoryId = Number(tableObj.parentStory.id);
+            }
+        } catch (eTS0) {}
+        try {
+            localCells = tableObj.cells;
+        } catch (eTC0) {
+            localCells = null;
+        }
+        if (!localCells || localCells.length === 0) {
+            return;
+        }
+        for (c = 0; c < localCells.length; c++) {
+            cellObj = getCollectionItem(localCells, c);
+            if (!cellObj || !cellObj.isValid) {
+                continue;
+            }
+            state.tableProbe.cells_seen += 1;
+            try {
+                localCellParas = cellObj.paragraphs;
+            } catch (eTC1) {
+                localCellParas = null;
+            }
+            if (!localCellParas || localCellParas.length === 0) {
+                continue;
+            }
+            for (cp = 0; cp < localCellParas.length; cp++) {
+                paraObj = getCollectionItem(localCellParas, cp);
+                if (!paraObj || !paraObj.isValid) {
+                    continue;
+                }
+                state.tableProbe.cell_paragraphs_seen += 1;
+                storyId = storyIdForParagraph(paraObj, tableStoryId);
+                // In explicit cell traversal, trust loop cell context to avoid
+                // ambiguous ancestor resolution collapsing many cells into one.
+                tableCellMeta = buildTableCellMetaFromObjects(tableObj, cellObj, cp, localCellParas.length);
+                if (!tableCellMeta || tableCellMeta.cell_row < 0 || tableCellMeta.cell_col < 0) {
+                    state.tableProbe.table_meta_invalid += 1;
+                }
+                paraIdxForTid = paragraphIndexHintForTid(paraObj, cp, tableCellMeta);
+                paraKey = paragraphStableKey(paraObj, storyId, paraIdxForTid, tableCellMeta);
+                existingSeg = segmentsByParaKey[paraKey];
+                if (existingSeg) {
+                    existingSeg.paragraph_uid = paragraphUidForParagraph(paraObj);
+                    if (tableCellMeta) {
+                        attachTableCellMetaToSegment(existingSeg, tableCellMeta);
+                        if (!isControlOnlyText(existingSeg.source_text)
+                                && !isAnchoredObjectOnlyText(existingSeg.source_text)) {
+                            existingSeg.segment_kind = "table_cell";
+                            existingSeg.translatable = true;
+                            existingSeg.target_policy = "translate";
+                        }
+                        existingSeg.paragraph_index = segmentParagraphIndexForOutput(
+                            paraObj,
+                            existingSeg.paragraph_index,
+                            tableCellMeta
+                        );
+                        if (!existingSeg.line_rects || existingSeg.line_rects.length === 0) {
+                            existingSeg.line_rects = lineRectsForTableCellParagraph(paraObj);
+                            existingSeg.page_indexes = pageIndexesFromLineRects(existingSeg.line_rects);
+                        }
+                    }
+                    state.tableProbe.table_segments_updated += 1;
+                    continue;
+                }
+
+                tid = ensureParagraphTid(paraObj, xmlTag, xmlRoot, state, storyId, paraIdxForTid,
+                    allowWriteTid && !isAnchoredObjectOnlyText(paragraphTextNoReturn(paraObj)));
+                existingSeg = segmentsByTid[tid];
+                if (existingSeg) {
+                    segmentsByParaKey[paraKey] = existingSeg;
+                    existingSeg.paragraph_uid = paragraphUidForParagraph(paraObj);
+                    if (tableCellMeta) {
+                        attachTableCellMetaToSegment(existingSeg, tableCellMeta);
+                        if (!isControlOnlyText(existingSeg.source_text)
+                                && !isAnchoredObjectOnlyText(existingSeg.source_text)) {
+                            existingSeg.segment_kind = "table_cell";
+                            existingSeg.translatable = true;
+                            existingSeg.target_policy = "translate";
+                        }
+                        existingSeg.paragraph_index = segmentParagraphIndexForOutput(
+                            paraObj,
+                            existingSeg.paragraph_index,
+                            tableCellMeta
+                        );
+                    }
+                    state.tableProbe.table_segments_updated += 1;
+                    continue;
+                }
+
+                segObj = buildSegmentObjectFromParagraph(paraObj, storyId, cp, tid, tableCellMeta);
+                segments.push(segObj);
+                segmentsByTid[tid] = segObj;
+                segmentsByParaKey[paraKey] = segObj;
+                state.tableProbe.table_segments_added += 1;
+            }
+        }
+    }
+
+    // Prioritize harvesting table refs captured from real paragraph ancestry.
+    for (tk in tableRefMap) {
+        if (!tableRefMap.hasOwnProperty(tk)) {
+            continue;
+        }
+        harvestTableCellsFromTable(tableRefMap[tk], -1);
+    }
+
+    // Explicitly traverse table cells. In some documents, cell paragraphs are
+    // not surfaced by story.paragraphs and would otherwise be exported only as table anchors.
+    for (s = 0; s < stories.length; s++) {
+        story = getCollectionItem(stories, s);
+        if (!story || !story.isValid) {
+            continue;
+        }
+        try {
+            tables = story.tables;
+        } catch (e3) {
+            tables = null;
+        }
+        if (!tables || tables.length === 0) {
+            continue;
+        }
+
+        for (t = 0; t < tables.length; t++) {
+            table = getCollectionItem(tables, t);
+            harvestTableCellsFromTable(table, story.id);
+        }
+    }
+
+    attachNormalizedLineRects(segments, pageGeomMap, state);
+
+    return segments;
+}
+
+function exportPreviewPdf(doc, pdfPath) {
+    // MAX_PATH robustness (2026-07-03, host-verified). InDesign doc.exportFile
+    // CANNOT write a PDF to a path over ~260 chars (Windows MAX_PATH): it
+    // silently leaves a 0-byte file (or throws "Cannot find the folder"). Deep
+    // package paths hit this — a long project/OneDrive base + the package folder
+    // name (`<docStem>_translation_package_<ts>`) + "preview.pdf" easily exceeds
+    // 260. Node fs is NOT limited (the same run wrote the multi-MB segments.json
+    // into the identical deep folder fine). So: export to a SHORT system-temp
+    // path, then copy the bytes to the real (possibly long) pdfPath via fs.
+    // Probe 2026-07-03: exportFile→298-char path failed (0 bytes); exportFile→
+    // short OK (189KB); fs.writeFileSync→286-char path wrote every byte. IDML
+    // export tolerated the long path so it was left unchanged.
+    var tmpDir = RuntimePaths.getTempDir();
+    var tmpSep = RuntimePaths.getSep(tmpDir);
+    var shortPdf = tmpDir + tmpSep + "~pv_" + Number(new Date()) + ".pdf";
+
+    var presetNames = ["[High Quality Print]", "[Smallest File Size]", "[Press Quality]"];
+    var preset = null, i, exported = null;
+
+    for (i = 0; i < presetNames.length && !exported; i++) {
+        try {
+            preset = app.pdfExportPresets.itemByName(presetNames[i]);
+            if (preset && preset.isValid) {
+                doc.exportFile(ExportFormat.PDF_TYPE, shortPdf, false, preset);
+                exported = { ok: true, preset: presetNames[i] };
+            }
+        } catch (e1) { preset = null; }
+    }
+    // Gate 9: pdfExportPresets is host collection, use .item(0)
+    if (!exported) {
+        try {
+            if (app.pdfExportPresets.length > 0) {
+                preset = getCollectionItem(app.pdfExportPresets, 0);
+                doc.exportFile(ExportFormat.PDF_TYPE, shortPdf, false, preset);
+                exported = { ok: true, preset: preset.name };
+            }
+        } catch (e2) {}
+    }
+    if (!exported) {
+        try {
+            doc.exportFile(ExportFormat.PDF_TYPE, shortPdf);
+            exported = { ok: true, preset: "default" };
+        } catch (e3) {
+            FileUtils.removeFileBestEffort(shortPdf);
+            return { ok: false, error: e3.message };
+        }
+    }
+
+    // Copy short temp → real pdfPath. This is the only step that touches the
+    // (possibly > MAX_PATH) destination, and Node fs handles long paths.
+    if (shortPdf !== pdfPath) {
+        try {
+            fs.writeFileSync(pdfPath, fs.readFileSync(shortPdf));
+        } catch (eCopy) {
+            FileUtils.removeFileBestEffort(shortPdf);
+            return { ok: false, error: "PDF exported to temp but copy to package path failed: " + (eCopy && eCopy.message || eCopy) };
+        }
+        FileUtils.removeFileBestEffort(shortPdf);
+    }
+    return exported;
+}
+
+/**
+ * Export PDF with master pages appended as real document pages.
+ * 1) saveACopy to a temp file
+ * 2) open the copy
+ * 3) for each master spread, duplicate its page items onto new pages at the end
+ * 4) export PDF
+ * 5) close copy without saving, delete temp file
+ *
+ * masterPageMap: result of buildMasterPageMap(doc) from the ORIGINAL doc.
+ * Returns { ok, preset, error, master_pdf_pages }
+ */
+function exportPdfWithMasterPages(doc, pdfPath, masterPageMap, sourceDirOverride) {
+    var tempPath, copyDoc, pdfResult;
+    var i, j, spread, mpPage, newPage, allItems, k;
+    var masterPdfPages = [];
+    var docPageCount;
+
+    if (!masterPageMap || masterPageMap.list.length === 0) {
+        pdfResult = exportPreviewPdf(doc, pdfPath);
+        pdfResult.master_pdf_pages = [];
+        return pdfResult;
+    }
+
+    // 1) Save a temporary copy in the SOURCE doc's directory (NOT system temp).
+    //
+    // Why source dir: InDesign auto-activates fonts from a sibling
+    // "Document fonts" folder next to the .indd. When we put the temp file
+    // in system tempDir (C:\Users\...\Temp\), InDesign opens the temp doc
+    // but doesn't see the source's Document fonts folder → all custom
+    // fonts (e.g. EJ Sans Text family) are flagged missing and substituted
+    // with default (Myriad Pro Regular) → preview.pdf comes out
+    // single-weight even though source renders correctly. Saving the temp
+    // NEXT TO the source .indd lets InDesign find Document fonts → fonts
+    // activate identically to the live doc → PDF preserves Semibold/Italic.
+    //
+    // Caller (async main) resolves doc.fullName (Promise-aware) and passes
+    // the parent dir as sourceDirOverride. We don't try doc.fullName here
+    // because in UXP it's a Promise that this sync function can't await —
+    // would silently fall through to tempDir and skip the fix.
+    var sourceDir = (typeof sourceDirOverride === "string") ? sourceDirOverride : "";
+
+    var tempDir, tempSep;
+    if (sourceDir) {
+        tempDir = sourceDir;
+        tempSep = (tempDir.indexOf("\\") >= 0) ? "\\" : "/";
+    } else {
+        // Fallback: system temp (loses Document fonts but at least lets export run).
+        tempDir = RuntimePaths.getTempDir();
+        tempSep = RuntimePaths.getSep(tempDir);
+    }
+    tempPath = tempDir + tempSep + "~export_mp_" + Number(new Date()) + ".indd";
+
+    try {
+        doc.saveACopy(tempPath);
+    } catch (eSave) {
+        pdfResult = exportPreviewPdf(doc, pdfPath);
+        pdfResult.master_pdf_pages = [];
+        pdfResult.master_warning = "saveACopy failed: " + eSave.message;
+        return pdfResult;
+    }
+
+    // 2) Open the copy silently (string path, Gate 9 verified).
+    //
+    // Now that the temp lives next to the source .indd, the sibling
+    // "Document fonts" folder is visible to InDesign on open → fonts
+    // activate identically to the live doc → showingWindow=false is safe
+    // again (no need to flash a window or set INTERACT_WITH_ALL).
+    try {
+        copyDoc = app.open(tempPath, false);
+    } catch (eOpen) {
+        // Cleanup temp file — genuinely best effort: this is a sync function, so
+        // there is nothing to await the result with.
+        // #70: was `removeFileAsync(...)` with the promise abandoned — same
+        // behaviour, but it READ like a checked delete. The best-effort name now
+        // carries the contract, so nobody has to notice the missing `await`.
+        // ⚠ Nothing here may claim the temp file is gone; it is not verified.
+        FileUtils.removeFileBestEffort(tempPath);
+        pdfResult = exportPreviewPdf(doc, pdfPath);
+        pdfResult.master_pdf_pages = [];
+        pdfResult.master_warning = "open copy failed: " + eOpen.message;
+        return pdfResult;
+    }
+
+    // 3) For each master spread, add document pages and materialise master items.
+    //    Strategy: apply the master to new pages, then override all master page
+    //    items so they become real page objects visible in PDF export.
+    try {
+        docPageCount = copyDoc.pages.length;
+        for (i = 0; i < copyDoc.masterSpreads.length; i++) {
+            spread = getCollectionItem(copyDoc.masterSpreads, i);
+            if (!spread || !spread.isValid) { continue; }
+
+            // A master spread can have 1 or 2 pages (single vs. facing).
+            for (j = 0; j < spread.pages.length; j++) {
+                mpPage = getCollectionItem(spread.pages, j);
+                if (!mpPage || !mpPage.isValid) { continue; }
+
+                // Add a new page at the end of the document.
+                newPage = copyDoc.pages.add();
+
+                // Apply this master spread so its items appear on the new page.
+                try { newPage.appliedMaster = spread; } catch (eAM) {}
+
+                // Override every master page item to turn them into real page
+                // objects; without this they remain "master item ghosts" that
+                // some PDF export paths omit.
+                try {
+                    allItems = newPage.masterPageItems;
+                    for (k = allItems.length - 1; k >= 0; k--) {
+                        try { getCollectionItem(allItems, k).override(newPage); } catch (eOvr) {}
+                    }
+                } catch (eOvrLoop) {}
+
+                masterPdfPages.push({
+                    spread_name: String(spread.name || spread.namePrefix || ""),
+                    page_offset: j,
+                    pdf_page_index: copyDoc.pages.length - 1,
+                    virtual_index: docPageCount + masterPdfPages.length
+                });
+            }
+        }
+    } catch (eConvert) {
+        // If conversion fails, still try to export what we have.
+    }
+
+    // 4) Export PDF from the copy.
+    pdfResult = exportPreviewPdf(copyDoc, pdfPath);
+    pdfResult.master_pdf_pages = masterPdfPages;
+
+    // 5) Close copy without saving, delete temp file.
+    // ⚠ #70 第二批（arch 2026-08-22，本轮不动）：`close()` 的结果这里既不检查也
+    //    不回读 —— 而 `import_integrated.idjs:1731-1762` 已实证 UXP 的 `close()`
+    //    可以「不报错却没关掉」。留在这里等第二批统一处理。
+    try { copyDoc.close(SaveOptions.NO); } catch (eClose) {}
+    // #70: 同上一处 —— 同步函数里 await 不了，改用名字自带契约的 best-effort 版。
+    FileUtils.removeFileBestEffort(tempPath);
+
+    return pdfResult;
+}
+
+function exportIdmlBackup(doc, idmlPath) {
+    try {
+        doc.exportFile(ExportFormat.INDESIGN_MARKUP, idmlPath);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+}
+
+// 2026-05-28: workaround for "open package folder" in idjs Scripts-Panel
+// context. uxp.shell.openPath rejects every extension; child_process is
+// missing; navigator.clipboard.setContent is manifest-v5 only. But InDesign
+// DOM exposes `Link.revealInSystem()` which opens the OS file browser to
+// the link's source folder + selects the file. We can leverage it by:
+//   1. Writing a tiny 1-byte .svg next to the .zip (SVG was the only
+//      lightweight place-able format that succeeded in probe testing —
+//      .pdf/.txt/.png/.rtf all failed or didn't create a link).
+//   2. Opening a new untitled doc, calling page.place(svgPath).
+//   3. The created Link points at our anchor file. Call revealInSystem().
+//   4. Close the temp doc (NO save) and delete the anchor.
+//
+// Behind EXPORT_SKIP_REVEAL=1 opt-out. Skipped in automation runs.
+// Returns { ok, opened, error? }.
+async function revealFolderViaTempLink(anchorParentDir, log) {
+    log = log || function () {};
+    var indesign = require("indesign");
+    var app = indesign.app;
+    var SaveOptions = indesign.SaveOptions;
+    var pathSep = (anchorParentDir.indexOf("\\") >= 0) ? "\\" : "/";
+    var anchorName = "_reveal_anchor_" + Date.now() + ".svg";
+    var anchorPath = anchorParentDir + pathSep + anchorName;
+    var tempDoc = null;
+    try {
+        // Step 1: write the SVG anchor next to the zip
+        try { fs.writeFileSync(anchorPath, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', "utf-8"); }
+        catch (eW) { return { ok: false, error: "anchor write failed: " + eW.message }; }
+        log("reveal anchor written: " + anchorPath);
+
+        // Step 2: temp doc + place
+        try { tempDoc = app.documents.add(); }
+        catch (eD) { return { ok: false, error: "temp doc add failed: " + (eD && eD.message || eD) }; }
+
+        try {
+            var page = tempDoc.pages.item(0);
+            page.place(anchorPath);
+        } catch (eP) {
+            return { ok: false, error: "place failed: " + (eP && eP.message || eP) };
+        }
+
+        // Step 3: revealInSystem on the new link
+        var opened = false;
+        try {
+            if (tempDoc.links.length > 0) {
+                var lk = tempDoc.links.item(0);
+                lk.revealInSystem();
+                opened = true;
+                log("revealInSystem invoked");
+            } else {
+                return { ok: false, error: "place did not create a link" };
+            }
+        } catch (eR) {
+            return { ok: false, error: "revealInSystem threw: " + (eR && eR.message || eR) };
+        }
+
+        return { ok: true, opened: opened };
+    } finally {
+        // Always close the temp doc + delete the anchor, even on early-return.
+        try { if (tempDoc) await tempDoc.close(SaveOptions.NO); } catch (eC) { log("temp doc close failed: " + (eC && eC.message || eC)); }
+        // Sleep briefly so Explorer has a chance to render the folder
+        // before the anchor disappears from under it.
+        try { await new Promise(function (r) { setTimeout(r, 600); }); } catch (eS) {}
+        // UXP-safe anchor cleanup: the Node sync delete isn't supported in
+        // UXP (the provider lacks it and always threw), so delete via lfs
+        // entry.delete directly — this was already the only path that ran.
+        try {
+            var uxp = require("uxp");
+            var lfs = uxp.storage.localFileSystem;
+            var anchorUrl = "file:///" + anchorPath.replace(/\\/g, "/").replace(/^\/+/, "");
+            var aE = await lfs.getEntryWithUrl(anchorUrl);
+            if (aE) await aE.delete();
+        } catch (eU2) { log("anchor cleanup failed: " + (eU2 && eU2.message || eU2)); }
+    }
+}
+
+// deleteFolderRecursive 已抽到 lib/file_utils.js（2026-05-28），通过
+// FileUtils.deleteFolderRecursiveAsync 调用。本地 alias 保留兼容性。
+var deleteFolderRecursive = FileUtils.deleteFolderRecursiveAsync;
+
+// Walk a finished package folder, build a .zip alongside it (sibling file with
+// same basename + ".zip"). Mirrors zip_folder.idjs behaviour but operates on
+// the just-written package so operators get one shareable artefact.
+//
+// Returns { ok, zipPath, fileCount, rawBytes, zipBytes, error? }.
+async function buildPackageZip(packageFolderPath) {
+    var sep = (packageFolderPath.indexOf("\\") >= 0) ? "\\" : "/";
+    var lastSep = packageFolderPath.lastIndexOf(sep);
+    var parentPath = lastSep > 0 ? packageFolderPath.substring(0, lastSep) : packageFolderPath;
+    var pkgBaseName = lastSep >= 0 ? packageFolderPath.substring(lastSep + 1) : packageFolderPath;
+    var zipPath = packageFolderPath + ".zip";
+
+    var pkgFolder;
+    try {
+        var pkgUrl = "file:///" + packageFolderPath.replace(/\\/g, "/").replace(/^\/+/, "");
+        pkgFolder = await lfs.getEntryWithUrl(pkgUrl);
+    } catch (eFolder) {
+        return { ok: false, error: "cannot resolve package folder: " + eFolder.message };
+    }
+
+    // Recursively collect File entries keyed by archive-relative path. Prefix
+    // with the package folder's basename so the zip root mirrors that folder
+    // (matches zip_folder.idjs convention).
+    async function walk(folder, prefix) {
+        var children;
+        try { children = await folder.getEntries(); }
+        catch (eChildren) { return { items: [], err: eChildren.message }; }
+        var out = [];
+        for (var i = 0; i < children.length; i++) {
+            var e = children[i];
+            var archiveName = prefix + e.name;
+            if (e.isFolder) {
+                var sub = await walk(e, archiveName + "/");
+                for (var j = 0; j < sub.items.length; j++) out.push(sub.items[j]);
+            } else if (e.isFile) {
+                out.push({ entry: e, archiveName: archiveName });
+            }
+        }
+        return { items: out };
+    }
+
+    var collected;
+    try { collected = await walk(pkgFolder, pkgBaseName + "/"); }
+    catch (eWalk) { return { ok: false, error: "walk failed: " + eWalk.message }; }
+    var files = collected.items;
+    if (!files.length) return { ok: false, error: "package folder is empty" };
+
+    var entries = {};
+    var rawTotal = 0;
+    var readErrors = [];
+    for (var k = 0; k < files.length; k++) {
+        var f = files[k];
+        try {
+            var ab = await f.entry.read({ format: uxp.storage.formats.binary });
+            var u8 = new Uint8Array(ab);
+            entries[f.archiveName] = u8;
+            rawTotal += u8.length;
+        } catch (eRead) {
+            readErrors.push(f.archiveName + " — " + ((eRead && eRead.message) || String(eRead)));
+        }
+    }
+    if (!Object.keys(entries).length) {
+        return { ok: false, error: "no readable files (read errors=" + readErrors.length + ")" };
+    }
+
+    var zipBytes;
+    try { zipBytes = ZipCore.createZip(entries); }
+    catch (eZip) { return { ok: false, error: "createZip failed: " + eZip.message }; }
+
+    try { fs.writeFileSync(zipPath, zipBytes); }
+    catch (eW) { return { ok: false, error: "write failed: " + ((eW && eW.message) || eW) }; }
+
+    return {
+        ok: true,
+        zipPath: zipPath,
+        fileCount: Object.keys(entries).length,
+        readErrors: readErrors.length,
+        rawBytes: rawTotal,
+        zipBytes: zipBytes.length
+    };
+}
+
+
+function buildTemplateTranslations(docName, segments) {
+    var out = {
+        schema_version: SCHEMA_VERSION,
+        document_name: docName,
+        translations: []
+    };
+    var i, seg, translatable;
+    for (i = 0; i < segments.length; i++) {
+        seg = segments[i];
+        translatable = typeof seg.translatable === "boolean"
+            ? !!seg.translatable
+            : isSegmentKindTranslatable(detectSegmentKindFromText(seg.source_text));
+        out.translations.push({
+            tid: seg.tid,
+            source_text: seg.source_text,
+            target_text: "",
+            status: translatable ? "todo" : "skip",
+            notes: translatable ? "" : controlOnlyTemplateNoteForKind(seg.segment_kind)
+        });
+    }
+    return out;
+}
+
+// ── B2 carry-forward host I/O ────────────────────────────────────────────────
+// Read raw file bytes (Uint8Array) or null. UXP fs.readFileSync(path) with no
+// encoding returns binary bytes (proven by probes/20260621_01 + buildPackageZip
+// write path); normalize to Uint8Array.
+function readBytesOrNull(p) {
+    try {
+        var b = fs.readFileSync(p);
+        if (b == null) return null;
+        return (b instanceof Uint8Array) ? b : new Uint8Array(b);
+    } catch (e) { return null; }
+}
+
+// Strip the single top-level root folder that buildPackageZip prefixes onto
+// every entry ("<pkgBaseName>/…") so keys become package-relative
+// ("segments.json", "versions/manifest.json", …). Only strips when EVERY entry
+// shares one first path segment; otherwise returns the map unchanged.
+function stripZipRoot(rawMap) {
+    var keys = Object.keys(rawMap);
+    if (!keys.length) return {};
+    var firstSeg = null, uniform = true, i;
+    for (i = 0; i < keys.length; i++) {
+        var sl = keys[i].indexOf("/");
+        var seg = sl >= 0 ? keys[i].slice(0, sl) : null;
+        if (i === 0) firstSeg = seg;
+        else if (seg !== firstSeg) { uniform = false; break; }
+    }
+    var out = {};
+    if (uniform && firstSeg != null) {
+        var pref = firstSeg + "/";
+        for (i = 0; i < keys.length; i++) {
+            out[keys[i].indexOf(pref) === 0 ? keys[i].slice(pref.length) : keys[i]] = rawMap[keys[i]];
+        }
+    } else {
+        for (i = 0; i < keys.length; i++) out[keys[i]] = rawMap[keys[i]];
+    }
+    return out;
+}
+
+// Append this export as a new version into a FLAT versions/ dir built from the
+// operator-selected previous package. Planning is pure (lib/version_carry.js);
+// this does host I/O only. Returns a result object (never throws to caller).
+// AC7: only invoked when a previous package was selected — a normal export
+// never calls this and stays byte-equivalent to today's output.
+async function writeCarryForwardVersions(packageFolderPath, sep, carryZipPath, opts) {
+    var out = { attempted: true, ok: false, wrote: 0, bootstrap: false, warnings: [], reason: "" };
+
+    var prevZipU8 = readBytesOrNull(carryZipPath);
+    if (!prevZipU8) { out.reason = "cannot read previous package: " + carryZipPath; return out; }
+    var rawMap;
+    try { rawMap = ZipCore.readZip(prevZipU8); }
+    catch (eZ) { out.reason = "cannot unzip previous package: " + (eZ && eZ.message || eZ); return out; }
+    var prevFiles = stripZipRoot(rawMap);
+
+    var currentFiles = {};
+    currentFiles["segments.json"] = readBytesOrNull(opts.segmentsPath);
+    currentFiles["translations_template.json"] = readBytesOrNull(opts.templatePath);
+    var pv = readBytesOrNull(opts.previewPath); if (pv) currentFiles["preview.pdf"] = pv;
+    var td = readBytesOrNull(opts.tidMapPath); if (td) currentFiles["tid_map.json"] = td;
+    if (!currentFiles["segments.json"] || !currentFiles["translations_template.json"]) {
+        out.reason = "current package segments.json/translations_template.json bytes unreadable";
+        return out;
+    }
+
+    var versionId;
+    try { versionId = VersionManifest.makeVersionId(opts.exportedAtIso); }
+    catch (eV) { versionId = VersionManifest.makeVersionId(utcIsoNow()); }
+
+    var plan = VersionCarry.planCarryForward({
+        prevFiles: prevFiles,
+        currentFiles: currentFiles,
+        currentMeta: {
+            versionId: versionId,
+            projectUid: opts.projectUid || "",
+            projectId: opts.projectId || "",
+            exportedAt: opts.exportedAtIso || ""
+        }
+    });
+    out.warnings = plan.warnings || [];
+    if (!plan.ok) { out.reason = plan.reason || "carry-forward planning failed"; return out; }
+    if (plan.block) { out.reason = plan.reason || "carry-forward blocked (AC8)"; out.blocked = true; return out; }
+    out.bootstrap = !!plan.bootstrap;
+
+    var versionsRoot = packageFolderPath + sep + "versions";
+    try { await FileUtils.ensureDirAsync(versionsRoot); }
+    catch (eD) { out.reason = "cannot create versions/ dir: " + (eD && eD.message || eD); return out; }
+
+    for (var i = 0; i < plan.versionsToWrite.length; i++) {
+        var v = plan.versionsToWrite[i];
+        var vdir = versionsRoot + sep + v.dir;
+        try { await FileUtils.ensureDirAsync(vdir); }
+        catch (eVD) { out.reason = "cannot create version dir " + v.dir + ": " + (eVD && eVD.message || eVD); return out; }
+        for (var fname in v.files) {
+            if (!v.files.hasOwnProperty(fname)) continue;
+            var bytes = v.files[fname];
+            try { fs.writeFileSync(vdir + sep + fname, (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes)); }
+            catch (eW) { out.reason = "failed writing " + v.dir + "/" + fname + ": " + (eW && eW.message || eW); return out; }
+        }
+        out.wrote++;
+    }
+    try { writeUtf8File(versionsRoot + sep + "manifest.json", JSON.stringify(plan.manifest, null, 2)); }
+    catch (eM) { out.reason = "failed writing manifest.json: " + (eM && eM.message || eM); return out; }
+
+    out.ok = true;
+    out.tip = plan.manifest.tip;
+    out.versionCount = plan.manifest.versions.length;
+    return out;
+}
+
+function buildTidMap(docName, segments) {
+    var out = {
+        schema_version: SCHEMA_VERSION,
+        document_name: docName,
+        generated_at_utc: utcIsoNow(),
+        mappings: [],
+        summary: {
+            rows: 0,
+            fallback_rows: 0,
+            non_fallback_rows: 0
+        }
+    };
+    var i, seg, tid, norm;
+    for (i = 0; i < segments.length; i++) {
+        seg = segments[i];
+        tid = safeString(seg.tid);
+        if (!tid) {
+            continue;
+        }
+        norm = normalizeText(safeString(seg.source_text));
+        var mapping = {
+            tid: tid,
+            story_id: Number(seg.story_id),
+            paragraph_index: Number(seg.paragraph_index),
+            paragraph_uid: Number(seg.paragraph_uid),
+            source_hash: safeString(seg.source_hash) || hashDjb2Hex(norm),
+            source_text_norm: norm
+        };
+        if (seg.soft_break_group) {
+            mapping.soft_break_group = safeString(seg.soft_break_group);
+            mapping.soft_break_index = Number(seg.soft_break_index);
+        }
+        out.mappings.push(mapping);
+        if (/^fallback_\d+_\d+(_sb\d+)?$/.test(tid)) {
+            out.summary.fallback_rows += 1;
+        } else {
+            out.summary.non_fallback_rows += 1;
+        }
+    }
+    out.summary.rows = out.mappings.length;
+    return out;
+}
+
+function askExportStartMode() {
+    // UXP: app.dialogs.add replaces ScriptUI Window (Gate 8: dlg.show returns boolean)
+    var dlg, col, result;
+    try {
+        dlg = app.dialogs.add({ name: "Export Translation Package", canCancel: true });
+        col = dlg.dialogColumns.add();
+        col.staticTexts.add({ staticLabel: "Export translation package from the active document." });
+        col.staticTexts.add({ staticLabel: "The document will NOT be modified." });
+        col.staticTexts.add({ staticLabel: "Click OK to continue or Cancel to abort." });
+        result = dlg.show();
+        dlg.destroy();
+        return !!result;
+    } catch (e) {
+        try { if (dlg) { dlg.destroy(); } } catch (e2) {}
+        return false;
+    }
+}
+
+async function main() {
+    var doc, outputFolder, outputRoot, baseName, packageFolderName, packageFolderPath;
+    var segmentsPath, templatePath, previewPath, tidMapPath, idmlBackupPath, tidDiagPath, warningsPath;
+    var state, segments, packageJson, pdfResult, idmlResult, summary, tidMapJson;
+    var fallbackRatio;
+    var aiManualRows, pageGeometries, pageGeomMap;
+    var sep;
+    // 2026-05-28: non-modal processing indicator. Opened right before the
+    // heavy package-write work begins and closed before the Explorer reveal
+    // step (so the spinner doesn't compete visually with Explorer popping).
+    // Skipped in automation runs.
+    var __processing = null;
+
+    // #BRIDGE-1: detect headless/bridge-driven invocation. When MCP /
+    // run_uxp_script preseeds automation options (even {}), readAutomationOptions
+    // consumes them and AutomationBridge.isAutomatedRun() returns true for
+    // the rest of the run — letting every showAlert call route through
+    // recordAutomationResult instead of blocking on a DOM dialog (which
+    // deadlocks the bridge plugin because the main thread sits inside
+    // dlg.show() while bridge tries to fetch the next request).
+    //
+    // Manual invocation from the Scripts panel doesn't preseed anything,
+    // so isAutomatedRun() stays false and the user still gets the
+    // "Export finished" summary as before.
+    var __autoOpts = null;
+    try { __autoOpts = await AutomationBridge.readAutomationOptions("export_translation_package"); }
+    catch (eABE) { /* peek-only — failures here are not fatal */ }
+
+    if (app.documents.length === 0) {
+        showAlert("Please open a document first.");
+        return;
+    }
+
+    doc = app.activeDocument;
+    exportLog("doc: " + doc.name);
+
+    // A3a' (2026-06-16): read the carried project _meta (stored on the doc at
+    // import time via the "project_meta_v1" label) → pre-fill the export
+    // dialog's Designer field + carry source_language etc. forward so the
+    // export can write a schema-valid _meta.json with the designer added.
+    var __carriedMeta = null;
+    try { __carriedMeta = ProjectMetaLabel.read(doc); } catch (eCM) { __carriedMeta = null; }
+    var __cm = __carriedMeta || {};
+    var __cmc = __cm.contributors || {};
+    var __defaultDesigner = __cmc.designer || "";
+    var __defaultProjectName = __cm.project_name || "";
+    var __defaultSourceLang = __cm.source_language || "";
+    var __defaultTargetLang = (__cm.target_language == null) ? "" : __cm.target_language;
+    var __defaultWorkflow = __cm.workflow_mode || "translation";
+    var __defaultDeadline = (__cm.deadline == null) ? "" : __cm.deadline;
+    // (The dialog says NOTHING about the carried metadata — owner ruling
+    //  2026-08-28. The assessment that fed that hint is gone with it; see the
+    //  tombstone in lib/export_dialog.js.)
+    var __langOptions = __buildLangOptions();
+    exportLog("project_meta label: " + (__carriedMeta ? ("carried (src=" + (__carriedMeta.source_language || "?") + ")") : "none"));
+
+    // Resolve source .indd directory here in async main() — `doc.fullName`
+    // can be a Promise in UXP InDesign, which sync code (e.g. inside
+    // `exportPdfWithMasterPages`) can't await. We pass the resolved
+    // directory string in so the master-page PDF temp file can be placed
+    // next to the source's "Document fonts" folder for portable-font
+    // activation. Falls back to system tempDir if resolution fails.
+    var sourceDirResolved = "";
+    try {
+        var fnRaw = doc.fullName;
+        if (fnRaw && typeof fnRaw.then === "function") fnRaw = await fnRaw;
+        var fnPath = "";
+        if (fnRaw && fnRaw.nativePath) fnPath = String(fnRaw.nativePath);
+        else if (fnRaw && fnRaw.fsName) fnPath = String(fnRaw.fsName);
+        else if (fnRaw) fnPath = String(fnRaw);
+        if (fnPath && fnPath.indexOf("[object") < 0) {
+            var lastSep = Math.max(fnPath.lastIndexOf("\\"), fnPath.lastIndexOf("/"));
+            if (lastSep > 0) sourceDirResolved = fnPath.substring(0, lastSep);
+        }
+        exportLog("sourceDir resolved: " + (sourceDirResolved || "(failed → tempDir fallback)"));
+    } catch (eSrcResolve) {
+        exportLog("sourceDir resolve threw: " + eSrcResolve.message);
+    }
+
+    // 2026-05-28: redirect _exportLogPath to <docDir>/script_outputs/log/
+    // once we know the doc's parent dir. Initial path (toolkit base) only
+    // catches pre-main lines; full cumulative log gets re-flushed to the
+    // new path on the next exportLog() call below.
+    if (sourceDirResolved) {
+        try { await ScriptLogPaths.ensureLogDirAsync(sourceDirResolved); } catch (eELD) {}
+        _exportLogPath = ScriptLogPaths.resolveLogPath(sourceDirResolved, "export_translation_package");
+        exportLog("log redirected to: " + _exportLogPath);
+    }
+
+    // Confirmation dialog removed — folder picker (next step) is itself a
+    // cancellable affirmative action, so the extra dialog was just friction.
+    // The "doc will not be modified" reassurance now lives in the panel
+    // description / README. Set EXPORT_SKIP_CONFIRM=false to re-enable.
+    var EXPORT_SKIP_CONFIRM = true;
+    if (!EXPORT_SKIP_CONFIRM && !askExportStartMode()) {
+        exportLog("user cancelled askExportStartMode");
+        return;
+    }
+    exportLog("resolving output folder...");
+    // Test/automation bypass: if EXPORT_OUTPUT_DIR env var is set, resolve
+    // the folder via getEntryWithUrl (no UI). Falls through to interactive
+    // dialog on any failure so production usage is unchanged.
+    var envExportDir = "";
+    try { envExportDir = (process && process.env && process.env.EXPORT_OUTPUT_DIR) || ""; } catch (eEnvR) {}
+    var packageFolderPathFromDialog = "";   // set when dialog picks the full path
+    if (envExportDir) {
+        try {
+            var fileUrl = "file:///" + String(envExportDir).replace(/\\/g, "/").replace(/^\/+/, "");
+            outputFolder = await lfs.getEntryWithUrl(fileUrl);
+            exportLog("EXPORT_OUTPUT_DIR override: resolved " + fileUrl);
+        } catch (eEnvResolve) {
+            exportLog("EXPORT_OUTPUT_DIR resolve failed: " + (eEnvResolve && eEnvResolve.message ? eEnvResolve.message : String(eEnvResolve)) + " — falling back to dialog");
+            outputFolder = null;
+        }
+    }
+    baseName = sanitizeForPath(stripFileExtension(doc.name));
+    if (!outputFolder && !envExportDir) {
+        // 2026-05-28: replaced legacy lfs.getFolder() picker with a richer
+        // HTML dialog. User can see + edit the full output path, browse for
+        // a parent dir, and save the doc if it's dirty/untitled before
+        // confirming. EXPORT_OUTPUT_DIR env var still skips the dialog for
+        // automation.
+        //
+        // Default target lives under the unified script_outputs/ umbrella:
+        //   <docDir>/script_outputs/package/<docname>_translation_package_<ts>
+        // — same convention as baseline_snapshots/ etc. The dialog's Browse
+        // button lets the user pick any other parent (e.g. a delivery dir).
+        var __suggestedLeaf = baseName + "_translation_package_" + compactTimestampNow();
+        var __defaultParent = sourceDirResolved || "";
+        if (__defaultParent) {
+            var __dsep = (__defaultParent.indexOf("\\") >= 0) ? "\\" : "/";
+            __defaultParent = __defaultParent + __dsep + "script_outputs" + __dsep + "package";
+        }
+        var __dialogRes;
+        try {
+            __dialogRes = await ExportDialog.showExportDialog(app, {
+                doc: doc,
+                lfs: lfs,
+                defaultDocDir: __defaultParent,
+                defaultLeafName: __suggestedLeaf,
+                defaultDesigner: __defaultDesigner,
+                defaultProjectName: __defaultProjectName,
+                defaultSourceLang: __defaultSourceLang,
+                defaultTargetLang: __defaultTargetLang,
+                defaultWorkflow: __defaultWorkflow,
+                defaultDeadline: __defaultDeadline,
+                languageOptions: __langOptions,
+                // 🔴 PRESENCE was the wrong question. `!!__carriedMeta` made a
+                // carried-but-incomplete meta render as "edit only if needed" —
+                // the dialog reassuring the operator about the very fields whose
+                // emptiness was about to make the whole `_meta.json` be skipped.
+                // The assessment is three-state (full / partial / none) so
+                // "partial" stays visible instead of collapsing into one of the
+                // other two.
+                exportLog: exportLog
+            });
+        } catch (eDlg) {
+            exportLog("showExportDialog threw: " + (eDlg && eDlg.message || eDlg));
+            __dialogRes = null;
+        }
+        if (!__dialogRes) {
+            exportLog("user cancelled export dialog");
+            return;
+        }
+        packageFolderPathFromDialog = String(__dialogRes.outputDir || "").replace(/^\s+|\s+$/g, "");
+        if (!packageFolderPathFromDialog) {
+            exportLog("dialog returned empty outputDir");
+            return;
+        }
+        exportLog("dialog selected outputDir: " + packageFolderPathFromDialog);
+        // Resolve the PARENT folder (outputRoot) for createFolder ops later.
+        var __lastSep = Math.max(packageFolderPathFromDialog.lastIndexOf("\\"), packageFolderPathFromDialog.lastIndexOf("/"));
+        if (__lastSep > 0) {
+            outputRoot = packageFolderPathFromDialog.substring(0, __lastSep);
+            packageFolderName = packageFolderPathFromDialog.substring(__lastSep + 1);
+        } else {
+            outputRoot = sourceDirResolved || "C:\\temp";
+            packageFolderName = packageFolderPathFromDialog;
+        }
+        // Pre-create the parent (recursive=true) BEFORE resolving via lfs.
+        // The default path lives under script_outputs/package/ which may
+        // not exist on first run; ensureDirAsync creates the whole chain.
+        // Also covers the case where the user typed a fresh nested path.
+        try {
+            await FileUtils.ensureDirAsync(outputRoot);
+            exportLog("ensured outputRoot: " + outputRoot);
+        } catch (eMkRoot) {
+            exportLog("could not create outputRoot: " + (eMkRoot && eMkRoot.message || eMkRoot));
+        }
+        try {
+            var rootUrl = "file:///" + outputRoot.replace(/\\/g, "/").replace(/^\/+/, "");
+            outputFolder = await lfs.getEntryWithUrl(rootUrl);
+        } catch (eRr) {
+            exportLog("could not resolve parent folder: " + (eRr && eRr.message || eRr));
+            outputFolder = null;
+        }
+    }
+    if (!outputFolder) {
+        exportLog("no output folder available");
+        return;
+    }
+    exportLog("outputFolder.nativePath: " + outputFolder.nativePath);
+    if (!outputRoot) outputRoot = outputFolder.nativePath;
+    sep = RuntimePaths.getSep(outputRoot);
+    exportLog("outputRoot: " + outputRoot + ", sep: " + sep);
+
+    // 2026-05-28: 非模态"处理中"弹窗 —— 用户从这里开始等
+    // dialog.show()（非模态）不挡 InDesign DOM 操作（probe 验证），
+    // 跟 showModal() 不同，后者会让 doc.close 抛 "modal active"
+    if (typeof document !== "undefined" && !AutomationBridge.isAutomatedRun("export_translation_package")) {
+        try {
+            __processing = ProcessingDialog.show("Preparing package folder");
+            if (__processing) __processing.update("Preparing package folder", 5);
+            // 暴露给顶层 wrapper，main 抛 fatal 时 finally 兜底关
+            try { __topLevelProcessing = __processing; } catch (eExp) {}
+        }
+        catch (eP) { exportLog("processing dialog show threw: " + (eP && eP.message || eP)); }
+    }
+
+    // packageFolderName + packageFolderPath: when the dialog provided the
+    // full path it's already set above; otherwise (env-override path) build
+    // the conventional <basename>_translation_package_<ts>.
+    if (!packageFolderName) {
+        packageFolderName = baseName + "_translation_package_" + compactTimestampNow();
+    }
+    packageFolderPath = packageFolderPathFromDialog || (outputRoot + sep + packageFolderName);
+    exportLog("packageFolderPath: " + packageFolderPath);
+
+    // A3a': resolve the designer name — from the export dialog (manual) or
+    // automationOptions.designer (bridge), falling back to the doc's stored value.
+    var __designerName = "";
+    if (__dialogRes && typeof __dialogRes.designer === "string" && __dialogRes.designer) {
+        __designerName = __dialogRes.designer;
+    } else if (__autoOpts && typeof __autoOpts.designer === "string" && __autoOpts.designer) {
+        __designerName = __autoOpts.designer;
+    } else {
+        __designerName = __defaultDesigner || "";
+    }
+    exportLog("designer name: " + (__designerName || "(none)"));
+
+    // B2 carry-forward inputs: the operator-selected previous package (optional;
+    // AC7: blank → normal export, no versions/), + this doc's project_uid (read
+    // via label; minted at import, may be empty on a doc that never went through
+    // import) + project_id display name (AC8 fallback compare).
+    var __carryPackagePath = "";
+    if (__dialogRes && typeof __dialogRes.carryPackage === "string" && __dialogRes.carryPackage) {
+        __carryPackagePath = __dialogRes.carryPackage.replace(/^\s+|\s+$/g, "");
+    } else if (__autoOpts && typeof __autoOpts.carryPackage === "string" && __autoOpts.carryPackage) {
+        __carryPackagePath = String(__autoOpts.carryPackage).replace(/^\s+|\s+$/g, "");
+    }
+    var __currentProjectUid = "";
+    try { __currentProjectUid = ProjectUid.readUid(doc); } catch (eUidR) {}
+    var __currentProjectId = (__dialogRes && __dialogRes.project_name) || __defaultProjectName || (doc && doc.name) || "";
+    exportLog("carry package: " + (__carryPackagePath || "(none)") + "; project_uid: " + (__currentProjectUid || "(none)"));
+    try {
+        await FileUtils.ensureDirAsync(packageFolderPath);
+        exportLog("ensureDirAsync OK");
+        if (__processing) __processing.update("Building segments", 10);
+    } catch (eMkdir) {
+        exportLog("ensureDirAsync FAIL: " + eMkdir.message);
+        showAlert("Failed to create package folder:\n" + packageFolderPath);
+        return;
+    }
+
+    state = {
+        tidSeed: compactTimestampNow(),
+        tidCounter: 0,
+        warnings: [],
+        tidTotal: 0,
+        tidFallback: 0,
+        tidDiagnostics: [],
+        tidFallbackBlockRatio: TID_FALLBACK_BLOCK_RATIO,
+        pageRectCoordModes: {},
+        pageRectCoordModeStats: { spread: 0, local: 0 },
+        tableProbe: {
+            tables_seen: 0,
+            cells_seen: 0,
+            cell_paragraphs_seen: 0,
+            table_meta_invalid: 0,
+            table_segments_added: 0,
+            table_segments_updated: 0,
+            table_segments_skipped: 0
+        }
+    };
+
+    idmlBackupPath = packageFolderPath + sep + baseName + ".idml";
+    idmlResult = { ok: false, error: "" };
+
+    // Force measurement units to POINTS so line_rects/page_geometries
+    // are in pt (consistent with jsPDF). Restored at the end of the doScript
+    // block so the entire forcing+extracting+restoring sequence collapses to
+    // ONE history entry ("Export Translation Package") instead of 4 separate
+    // "Set Measure Units" rows polluting the History panel.
+
+    exportLog("building masterPageMap...");
+    _masterPageMap = buildMasterPageMap(doc);
+
+    exportLog("starting extractSegments via doScript (units forced inside)...");
+    app.scriptPreferences.enableRedraw = false;
+    try {
+        app.doScript(function () {
+            var _origHorizUnits, _origVertUnits;
+            try { _origHorizUnits = doc.viewPreferences.horizontalMeasurementUnits; } catch (eU0) {}
+            try { _origVertUnits = doc.viewPreferences.verticalMeasurementUnits; } catch (eU1) {}
+            try {
+                doc.viewPreferences.horizontalMeasurementUnits = MeasurementUnits.POINTS;
+                doc.viewPreferences.verticalMeasurementUnits = MeasurementUnits.POINTS;
+            } catch (eU2) {
+                exportLog("Failed to force POINTS units: " + eU2.message);
+            }
+            try {
+                pageGeometries = collectPageGeometries(doc);
+                pageGeomMap = buildPageGeometryMap(pageGeometries);
+                exportLog("pageGeometries: " + pageGeometries.length + " pages");
+                segments = extractSegments(doc, state, pageGeomMap, false);
+            } finally {
+                // Restore even on inner-callback throw
+                try { if (_origHorizUnits !== undefined) doc.viewPreferences.horizontalMeasurementUnits = _origHorizUnits; } catch (eR0) {}
+                try { if (_origVertUnits !== undefined) doc.viewPreferences.verticalMeasurementUnits = _origVertUnits; } catch (eR1) {}
+            }
+        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, "Export Translation Package");
+    } catch (e0) {
+        app.scriptPreferences.enableRedraw = true;
+        exportLog("extractSegments FAIL: " + e0.message);
+        showAlert("Segment extraction failed:\n" + e0.message);
+        return;
+    }
+    app.scriptPreferences.enableRedraw = true;
+
+    // ── Phase 8A + 8B pre-passes (export-time emphasis extraction) ───────
+    // Historically these ran at IMPORT time inside v2_pipeline. Moving them
+    // to export means:
+    //   • segments.json carries `emphasis_runs` directly — translators / a
+    //     "skip-cleanup" import path can apply emphasis without rebuilding
+    //     the cluster style sheet.
+    //   • emphasis_report.{json,html} sidecars list every mixed-format
+    //     paragraph, useful preview before translation.
+    //   • v2_pipeline becomes idempotent: if emphasis_runs is already
+    //     populated it skips re-extraction.
+    //
+    // Run with editMode=true so the natural baseline winners are captured
+    // (no targetLanguage override at export — that's an import-time concern
+    // when a fontFamily flip is needed for the translation script).
+    var emphasisStats = { script_by_font: null, emphasis: null };
+    try {
+        if (ScriptClassifier && typeof ScriptClassifier.applyScriptByFontDetection === "function") {
+            emphasisStats.script_by_font = ScriptClassifier.applyScriptByFontDetection(segments);
+        }
+    } catch (eSBF) {
+        state.warnings.push("script_by_font detection threw: " + (eSBF && eSBF.message ? eSBF.message : eSBF));
+    }
+    try {
+        if (EmphasisExtractor && typeof EmphasisExtractor.applyEmphasisExtraction === "function") {
+            emphasisStats.emphasis = EmphasisExtractor.applyEmphasisExtraction(segments, {
+                targetLanguage: null,
+                editMode:       true,
+                // Whitespace-only runs (e.g. a trailing space holding an
+                // independent size / weight) are format-transparent: they must
+                // NOT be emitted as standalone emphasis runs but coalesce into a
+                // neighbor (prev format wins, else next). Default ON (user
+                // product decision 2026-06-24). Flip to false here to restore
+                // the legacy "blank run keeps its own format" emission.
+                coalesceBlankEmphasis: true
+            });
+        }
+    } catch (eEX) {
+        state.warnings.push("emphasis extraction threw: " + (eEX && eEX.message ? eEX.message : eEX));
+    }
+
+    // Normalize field names for JSON persistence:
+    //   format_snapshot.emphasisRuns  →  format_snapshot.emphasis_runs (snake_case
+    //                                    for JSON consistency; v2_pipeline
+    //                                    restores emphasisRuns at import).
+    //   format_snapshot._allRanges    →  kept under that name (the legacy
+    //                                    re-extraction path at import gates
+    //                                    on `_allRanges`, so dropping it
+    //                                    would force re-capture from scratch
+    //                                    when targetLanguage flips).
+    // The pre-existing `runs` field (legacy diff-from-baseline) stays as-is.
+    var emphasisParaCount = 0;
+    var emphasisRunCount  = 0;
+    for (var seg_i = 0; seg_i < segments.length; seg_i++) {
+        var fs_i = segments[seg_i] && segments[seg_i].format_snapshot;
+        if (!fs_i) continue;
+        if (fs_i.emphasisRuns) {
+            fs_i.emphasis_runs = fs_i.emphasisRuns;
+            delete fs_i.emphasisRuns;
+            if (fs_i.emphasis_runs.length > 0) {
+                emphasisParaCount += 1;
+                emphasisRunCount  += fs_i.emphasis_runs.length;
+            }
+        }
+    }
+
+    fallbackRatio = state.tidTotal > 0 ? state.tidFallback / state.tidTotal : 0;
+
+    tidDiagPath = packageFolderPath + sep + "tid_diagnostics.log";
+    try {
+        writeUtf8File(tidDiagPath, buildTidDiagnosticsLog(state));
+    } catch (eDiag) {
+        state.warnings.push("failed writing tid_diagnostics.log: " + eDiag.message);
+    }
+
+    if (fallbackRatio >= state.tidFallbackBlockRatio) {
+        state.warnings.push(
+            "tid fallback ratio high: " +
+            pctText(fallbackRatio) +
+            " (threshold " + pctText(state.tidFallbackBlockRatio) + "); export continued automatically. " +
+            "inspect tid_diagnostics.log: " + tidDiagPath
+        );
+    }
+
+    packageJson = {
+        schema_version: SCHEMA_VERSION,
+        document: {
+            name: doc.name,
+            page_count: doc.pages.length,
+            exported_at_utc: utcIsoNow(),
+            export_script_rev: EXPORT_SCRIPT_REV,
+            package_name: packageFolderName,
+            tid_total: state.tidTotal,
+            tid_fallback: state.tidFallback,
+            tid_fallback_ratio: fallbackRatio,
+            geometry_version: "line_rects_norm_v1",
+            char_geometry_version: "char_rects_norm_v1",
+            char_rect_stats: state.charRectStats || null,
+            tid_map_file: "tid_map.json",
+            idml_backup_file: FileUtils.getPathFileName(idmlBackupPath),
+            page_rect_coord_modes: state.pageRectCoordModes,
+            page_rect_coord_mode_stats: state.pageRectCoordModeStats,
+            table_probe: state.tableProbe,
+            page_geometries: [],
+            master_page_map: _masterPageMap ? _masterPageMap.list : [],
+            master_pdf_pages: [],
+            emphasis_stats: {
+                paragraphs_with_emphasis: emphasisParaCount,
+                emphasis_run_total:       emphasisRunCount,
+                script_by_font: emphasisStats.script_by_font || null,
+                phase_8b:       emphasisStats.emphasis       || null,
+                extracted_at:   "export"
+            }
+        },
+        manual_handoff: {
+            ai_handoff_marked: true,
+            ai_rows: 0,
+            ai_items: []
+        },
+        segments: segments
+    };
+
+    segmentsPath = packageFolderPath + sep + "segments.json";
+    templatePath = packageFolderPath + sep + "translations_template.json";
+    tidMapPath = packageFolderPath + sep + "tid_map.json";
+    previewPath = packageFolderPath + sep + "preview.pdf";
+
+    aiManualRows = collectAiManualRows(doc);
+    packageJson.manual_handoff.ai_rows = aiManualRows.length;
+    packageJson.manual_handoff.ai_items = aiManualRows;
+    packageJson.document.page_geometries = pageGeometries;
+    tidMapJson = buildTidMap(doc.name, segments);
+    packageJson.document.tid_map_rows = tidMapJson.summary.rows;
+    packageJson.document.tid_map_fallback_rows = tidMapJson.summary.fallback_rows;
+
+    // Export PDF first so master_pdf_pages is available for segments.json.
+    if (__processing) __processing.update("Exporting preview PDF", 30);
+    pdfResult = exportPdfWithMasterPages(doc, previewPath, _masterPageMap, sourceDirResolved);
+    // Guard (2026-07-03, task-2): doc.exportFile can "succeed" (no throw) yet
+    // leave a 0-byte / missing preview.pdf (font-activation failure, headless
+    // export that never flushed, etc.). Downstream the webapp can't render an
+    // empty PDF → "PDF 有问题". Verify the file is actually non-empty; if not,
+    // demote to a failure so it SURFACES (summary dialog + warning + automation
+    // result) instead of silently shipping a broken preview. Package still
+    // proceeds — IDML/segments stay valid; only the visual preview is missing.
+    if (pdfResult && pdfResult.ok) {
+        var _pdfBytes = -1;
+        try { _pdfBytes = fs.lstatSync(previewPath).size; } catch (ePdfStat) { _pdfBytes = -1; }
+        if (typeof _pdfBytes === "number" && _pdfBytes <= 0) {
+            pdfResult.ok = false;
+            pdfResult.error = (_pdfBytes === 0)
+                ? "preview.pdf exported but is 0 bytes (empty — likely font activation or headless export failure)"
+                : "preview.pdf missing after export (" + previewPath + ")";
+            state.warnings.push("preview PDF: " + pdfResult.error);
+            exportLog("preview PDF empty/missing guard tripped: " + pdfResult.error + " (bytes=" + _pdfBytes + ")");
+        }
+    }
+    if (pdfResult.master_warning) {
+        state.warnings.push("master page PDF: " + pdfResult.master_warning);
+    }
+    packageJson.document.master_pdf_pages = pdfResult.master_pdf_pages || [];
+
+    if (__processing) __processing.update("Writing segments + templates", 70);
+    try {
+        writeUtf8File(segmentsPath, JSON.stringify(packageJson, null, 2));
+        writeUtf8File(templatePath, JSON.stringify(buildTemplateTranslations(doc.name, segments), null, 2));
+        writeUtf8File(tidMapPath, JSON.stringify(tidMapJson, null, 2));
+    } catch (e1) {
+        showAlert("Failed writing package files:\n" + e1.message);
+        return;
+    }
+
+    // Emphasis report sidecars (preview for translators / format-paint UI).
+    // Written best-effort — failures don't abort the export.
+    try {
+        var emphasisJsonPath = packageFolderPath + sep + "emphasis_report.json";
+        var emphasisHtmlPath = packageFolderPath + sep + "emphasis_report.html";
+        var emphasisRows = [];
+        for (var er_i = 0; er_i < segments.length; er_i++) {
+            var er_seg = segments[er_i];
+            var er_fs  = er_seg && er_seg.format_snapshot;
+            if (!er_fs || !er_fs.emphasis_runs || !er_fs.emphasis_runs.length) continue;
+            emphasisRows.push({
+                tid:              er_seg.tid,
+                story_id:         er_seg.story_id,
+                paragraph_index:  er_seg.paragraph_index,
+                source_text:      er_seg.source_text,
+                baseline:         er_fs.baseline,
+                emphasis_runs:    er_fs.emphasis_runs
+            });
+        }
+        writeUtf8File(emphasisJsonPath, JSON.stringify({
+            schema_version: SCHEMA_VERSION,
+            document_name:  doc.name,
+            stats:          packageJson.document.emphasis_stats,
+            paragraphs:     emphasisRows
+        }, null, 2));
+        writeUtf8File(emphasisHtmlPath, EmphasisReport.buildEmphasisReportHtml(doc.name, segments, packageJson.document.emphasis_stats));
+    } catch (eER) {
+        state.warnings.push("emphasis_report write failed: " + (eER && eER.message ? eER.message : eER));
+    }
+
+    if (state.warnings.length > 0) {
+        warningsPath = packageFolderPath + sep + "export_warnings.log";
+        try {
+            writeUtf8File(warningsPath, state.warnings.join("\n"));
+        } catch (eW) {}
+    }
+
+    // docSaveLabel removed (M-EXP-6)
+
+    // Export IDML from the current in-memory state.
+    if (__processing) __processing.update("Exporting IDML", 80);
+    idmlResult = exportIdmlBackup(doc, idmlBackupPath);
+    if (!idmlResult.ok) {
+        state.warnings.push("failed exporting IDML: " + idmlResult.error);
+    }
+
+    // If the source doc carries an import_state label (i.e. was previously
+    // imported via v2 pipeline), copy it verbatim into the package so
+    // webapp version-compare + edit-mode handoff have a historical snapshot.
+    // Absent label = first-time export from an original doc → no file written.
+    var injectResult = { written: false };
+    try {
+        var inj = ImportStateStore.exportInjection(doc);
+        if (inj && inj.jsonString) {
+            var injectPath = packageFolderPath + sep + "import_state.json";
+            writeUtf8File(injectPath, inj.jsonString);
+            injectResult = { written: true, path: injectPath, bytes: inj.jsonString.length };
+            exportLog("import_state.json injected from doc label (" + inj.jsonString.length + " bytes)");
+        } else {
+            exportLog("no import_state label on source doc — skipping injection (first-time export)");
+        }
+    } catch (eInj) {
+        exportLog("import_state injection failed: " + (eInj && eInj.message ? eInj.message : eInj));
+        state.warnings.push("import_state injection: " + (eInj && eInj.message ? eInj.message : eInj));
+    }
+
+    // A3a' (2026-06-16): write the project _meta.json into the package, with the
+    // designer added. Read-preserve the carried _meta (carries source_language
+    // etc. forward from the webapp via the import-time "project_meta_v1" label);
+    // else infer from the doc name. ONLY write when it passes schema validation
+    // — a first-time export from a doc with no carried _meta has no
+    // source_language and cannot produce a valid _meta.json, so it's SKIPPED
+    // with a surfaced reason (never written invalid). Non-fatal.
+    try {
+        var PMexp = await ProjectMetaUxp.load();
+        // Assembly moved to lib/project_meta_assemble.js so the suite can EXECUTE
+        // these gates instead of pattern-matching the source. Mutation, 2026-08-23:
+        // the inline version let 3 of 8 mutants live (re-gating inferDefaults /
+        // overwrite-instead-of-gap-fill / a second earlier `und` write) because a
+        // text assertion cannot tell "looks right" from "is right".
+        var __inferred = {};
+        try { __inferred = PMexp.inferDefaults({ docName: doc.name }).data || {}; } catch (eInf) { __inferred = {}; }
+        var __pmNow = PMexp.now();
+        var __asm = ProjectMetaAssemble.assembleExportMeta({
+            carried: __carriedMeta,
+            inferred: __inferred,
+            dialog: __dialogRes,
+            designer: __designerName,
+            schemaVersion: PMexp.CURRENT_SCHEMA_VERSION,
+            now: __pmNow,
+            generateProjectId: PMexp.generateProjectId
+        });
+        var exportMeta = __asm.meta;
+        if (__asm.notes.filledFromInfer.length) {
+            exportLog("project_meta: filled from inferDefaults (doc name): ["
+                + __asm.notes.filledFromInfer.join(",") + "]");
+        }
+        if (__asm.notes.undSubstituted) {
+            exportLog("project_meta: source_language empty -> wrote \"und\" (BCP-47 undetermined; "
+                + "the operator can set it in the export dialog, and the import panel shows it)");
+        }
+        try { exportMeta = PMexp.canonicalizeBcp47Fields(exportMeta); } catch (eCanon) {}
+        var __pmVr = PMexp.validate(exportMeta);
+        if (__pmVr.valid) {
+            var metaPath = packageFolderPath + sep + "_meta.json";
+            writeUtf8File(metaPath, PMexp.serialize(exportMeta));
+            exportLog("_meta.json written (designer=" + (__designerName || "(none)") + ")");
+            // (3a) The success side must be representable too. With only a false
+            // branch, `metaJsonWritten` being absent would mean BOTH "written"
+            // and "this block never ran" — the same shape as a counter that only
+            // reports when it fires.
+            state.metaJsonWritten = true;
+            state.metaJsonSkipReason = null;
+        } else {
+            // ① + ②: report what this run ACTUALLY saw, and report ALL of it.
+            //
+            // 🔴 ② is the load-bearing half. The validator walks `required` in
+            // array order and pushes one error per missing key, and this used to
+            // print only `errors[0]`. `project_id` sits at index 1 and
+            // `project_name` at index 2 — so a run missing THREE keys logged
+            // exactly like a run missing one. `count` is printed alongside the
+            // list because a truncated list still lies about size; a number does
+            // not.
+            //
+            // 🔴 ① The old message ended with "likely no carried _meta
+            // (source_language missing) on a first-time export". That was a
+            // GUESS, written when it was a common case, and it went stale: on
+            // 2026-08-22 it printed one line after `project_meta label: carried
+            // (src=en)` — contradicting its own previous line. Replaced with the
+            // observed facts, deliberately NOT with a fresher guess.
+            // The assembly lives in lib/project_meta_uxp.js as a pure function so
+            // it can be tested — this file cannot run under Node (top-level await
+            // + host APIs), and an untestable diagnostic is how the previous one
+            // went stale without anyone noticing.
+            var __pmSummary;
+            try { __pmSummary = ProjectMetaUxp.summarizeValidationErrors(__pmVr.errors); }
+            catch (ePmErrs) { __pmSummary = { text: "could not read validator errors: " + ePmErrs.message }; }
+            var __pmErr = __pmSummary.text;
+            exportLog("_meta.json SKIPPED — invalid: " + __pmErr
+                + " | carried=" + (__carriedMeta ? "yes" : "no")
+                + " | source=" + (__carriedMeta ? "project_meta_v1 label" : "inferDefaults")
+                + " | present=[" + Object.keys(exportMeta || {}).join(",") + "]");
+            state.warnings.push("_meta.json not written: " + __pmErr
+                + (__carriedMeta ? " (metadata WAS carried from the document label, but is incomplete)"
+                                 : " (no project metadata carried from import)"));
+            // (3a) Make the outcome REPRESENTABLE. Before this it existed only as
+            // a log line and a warning string: `_exportOk` is built from
+            // idml/pdf/zip alone, so "the package has no metadata" was not a
+            // thing the run could even state about itself.
+            // ⛔ Representation only — this does NOT change what pops a dialog.
+            //    Whether a missing _meta.json should count as a hard failure
+            //    collides with the 2026-07-03 rule ("success shows no summary;
+            //    dialogs are for debugging"), and that is the owner's call.
+            state.metaJsonWritten = false;
+            state.metaJsonSkipReason = __pmErr;
+        }
+    } catch (ePmWrite) {
+        exportLog("_meta.json write threw (non-fatal): " + (ePmWrite && ePmWrite.message ? ePmWrite.message : ePmWrite));
+        state.warnings.push("_meta.json write error: " + (ePmWrite && ePmWrite.message ? ePmWrite.message : ePmWrite));
+        // (3a) A throw is also "not written" — leaving it unset here would make
+        // the throw path indistinguishable from the success path.
+        state.metaJsonWritten = false;
+        state.metaJsonSkipReason = "threw: " + (ePmWrite && ePmWrite.message ? ePmWrite.message : String(ePmWrite));
+    }
+
+    // ── B2 carry-forward: write versions/ from the selected previous package ──
+    // Runs AFTER all top-level payload files are written and BEFORE the zip, so
+    // buildPackageZip picks up the versions/ tree. AC7: skipped entirely when no
+    // previous package was selected → package byte-equivalent to today's export.
+    var __carryResult = { attempted: false };
+    if (__carryPackagePath) {
+        if (__processing) __processing.update("Building version history", 88);
+        exportLog("carry-forward: appending this export to versions/ from " + __carryPackagePath);
+        try {
+            __carryResult = await writeCarryForwardVersions(packageFolderPath, sep, __carryPackagePath, {
+                segmentsPath: segmentsPath, templatePath: templatePath,
+                previewPath: previewPath, tidMapPath: tidMapPath,
+                projectUid: __currentProjectUid, projectId: __currentProjectId,
+                exportedAtIso: packageJson.document.exported_at_utc
+            });
+        } catch (eCarry) {
+            __carryResult = { attempted: true, ok: false, reason: String(eCarry && eCarry.message || eCarry) };
+        }
+        if (__carryResult.warnings && __carryResult.warnings.length) {
+            for (var __cw = 0; __cw < __carryResult.warnings.length; __cw++) {
+                state.warnings.push("carry-forward: " + __carryResult.warnings[__cw]);
+            }
+        }
+        if (__carryResult.ok) {
+            exportLog("carry-forward OK: wrote " + __carryResult.wrote + " version dir(s), "
+                + __carryResult.versionCount + " version(s), tip=" + (__carryResult.tip || "?")
+                + (__carryResult.bootstrap ? " (bootstrapped v1 from prev top-level)" : ""));
+        } else {
+            exportLog("carry-forward SKIPPED: " + (__carryResult.reason || "unknown"));
+            state.warnings.push("version carry-forward "
+                + (__carryResult.blocked ? "BLOCKED (AC8): " : "skipped: ")
+                + (__carryResult.reason || "unknown") + " — package exported normally without versions/");
+        }
+        // AC8/AC6 must-surface durability: carry-forward runs AFTER the earlier
+        // export_warnings.log flush, so its warnings (identity surface, block
+        // reason, carried-manifest validation) would otherwise only live in the
+        // summary count. Re-flush so those surfaces persist in the operator file.
+        if (state.warnings.length > 0) {
+            try { writeUtf8File(packageFolderPath + sep + "export_warnings.log", state.warnings.join("\n")); }
+            catch (eWReflush) { exportLog("warnings re-flush after carry failed: " + (eWReflush && eWReflush.message || eWReflush)); }
+        }
+    }
+
+    // Bundle the finished package folder into a sibling .zip so operators
+    // get a single shareable artefact alongside the inspectable folder.
+    // Disable by env var EXPORT_SKIP_ZIP=1 if not wanted.
+    var skipZip = false;
+    try { skipZip = !!(process && process.env && process.env.EXPORT_SKIP_ZIP); } catch (eZipEnv) {}
+    var zipResult = { ok: false, skipped: true };
+    if (!skipZip) {
+        if (__processing) __processing.update("Building zip", 90);
+        exportLog("building package .zip...");
+        try {
+            zipResult = await buildPackageZip(packageFolderPath);
+            if (zipResult.ok) {
+                exportLog("zip OK: " + zipResult.zipPath
+                    + " (" + zipResult.fileCount + " files, "
+                    + zipResult.zipBytes + " bytes / " + zipResult.rawBytes + " raw)");
+            } else {
+                exportLog("zip FAILED: " + zipResult.error);
+                state.warnings.push("zip build failed: " + zipResult.error);
+            }
+        } catch (eZ) {
+            exportLog("zip threw: " + (eZ && eZ.message ? eZ.message : eZ));
+            state.warnings.push("zip build threw: " + (eZ && eZ.message ? eZ.message : eZ));
+            zipResult = { ok: false, error: String(eZ && eZ.message || eZ) };
+        }
+    } else {
+        exportLog("zip skipped (EXPORT_SKIP_ZIP=1)");
+    }
+
+    // 2026-05-28: when the zip succeeded, delete the unzipped package folder
+    // so operators only have the single shareable .zip to manage. Failure
+    // leaves the folder intact for debugging. Opt-out via EXPORT_KEEP_FOLDER=1.
+    var keepFolder = false;
+    try { keepFolder = !!(process && process.env && process.env.EXPORT_KEEP_FOLDER); } catch (eKF) {}
+    var folderDeleteResult = { skipped: true };
+    if (zipResult.ok && !keepFolder) {
+        if (__processing) __processing.update("Cleaning up", 96);
+        exportLog("deleting unzipped package folder...");
+        try {
+            folderDeleteResult = await deleteFolderRecursive(packageFolderPath, exportLog);
+            if (folderDeleteResult.ok) {
+                exportLog("folder cleanup OK (" + folderDeleteResult.removed + " entries)");
+            } else {
+                exportLog("folder cleanup FAILED: " + folderDeleteResult.error);
+                state.warnings.push("folder cleanup: " + folderDeleteResult.error);
+            }
+        } catch (eDel) {
+            exportLog("folder cleanup threw: " + (eDel && eDel.message || eDel));
+            state.warnings.push("folder cleanup threw: " + (eDel && eDel.message || eDel));
+            folderDeleteResult = { ok: false, error: String(eDel && eDel.message || eDel) };
+        }
+    } else if (keepFolder) {
+        exportLog("folder cleanup skipped (EXPORT_KEEP_FOLDER=1)");
+    } else {
+        exportLog("folder cleanup skipped (zip not OK)");
+    }
+
+    // 关闭处理中弹窗 —— reveal 自己会弹 Explorer 给用户看，processing
+    // 留着会视觉竞争。从这里之后是收尾（summary + Explorer 弹出）。
+    if (__processing) {
+        try { __processing.close(); } catch (eClose) {}
+        __processing = null;
+        try { __topLevelProcessing = null; } catch (eExp2) {}
+    }
+
+    // 2026-05-28: "open package folder" via temp-doc + Link.revealInSystem()
+    // hack (see revealFolderViaTempLink). Skipped in automation runs and
+    // when zip didn't succeed. Opt-out via EXPORT_SKIP_REVEAL=1.
+    var outputFolderPathToShow = (zipResult.ok && zipResult.zipPath) ? outputRoot : "";
+    var revealResult = { skipped: true };
+    var skipReveal = false;
+    try { skipReveal = !!(process && process.env && process.env.EXPORT_SKIP_REVEAL); } catch (eRE) {}
+    if (zipResult.ok && !skipReveal && !AutomationBridge.isAutomatedRun("export_translation_package")) {
+        exportLog("opening output folder in OS file browser...");
+        try {
+            revealResult = await revealFolderViaTempLink(outputRoot, exportLog);
+            if (revealResult.ok) {
+                exportLog("reveal OK");
+            } else {
+                exportLog("reveal failed: " + revealResult.error);
+            }
+        } catch (eRev) {
+            exportLog("reveal threw: " + (eRev && eRev.message || eRev));
+            revealResult = { ok: false, error: String(eRev && eRev.message || eRev) };
+        }
+    }
+
+    summary = "Export finished.\n" +
+        "Package: " + packageFolderPath + "\n" +
+        "Mode: no_modify_export\n" +
+        "Script rev: " + EXPORT_SCRIPT_REV + "\n" +
+        "Segments: " + segments.length + "\n" +
+        "TID fallback ratio: " + pctText(fallbackRatio) + " (" + state.tidFallback + "/" + state.tidTotal + ")\n" +
+        "Table probe: tables=" + state.tableProbe.tables_seen +
+            ", cells=" + state.tableProbe.cells_seen +
+            ", cell_paras=" + state.tableProbe.cell_paragraphs_seen +
+            ", added=" + state.tableProbe.table_segments_added +
+            ", updated=" + state.tableProbe.table_segments_updated +
+            ", invalid_meta=" + state.tableProbe.table_meta_invalid + "\n" +
+        "AI manual rows marked: " + aiManualRows.length + "\n" +
+        "char_rects_norm: " + (state.charRectStats
+            ? (state.charRectStats.segments_with_char_rects + " segs, " + state.charRectStats.total_char_rects
+               + " chars (fallback: content=" + state.charRectStats.fallback_content
+               + " geom=" + state.charRectStats.fallback_geom + " len=" + state.charRectStats.fallback_len + ")")
+            : "n/a") + "\n" +
+        "Doc saved: skipped (no-modify mode)\n" +
+        "IDML: " + (idmlResult.ok ? "ok" : "failed") + "\n" +
+        "Preview PDF: " + (pdfResult.ok ? "ok" : "failed") + "\n" +
+        "Master pages in PDF: " + (pdfResult.master_pdf_pages ? pdfResult.master_pdf_pages.length : 0);
+
+    if (!idmlResult.ok) {
+        summary += "\nIDML error: " + idmlResult.error;
+    }
+
+    if (pdfResult.ok) {
+        summary += "\nPDF preset: " + pdfResult.preset;
+    } else {
+        summary += "\nPDF error: " + pdfResult.error;
+    }
+
+    if (injectResult.written) {
+        summary += "\nimport_state.json: injected (" + injectResult.bytes + " bytes)";
+    }
+    if (zipResult.ok) {
+        summary += "\nZip: " + zipResult.zipPath + " (" + zipResult.zipBytes + " bytes)";
+        if (folderDeleteResult && folderDeleteResult.ok) {
+            summary += "\nPackage folder: deleted (zip kept only)";
+        } else if (folderDeleteResult && folderDeleteResult.error) {
+            summary += "\nPackage folder: kept (cleanup failed)";
+        }
+    } else if (!zipResult.skipped) {
+        summary += "\nZip: failed (" + (zipResult.error || "unknown") + ")";
+    }
+    if (outputFolderPathToShow) {
+        summary += "\n\nOutput folder:\n  " + outputFolderPathToShow;
+        if (revealResult && revealResult.ok) {
+            summary += "\n(opened in Explorer)";
+        }
+    }
+    // (3a) State the metadata outcome in the summary — both ways round.
+    // 🔴 Representation only: this line changes what the summary SAYS, not when
+    // the summary is SHOWN. Whether a missing _meta.json should force the dialog
+    // open is (3b) and belongs to the owner — it collides with the 2026-07-03
+    // rule that a successful export shows no summary at all.
+    // ⚠ Printed for the success case too: a line that appears only on failure
+    // cannot be told apart from a build where nobody wired it up.
+    if (state.metaJsonWritten === true) {
+        summary += "\n_meta.json: written";
+    } else if (state.metaJsonWritten === false) {
+        summary += "\n_meta.json: NOT written (" + (state.metaJsonSkipReason || "unknown") + ")"
+            + "\n  -> the next import of this package will pre-fill its settings panel with nothing";
+    }
+    if (state.warnings.length > 0) {
+        summary += "\nWarnings: " + state.warnings.length;
+    }
+    // #BRIDGE-1: headless runs route the summary to the result file the
+    // bridge picks up (__auto_result_export_translation_package.json),
+    // skipping the modal "Export finished" dialog that otherwise stalls
+    // the bridge thread until the operator clicks OK.
+    if (AutomationBridge.isAutomatedRun("export_translation_package")) {
+        exportLog("automation: suppressing summary dialog (headless run); writing __auto_result file");
+        try {
+            await AutomationBridge.recordAutomationResult("export_translation_package", {
+                ok: state.warnings.length === 0,
+                summary: summary,
+                packagePath: packageFolderPath,
+                segments: segments.length,
+                tidFallback: state.tidFallback,
+                tidTotal: state.tidTotal,
+                warnings: state.warnings.length,
+                idmlOk: !!(idmlResult && idmlResult.ok),
+                pdfOk: !!(pdfResult && pdfResult.ok),
+                zipOk: !!(zipResult && zipResult.ok),
+                zipPath: zipResult && zipResult.zipPath || null,
+                zipBytes: zipResult && zipResult.zipBytes || 0
+            });
+        } catch (eAR) {
+            exportLog("automation: recordAutomationResult failed: " + (eAR && eAR.message ? eAR.message : eAR));
+        }
+    } else {
+        // 用户 UX (2026-07-03): 导出成功时不弹 summary 弹窗 —— reveal 已把包
+        // 文件夹在 Explorer 打开, 上面再叠个 modal 是多余的 (面板 UX 原则:
+        // 弹窗=debug 用、能少点就少点)。仅在硬失败(IDML/PDF/ZIP 任一失败)时才
+        // 弹, 使真问题绝不被静默吞掉 (task-2: 失败的 preview PDF 曾被静默打进包)。
+        // soft 警告仍进 export_warnings.log / 日志, 不强制弹窗。
+        var _exportOk = !!(idmlResult && idmlResult.ok) &&
+                        !!(pdfResult && pdfResult.ok) &&
+                        !!(zipResult && zipResult.ok);
+        if (_exportOk) {
+            exportLog("export ok; summary dialog suppressed (folder opened in Explorer)");
+        } else {
+            showAlert(summary);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UXP dialog helper (async scripts cannot use alert/confirm)
+// ---------------------------------------------------------------------------
+
+function showAlert(msg) {
+    // #BRIDGE-1: in automated/headless runs, every stray alert (e.g.
+    // "Failed writing package files", "Segment extraction failed") would
+    // block the bridge plugin's event loop while waiting for an operator
+    // to click OK. Route to exportLog instead — the failure surfaces in
+    // the same .log file the result manifest points at, and the bridge
+    // gets back its turn so the rest of the harness can shut down cleanly.
+    if (AutomationBridge.isAutomatedRun("export_translation_package")) {
+        try { exportLog("alert (suppressed in automation): " + String(msg).replace(/\r?\n|\r/g, " | ")); } catch (eP) {}
+        return;
+    }
+    try {
+        var dlg = app.dialogs.add({ name: "Export", canCancel: false });
+        var col = dlg.dialogColumns.add();
+        var parts = String(msg).split(/\r?\n|\r/);
+        for (var i = 0; i < parts.length; i++) {
+            col.staticTexts.add({ staticLabel: parts[i] });
+        }
+        dlg.show();
+        dlg.destroy();
+    } catch (e) {}
+}
+
+var _exportLog = [];
+// Initial path = toolkit base/log/export_debug.log. Acts as a fallback for
+// any logging before main() can resolve the active doc's directory. Once
+// main() has sourceDirResolved, _exportLogPath is reassigned to
+// <docDir>/script_outputs/log/export_translation_package_<ts>.log via
+// ScriptLogPaths so all subsequent flushes go there. The cumulative
+// _exportLog array is full-rewritten on every exportLog() call, so the
+// new file contains the entire history from script start.
+var _exportLogPath = (function () {
+    var base = RuntimePaths.getBaseDir();
+    var s = RuntimePaths.getSep(base);
+    return base + s + "log" + s + "export_debug.log";
+})();
+
+function exportLog(s) {
+    _exportLog.push(new Date().toISOString() + " " + s);
+    // Flush immediately on every log call
+    try { fs.writeFileSync(_exportLogPath, _exportLog.join("\n") + "\n", "utf-8"); } catch (e) {}
+}
+
+exportLog("=== Export start ===");
+try {
+    await main();
+    exportLog("=== Export end ===");
+} catch (eFatal) {
+    exportLog("FATAL: " + (eFatal && eFatal.message ? eFatal.message : String(eFatal)));
+    if (eFatal && eFatal.stack) { exportLog("Stack: " + eFatal.stack); }
+    showAlert("FATAL: " + (eFatal && eFatal.message ? eFatal.message : String(eFatal)));
+} finally {
+    if (__topLevelProcessing) {
+        try { __topLevelProcessing.close(); } catch (eC) {}
+        __topLevelProcessing = null;
+    }
+    exportLog("=== finally reached ===");
+}

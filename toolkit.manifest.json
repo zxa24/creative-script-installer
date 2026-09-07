@@ -1,0 +1,639 @@
+{
+  "name": "indesign-toolkit",
+  "version": "1.0.0",
+  "generatedAt": "2026-09-07T03:55:05.826Z",
+  "payloadDir": "toolkit",
+  "fileCount": 126,
+  "files": [
+    {
+      "path": "4.2 Apply Brand Preset.idjs",
+      "sha256": "79d364a935b1378a402b048e76530f90615b31e992922c6b8555a2c108f20365",
+      "bytes": 13632
+    },
+    {
+      "path": "2.2 Apply CJK Styles.idjs",
+      "sha256": "f3111fbebdb38d10936f5fbe11d8ad35af8e4b6a7e22843bb36f927456b47dba",
+      "bytes": 47693
+    },
+    {
+      "path": "2.6 Convert Underline to Rule.idjs",
+      "sha256": "1d137983e999d7d83fcacce9d0a2d2745822093e9dd09f7bce4dec47d22f1747",
+      "bytes": 11694
+    },
+    {
+      "path": "dev/font_apply_panel/app.jsx",
+      "sha256": "16f32c733d9394bbadb1e4d5833a2e80bf4e1eaf11f3d8d7f3cbd2a95b432b67",
+      "bytes": 147109
+    },
+    {
+      "path": "dev/font_apply_panel/components.jsx",
+      "sha256": "0303abb64998818737dc54d02ed4bd6dc27148a8f5b50a482a67ddfbc6919b9f",
+      "bytes": 92380
+    },
+    {
+      "path": "dev/font_apply_panel/data.jsx",
+      "sha256": "d944bfc6b90507a5ccf4597f192f4a9bb984d106b2ea446334d04bdfb03b6ba8",
+      "bytes": 25776
+    },
+    {
+      "path": "dev/font_apply_panel/panel.css",
+      "sha256": "142a4992c356b90c4dd1641e14ea83e2fc2c1f72787ba42aead9798c4157d3cb",
+      "bytes": 64142
+    },
+    {
+      "path": "4.1 Export Brand Preset.idjs",
+      "sha256": "9c0b88e63ca69a0936f3fee64dacf1401fcf506e973a8417195330760a79064c",
+      "bytes": 17641
+    },
+    {
+      "path": "1.1 Export Translation Package.idjs",
+      "sha256": "31feb5d7f456af9553305c9e7a8744fe48941ab1919935c47f39915ca2842b58",
+      "bytes": 171677
+    },
+    {
+      "path": "2.1 Apply Font Pairing.idjs",
+      "sha256": "b8727f66e2a74065dde95b2646778e3c45816e3d8f9fbf509eff803d548984f6",
+      "bytes": 44771
+    },
+    {
+      "path": "1.2 Import Translation Package.idjs",
+      "sha256": "66696686120428860387286a71a1378cad4a942c61f3d9515ac236d208453310",
+      "bytes": 284115
+    },
+    {
+      "path": "lib/annot_italic_demand.js",
+      "sha256": "5dbff1736c705445bc6a576a62efb33f70cbcb335104e9bed3917497dce5e546",
+      "bytes": 5385
+    },
+    {
+      "path": "lib/auto_format_gate.js",
+      "sha256": "1b024c04982a0deb680128806f8f781201a4d9a468ac0f0f2fad6864e56f702f",
+      "bytes": 4498
+    },
+    {
+      "path": "lib/automation_bridge.js",
+      "sha256": "6603fee80419e3a23672cc76d925ad30c756fcb3e0388c67a3f6a13a526a5216",
+      "bytes": 9601
+    },
+    {
+      "path": "lib/brand_preset_apply_glue.js",
+      "sha256": "37894f2b4d4e7520957484f1a4c776541e6eb9511c2d574e07d30bfa1a57e948",
+      "bytes": 26259
+    },
+    {
+      "path": "lib/brand_preset_apply_runner.js",
+      "sha256": "bee6428a5cb17eac24bc72a1150b615b4f881ae766aca1c127f064407687ae5c",
+      "bytes": 27231
+    },
+    {
+      "path": "lib/brand_preset_export_glue.js",
+      "sha256": "c1ff5f40008de72ed63800cf70116ddc52170778e2579e7776374b62099591ea",
+      "bytes": 26764
+    },
+    {
+      "path": "lib/byPair_char_sweep.js",
+      "sha256": "ad732c436f702b995edc55f385606356750918a7b422e74be1476cea67c585ae",
+      "bytes": 20874
+    },
+    {
+      "path": "lib/byPair_script_coverage.js",
+      "sha256": "4fcb79919e4eec378c823ef6bdf8c5aaa1ca7754484f7e512cb63f34983d8626",
+      "bytes": 16195
+    },
+    {
+      "path": "lib/canvas_pan.js",
+      "sha256": "cc1aa9b38e009f5f2df299e9e56bfcbc0c496ecdcb32e3554a137a75105e784c",
+      "bytes": 9150
+    },
+    {
+      "path": "lib/cjk_field_check.js",
+      "sha256": "2bfbb235a757a549cf313909db2daba63708616bc42555b39425a9a591d73bc2",
+      "bytes": 3999
+    },
+    {
+      "path": "lib/cjk_preference.js",
+      "sha256": "d1ebc8247c7232ad3c3e0d9bb8834ee0302e0ae0bcd41e967326ae46d2903e19",
+      "bytes": 3343
+    },
+    {
+      "path": "lib/cjk_space_cleanup.js",
+      "sha256": "5af1475d9e3f0fa62c912b433807140760a906e9a50a7a65d9264b4ecd916d32",
+      "bytes": 6804
+    },
+    {
+      "path": "lib/CJK.idml",
+      "sha256": "27c98a2cdcf25f13be8d5ca2d34c615df821c0d45f4943f983473453792574a7",
+      "bytes": 44769
+    },
+    {
+      "path": "lib/cluster_grep_repair.js",
+      "sha256": "e32b14f5e3559a410167fbb9cbe3e11c6dde515e4721dc7b5908eef7d7c06809",
+      "bytes": 6675
+    },
+    {
+      "path": "lib/dialog_helpers.js",
+      "sha256": "bdbd8108ffd3c126a0a8c86361e53e53b5532491a29332ce658da23187e58ebf",
+      "bytes": 6358
+    },
+    {
+      "path": "lib/dialog_label_delegate.js",
+      "sha256": "b149acb9823849d39e49a8c0c415baa2ac4622feacbe262c782f09ad0d03ac98",
+      "bytes": 3333
+    },
+    {
+      "path": "lib/doc_provenance.js",
+      "sha256": "0652c0077f5994767525cd6be9d069b40afcc4735c6e5aa8ec3162682ea09458",
+      "bytes": 8247
+    },
+    {
+      "path": "lib/edge_autopan.js",
+      "sha256": "ecef22e6f94b05a4a41a9d6098c1f6c2c7b7499532f4fc3e4bc7e8e6d4efca9f",
+      "bytes": 3361
+    },
+    {
+      "path": "lib/emphasis_codec.js",
+      "sha256": "193ffdc83290b0be97fd5a0e6023dfdf7cee44b02e7fd49c8e76f03b91036e9b",
+      "bytes": 18153
+    },
+    {
+      "path": "lib/emphasis_extractor.js",
+      "sha256": "1c52bd68df6acd0664cab407ae2e7b68f57dac9375750d9a3ed5b77aa6485751",
+      "bytes": 57218
+    },
+    {
+      "path": "lib/emphasis_report.js",
+      "sha256": "565b9a1eacd4f45d5641be72c8cc2894c3cbffc246591c48fab5fe8c673b7e39",
+      "bytes": 8075
+    },
+    {
+      "path": "lib/export_dialog.js",
+      "sha256": "c42dba070ba079324490e30d856e29de7061715d38b173d07ca0959ee75de294",
+      "bytes": 21720
+    },
+    {
+      "path": "lib/faux_italic.js",
+      "sha256": "7fb20d589f53f44fdad1b57ed06fa6cd0debe466288da4adaf86f453a94a6935",
+      "bytes": 3408
+    },
+    {
+      "path": "lib/file_utils.js",
+      "sha256": "deaa9046b2d27f6308c586a14df06660d6166e03b2e219cbd7a6755747c5a6bb",
+      "bytes": 21536
+    },
+    {
+      "path": "lib/font_axes_query.js",
+      "sha256": "a9ba80a1a9eabba1d972fa20ab1d33907878899a78194e6d82a39bb839e07376",
+      "bytes": 7896
+    },
+    {
+      "path": "lib/font_face_missing.js",
+      "sha256": "a526dd65c7fa73c92d4af2b23d3eeba8f7423965042a6a454a63b31e59c5d793",
+      "bytes": 13521
+    },
+    {
+      "path": "lib/font_identity_groups.js",
+      "sha256": "6e2ae1c21d25d01d139ac31c634f036b610de387632a574dd3c0b5f6b8c82e8b",
+      "bytes": 47096
+    },
+    {
+      "path": "lib/font_italic_probe.js",
+      "sha256": "41c70b1e482e15a4dcd8b76c5245e1b0726f5c25d48c173e820b65d19faa2ec5",
+      "bytes": 17547
+    },
+    {
+      "path": "lib/font_mapping_apply_to_doc.js",
+      "sha256": "5cb9d4bb1fe6699f403cd149512230d6b21ea3ec4758484bc3235589d4578c8b",
+      "bytes": 13036
+    },
+    {
+      "path": "lib/font_mapping_apply.js",
+      "sha256": "05eb123cf0bec039c1be323204820ccbfe50bad81ada4ed32c9cba74dd0a52a2",
+      "bytes": 14181
+    },
+    {
+      "path": "lib/font_mapping_doc_scan.js",
+      "sha256": "6591957179b21b8f891602608fab48307e1bbede58841b400ab033c8d1226b55",
+      "bytes": 59193
+    },
+    {
+      "path": "lib/font_mapping_ops.js",
+      "sha256": "9bc6eb681934791e368228c09d7a91da3e733286fc1a61927f2f5aa053086d88",
+      "bytes": 20616
+    },
+    {
+      "path": "lib/font_mapping_pairs.js",
+      "sha256": "c72118c908b7db61d2321130da97bbcc9c24eb27270f7b2dd9c4cb68ca8c35bc",
+      "bytes": 59400
+    },
+    {
+      "path": "lib/font_mapping_panel_adapter.js",
+      "sha256": "4ce5c148da1cb405254544762f31e0f364232934ee0b3ecee6fe604d69478082",
+      "bytes": 54931
+    },
+    {
+      "path": "lib/font_mapping_panel_ui.js",
+      "sha256": "71089e2558b43a9d68394e1c4366af0a139ae653e5c181269fa88559513502bf",
+      "bytes": 18861
+    },
+    {
+      "path": "lib/font_mapping_resolve.js",
+      "sha256": "34084e24c4e4923261fe032cb82517df4074b2a3f483a5f397c24b8745ff336b",
+      "bytes": 56970
+    },
+    {
+      "path": "lib/font_mapping.js",
+      "sha256": "095b664b23cdc58e35752dd881ae48ffb0c1c32921af257a19c73d4e3e360d94",
+      "bytes": 9064
+    },
+    {
+      "path": "lib/font_panel_env.js",
+      "sha256": "c61630ab5611640ae3c54e7654a3638de6a142526b17020004ce9c4a5f8d3561",
+      "bytes": 12783
+    },
+    {
+      "path": "lib/font_recombination.js",
+      "sha256": "833e11b6b5c8cd438fdbbcdd022b72e4197f1f01797b35c4f35819988794f3e8",
+      "bytes": 15046
+    },
+    {
+      "path": "lib/frame_host_adapter.js",
+      "sha256": "7f379a0bc9003a3766f920b6caee74003d2ad0d236080c1b329b0ad03f5251f3",
+      "bytes": 5846
+    },
+    {
+      "path": "lib/frame_partition.js",
+      "sha256": "e6fb2d99d066a3e5429b2cead3239aa892847fecd4816c1fe55273f088f920b3",
+      "bytes": 6597
+    },
+    {
+      "path": "lib/frame_repair_contract.js",
+      "sha256": "54d6ef1f3ef9888c5da873f1f20067a19f4be5c011f30f3971cb2e15f1b59287",
+      "bytes": 4323
+    },
+    {
+      "path": "lib/frame_repair.js",
+      "sha256": "f29d5710168b08ddbcb1cee2e96df90818a7e44a3272911710a7a94670b2e8b0",
+      "bytes": 44634
+    },
+    {
+      "path": "lib/hard_errors.js",
+      "sha256": "648eac8c20771df9e6c3e85297fc9564c2fefb528087da99ccbb0b5a5f0824e2",
+      "bytes": 19110
+    },
+    {
+      "path": "lib/host_env_guard.js",
+      "sha256": "8910d0cee687443bfd1395adb8c1c349f3215aecced2e417f64eced2d50bb49a",
+      "bytes": 8580
+    },
+    {
+      "path": "lib/hyperlink_preserver.js",
+      "sha256": "29568d53048ca17d79fe7173e27943e9836120cbc49ee543f3bf5e97c7cbffc6",
+      "bytes": 12916
+    },
+    {
+      "path": "lib/import_byPair_wiring.js",
+      "sha256": "4811c5ea80c8bd8a2716c62860fc9c1cfa844b895a20ce76a79ae26fb805b529",
+      "bytes": 40305
+    },
+    {
+      "path": "lib/import_diff_classify.js",
+      "sha256": "7d227c0c1798b968587e361e02c857979d2294ca3fec7bbaa43845a6b49f81a4",
+      "bytes": 17958
+    },
+    {
+      "path": "lib/import_state_store.js",
+      "sha256": "848a5c218784d6e4f315e53062c65c4dec28411a6dc61d90b4409270eeaa6750",
+      "bytes": 15382
+    },
+    {
+      "path": "lib/italic_apply.js",
+      "sha256": "1822532841c7d211dd55d306b759257e6a5064d0f54919f6947bcced5fe1b800",
+      "bytes": 12863
+    },
+    {
+      "path": "lib/italic_config.js",
+      "sha256": "34671a359c106727f03308a026b99717b537e0f1a58af499ae8ccb928fc33d76",
+      "bytes": 9338
+    },
+    {
+      "path": "lib/italic_variant_keys.js",
+      "sha256": "bb2692913c19a16a913e2dd825313febc8b0f0087e5d00193c9dfff7c451133e",
+      "bytes": 22685
+    },
+    {
+      "path": "lib/lang_script_table.js",
+      "sha256": "f4987dbab3426d3ef1d03c08e594a1ebfe28573c091891f8011c4299de766651",
+      "bytes": 6994
+    },
+    {
+      "path": "lib/picker_outcome.js",
+      "sha256": "fc21f16059b26d8c997aadea504dec8c5bc67118360534375906fc52f2dca207",
+      "bytes": 6906
+    },
+    {
+      "path": "lib/pre_overwrite_backup.js",
+      "sha256": "150b2c7033fd5e0d47445ddbdcb1f5cd59a7527d077ebaa4be90239bc4a8789c",
+      "bytes": 7999
+    },
+    {
+      "path": "lib/processing_dialog.js",
+      "sha256": "99a14baebfcec115347708e54d7d10e4b109cec54b3bae829ed5669b66b1799a",
+      "bytes": 7029
+    },
+    {
+      "path": "lib/project_meta_assemble.js",
+      "sha256": "ff9b8d8cc4e1e48708a030a90509103adc27296771a667bbdc839d6faee2caae",
+      "bytes": 10460
+    },
+    {
+      "path": "lib/project_meta_label.js",
+      "sha256": "10ea3cef8af786b54be8eb7cf45a8d18cfbcc8d5f3e6774b632d74a86b78a313",
+      "bytes": 7510
+    },
+    {
+      "path": "lib/project_meta_uxp.js",
+      "sha256": "8f0c251ac141cf68502c8a48e55451b8cd5688dc1eb7d71a7012d78c5424b333",
+      "bytes": 6242
+    },
+    {
+      "path": "lib/project_uid.js",
+      "sha256": "b5a26abb158edc4b04caf9281fea5e832d466efb71af2ccdcbbb245f7730cd85",
+      "bytes": 3679
+    },
+    {
+      "path": "lib/reorganize_dialog_v2.js",
+      "sha256": "eacac5b65736c7081d688d1c59244e89a36eb339a795169dcdb34c487b95817c",
+      "bytes": 33641
+    },
+    {
+      "path": "lib/reorganize_dialog.js",
+      "sha256": "d87b19ca0351ae11f73eb0f0d64fcdc86e9684d61d223a50e64ded4fec0c8502",
+      "bytes": 17920
+    },
+    {
+      "path": "lib/reorganize_doc_ops.js",
+      "sha256": "8da15faa85727f9c2b67042ba3d9a4090c94ed5618ac3353b04cce68c83baf9b",
+      "bytes": 29282
+    },
+    {
+      "path": "lib/reorganize_inplace_core.js",
+      "sha256": "daee82a86a008d7e9a910b66dc999a28b0d94b3869775ed787541be43a2b95fa",
+      "bytes": 101641
+    },
+    {
+      "path": "lib/repair_after_apply.js",
+      "sha256": "21d949980ac468542de2b47db5bb3285754e6cdf70c702275841fd7adc6a8d73",
+      "bytes": 42699
+    },
+    {
+      "path": "lib/resolve_core.js",
+      "sha256": "dfa7ec588d229d9d13018c8fb160e20894d2baca6284b0fdacbeeeb9e16bdf54",
+      "bytes": 19224
+    },
+    {
+      "path": "lib/runtime_paths.js",
+      "sha256": "f800430003dbdd569473ae1e2b99a4a2861458b270cb8118e918bd3399e22951",
+      "bytes": 10082
+    },
+    {
+      "path": "lib/script_classifier.js",
+      "sha256": "07fefd0e5bdb125d581ca9bcf538b3cd05ffdb0ab943af9900a1045bfe5bec19",
+      "bytes": 20813
+    },
+    {
+      "path": "lib/script_font_enforcer.js",
+      "sha256": "b72acf733ff3fe3f75a5bd209c39b85b15ffee8336cd885216627229ef285608",
+      "bytes": 37297
+    },
+    {
+      "path": "lib/script_log_paths.js",
+      "sha256": "a297467a32fc355574682691b2d215b8cc89c0f46d9a8ef83e8412cfad46e582",
+      "bytes": 9680
+    },
+    {
+      "path": "lib/script_split.js",
+      "sha256": "01009527084d8c8f28484eebe0177ced0efb226dba670518205ff21ff0e580be",
+      "bytes": 2823
+    },
+    {
+      "path": "lib/segment_locator.js",
+      "sha256": "05777693534c24ca817f4c3b58cce2d6e4197397556f8c34ee4206d775367ef8",
+      "bytes": 29617
+    },
+    {
+      "path": "lib/smoke_runner_config.js",
+      "sha256": "187cbd1c36131724a64b3c15bf061568454b2ced40e2a68d9e8768dfa8d3fb31",
+      "bytes": 2615
+    },
+    {
+      "path": "lib/snapshot_utils.js",
+      "sha256": "f3100448fb26fb2e9de96cdc5b17817b709506457d52b245b86ecb62fa04787b",
+      "bytes": 9534
+    },
+    {
+      "path": "lib/snapshot_writer.js",
+      "sha256": "c9fed029a28083ab358ddba6e093522e9b1ae4b01ffc450560d5452c73d7d517",
+      "bytes": 2432
+    },
+    {
+      "path": "lib/soft_break_plan.js",
+      "sha256": "c97fefd1dddeb4e3a0b9501a73339f93662a3a0e2ac47e2f587e2529e48b2fe3",
+      "bytes": 8871
+    },
+    {
+      "path": "lib/storage_uxp.js",
+      "sha256": "9e7e419e754562eff0490f39922c18e7635f2b56b92e49df964f54f248611836",
+      "bytes": 27162
+    },
+    {
+      "path": "lib/story_utils.js",
+      "sha256": "ae8c321d320a9a86f32409239b2beef3e28238edd94de37f98f61837c368bcdc",
+      "bytes": 3582
+    },
+    {
+      "path": "lib/style_applier.js",
+      "sha256": "ddd55a5f769b70d64cf0b0f99e366f0bac9de9827b881153701be93cddf63bfd",
+      "bytes": 157184
+    },
+    {
+      "path": "lib/style_config_io.js",
+      "sha256": "36bbb25701901e7e6294c9413452138382979310de3b64f67a590bde2ca90b02",
+      "bytes": 49419
+    },
+    {
+      "path": "lib/style_import.js",
+      "sha256": "67595398eb9e1f4e9c02df87f9d082e5d952c1d81a6ad0774a252e57700ae54e",
+      "bytes": 2846
+    },
+    {
+      "path": "lib/style_merge_advisor.js",
+      "sha256": "cecc6560a0998c77832bc4512b41ee6340d6ecf589eb848e0676e0b2d98fd161",
+      "bytes": 43220
+    },
+    {
+      "path": "lib/style_sheet_builder.js",
+      "sha256": "89133fc941854eb719cf278125c548619fd1b5f5bb59d7d305f71df0178c19b4",
+      "bytes": 205957
+    },
+    {
+      "path": "lib/text_cleanup.js",
+      "sha256": "fd5ac57e0926b92cb05d20d41f947a47c72daf57ccd90ec2ff91a272fce4bfbb",
+      "bytes": 6228
+    },
+    {
+      "path": "lib/translation_common.js",
+      "sha256": "2b42c16d594f621b8af5d08b68dcdbd98f78d29a8e47619208794f8bc98bcfb2",
+      "bytes": 15482
+    },
+    {
+      "path": "lib/underline_rule_dedup.js",
+      "sha256": "65319f0c4e6ecbfd49eb4722cf37d6e43475e1543386c93e75067f2d128744a9",
+      "bytes": 8908
+    },
+    {
+      "path": "lib/utils.js",
+      "sha256": "234fe1201442ada28a4f12846b0c1bbe5328bb852a7e56238c6c6387aa44b85a",
+      "bytes": 1620
+    },
+    {
+      "path": "lib/v2_pipeline.js",
+      "sha256": "58fb83da0ff23c4e708e9bb0d3ad52dd6dbea14fc64e164f3d9a07e97c81189c",
+      "bytes": 268966
+    },
+    {
+      "path": "lib/vendor/babel.min.js",
+      "sha256": "2623a9e22809915ce789b4461154e277ddce520d5a4320c14d44332a5d0dcea0",
+      "bytes": 3137752
+    },
+    {
+      "path": "lib/vendor/fflate.umd.js",
+      "sha256": "c3b34f2e9f5e74d4d7d64e01cac7a0c01954c6c406414d42185c7b53d6875ddf",
+      "bytes": 32665
+    },
+    {
+      "path": "lib/vendor/project_meta/adapter_conformance.js",
+      "sha256": "187d8cd4526626eb122b03c9663c6f2b5d6516c3b0c2646fc7d27820de015267",
+      "bytes": 17760
+    },
+    {
+      "path": "lib/vendor/project_meta/bcp47_validate.js",
+      "sha256": "4a34326601c48847fe3d2621eaa55b82717cf224df3c25edd0b1a8297016c051",
+      "bytes": 10520
+    },
+    {
+      "path": "lib/vendor/project_meta/frozen_manifest.json",
+      "sha256": "b7d498009d16e6fb6e1670897f34668c32c33593c79962057ac8f33107048d89",
+      "bytes": 5943
+    },
+    {
+      "path": "lib/vendor/project_meta/json_schema_minimal.js",
+      "sha256": "4b950cb346766a672fece071064c02e3cb0b46c8daeb53b84b5e49836b45fd19",
+      "bytes": 13196
+    },
+    {
+      "path": "lib/vendor/project_meta/path_resolver.js",
+      "sha256": "7fdf15d9cdf7aed8c5bd5c1de7b79506c26c6576299933dc4de936c5117fe12a",
+      "bytes": 10438
+    },
+    {
+      "path": "lib/vendor/project_meta/project_meta.js",
+      "sha256": "c5805fcb610a8b31ead05896815680e145836592d10feb4df723c59626d515e7",
+      "bytes": 35691
+    },
+    {
+      "path": "lib/vendor/project_meta/project_meta.schema.json",
+      "sha256": "0b0233aa95af35267fedbd99afca60b65e478657bda9655a31593c98d1514bc8",
+      "bytes": 4676
+    },
+    {
+      "path": "lib/vendor/project_meta/sha256_pure.js",
+      "sha256": "907716178aaf4129d4a5aa930b85735506a9b50264b4e19411fef1b67d753919",
+      "bytes": 7508
+    },
+    {
+      "path": "lib/vendor/react-dom.patched.umd.js",
+      "sha256": "626f55c83db9b18aaba6028aac75280492ab7ed192b19cc3bab0b374aead036f",
+      "bytes": 131835
+    },
+    {
+      "path": "lib/vendor/react-dom.production.min.js",
+      "sha256": "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d",
+      "bytes": 131835
+    },
+    {
+      "path": "lib/vendor/react.production.min.js",
+      "sha256": "d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd",
+      "bytes": 10751
+    },
+    {
+      "path": "lib/version_carry.js",
+      "sha256": "753f3bba01e3939e4f169a6ee69f873dc0a7ba91a3b7416489234048b710b7a2",
+      "bytes": 10361
+    },
+    {
+      "path": "lib/version_manifest.js",
+      "sha256": "486ef5d2e7bf3914f130e67761db69470a36fd8428a0ffcd28ab85f8806eb44a",
+      "bytes": 19282
+    },
+    {
+      "path": "lib/visual_snapshot.js",
+      "sha256": "4671b13f24e087585d18a1a90965620d95548f24960feb0e2b0d55ece2ca8962",
+      "bytes": 31216
+    },
+    {
+      "path": "lib/wire_hit_test.js",
+      "sha256": "8916d3e9daff64c8c9978bc44d00564946b0cf0648afb039c221eb1a413aacbb",
+      "bytes": 3485
+    },
+    {
+      "path": "lib/work_copy.js",
+      "sha256": "bb3a1daba0b445d8aebd7e7deb7ff754d94d35c06195fa30c9d6723b5ecdb335",
+      "bytes": 9180
+    },
+    {
+      "path": "lib/zip_core.js",
+      "sha256": "cfac810aed326e8fd12a57cb53d3fa92522c3ce04a0ee5bd74b9c0edc62aa1e6",
+      "bytes": 9036
+    },
+    {
+      "path": "3.3 Relink Missing Links.idjs",
+      "sha256": "7f0b73e614bcb5bd2f07fffd825882506d8f76b09fea975f980a459dab156efe",
+      "bytes": 13624
+    },
+    {
+      "path": "2.4 Reorganize Styles.idjs",
+      "sha256": "be5c383f54f78ce04d71582268a28ed75a73e732553cd01a8dae0ae01e780753",
+      "bytes": 1504
+    },
+    {
+      "path": "3.2 Repair After Apply.idjs",
+      "sha256": "aa68721592b3ceb470093b31f02ef445e93d44af9074f8a4536a85cede7659dc",
+      "bytes": 661
+    },
+    {
+      "path": "2.5 Repair Cluster GREP.idjs",
+      "sha256": "67682ba6d803556fc372a96e3e08052d33b61a06dbaac111bc47a3344db71689",
+      "bytes": 8909
+    },
+    {
+      "path": "3.5 Save and Reveal.idjs",
+      "sha256": "70a96528f08fd124f64a977acbffa756ead64b8ec1a94f95868829716b0b9a98",
+      "bytes": 11171
+    },
+    {
+      "path": "2.3 Set Selection Weight.idjs",
+      "sha256": "aa91bb48683d65d0e5ec42294220afd91849661994e4ebdc86035ac218319b90",
+      "bytes": 25819
+    },
+    {
+      "path": "3.1 Snapshot Before Apply.idjs",
+      "sha256": "d38e985be3c427a08e0616064e9b829c924e5f81aec88f8cdec8ce3917730e36",
+      "bytes": 6094
+    },
+    {
+      "path": "3.4 Highlight Translation Changes.idjs",
+      "sha256": "2acc884cddc321793d84aea7baac66567c19f6a15ef5bab33296766bb42d21e6",
+      "bytes": 60155
+    }
+  ]
+}

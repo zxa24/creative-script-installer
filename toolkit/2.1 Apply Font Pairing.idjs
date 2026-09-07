@@ -1,0 +1,811 @@
+/*
+ * font_apply_panel.idjs
+ *
+ * Entry script for the font apply panel (Focus-only build). Scans the
+ * active doc, opens the React UI inside a UXP <dialog>, and on "Done"
+ * applies pairing-driven cross-language font swaps via direct format
+ * override — no paragraph/character style creation.
+ *
+ * Lifecycle:
+ *   1. Scan active doc → v2 panel data shape (fonts, weights, used counts)
+ *   2. Inject window.__fap.{initialData, onDone}
+ *   3. Build dialog (React 18 + Babel + CanvasPan + panel CSS/JSX)
+ *   4. await user → click Done OR close dialog
+ *   5. On Done: app.doScript(applyFn, JAVASCRIPT, [], ENTIRE_SCRIPT, "Font Apply")
+ *      → single Ctrl+Z reverts the whole batch
+ *   6. Report swap counts → alert + log
+ *
+ * Toolkit conventions in play:
+ *   - lib/runtime_paths.js for base dir resolution (cross-machine)
+ *   - lib/script_log_paths.js for log dir + auto-purge (opt-in 7d retention)
+ *   - lib/automation_bridge.js for bridge-mode dialog suppression
+ *   - lib/vendor/* React/ReactDOM/Babel UMDs (same as font_mapping_panel)
+ */
+"use strict";
+
+var fs = require("fs");
+var indesign = require("indesign");
+var app = indesign.app;
+var RuntimePaths = require("./lib/runtime_paths.js");
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+var AutomationBridge = require("./lib/automation_bridge.js");
+
+// Phase 8D-ext-0: migrated to lib/font_mapping_* per task_plan commit fad7746.
+var DocScan = require("./lib/font_mapping_doc_scan.js");
+var Resolve = require("./lib/font_mapping_resolve.js");
+var ApplyToDoc = require("./lib/font_mapping_apply_to_doc.js");
+var PanelAdapter = require("./lib/font_mapping_panel_adapter.js");
+var PickerOutcome = require("./lib/picker_outcome.js");
+// #28e — face-level not-installed precompute: the probe passed to
+// configToPanelData is the byPair Stage-1 gate itself (shared function).
+var FaceMissing = require("./lib/font_face_missing.js");
+var Enforcer = require("./lib/script_font_enforcer.js");
+// UNIFY-converge Phase 1 B-core: langScriptTable resolver (SA + collision
+// disambig) + enforcer preserve-list builder, shared with the import path.
+var ByPairWiring = require("./lib/import_byPair_wiring.js");
+// 8D-ext faux-CJK-opt-in r4-(Y): shared panel-bootstrap ENV (installGlobals + fillCommonFap)
+// — single source so this standalone launcher and lib/font_mapping_panel_ui.js (import re-host)
+// are consistent BY CONSTRUCTION (window-globals incl WireHitTest + common fap incl cjkLangs).
+var FontPanelEnv = require("./lib/font_panel_env.js");
+
+var SCRIPT_NAME = "font_apply_panel";
+
+function ts() { return new Date().toISOString(); }
+function joinAll() {
+    var out = arguments[0];
+    for (var i = 1; i < arguments.length; i++) {
+        out = RuntimePaths.joinPath(out, arguments[i]);
+    }
+    return out;
+}
+
+async function resolveScriptPaths() {
+    var p = "";
+    try {
+        var script = await app.activeScript;
+        if (script) {
+            p = script.nativePath || script.fsName || script.fullName
+                || script.absoluteURI || script.path || String(script);
+            p = String(p || "");
+        }
+    } catch (eP) {}
+    p = p.replace(/^file:\/+/, "");
+    var mvpDir = p.replace(/[\\\/][^\\\/]+$/, "");
+    // Portable fallback: RuntimePaths.getBaseDir() is resolved here because
+    // main() awaits RuntimePaths.bootstrap() before calling us. Works on any
+    // machine (Scripts Panel install dir / dev checkout / NAS). Was a hardcoded
+    // per-machine absolute path (dev username + wrong layout) — broke on install.
+    if (!mvpDir || mvpDir.length < 4) mvpDir = RuntimePaths.getBaseDir();
+    return { script_raw: p, mvp: mvpDir };
+}
+
+async function main() {
+    await RuntimePaths.bootstrap();
+    var paths = await resolveScriptPaths();
+    var MVP = paths.mvp;
+    var DEV_DIR = joinAll(MVP, "dev", "font_apply_panel");
+
+    // Doc dir is the canonical log root per script_log_paths.js convention,
+    // but font_apply_panel logs are diagnostic — keep alongside legacy
+    // probe logs in translation_mvp_uxp/log/ so the purge script catches
+    // them on its retention sweep.
+    var instanceStamp = (new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    var LOG_PATH = joinAll(MVP, "log", SCRIPT_NAME + "__" + instanceStamp + ".log");
+
+    var report = {
+        timestamp: ts(),
+        script: SCRIPT_NAME,
+        resolved_paths: { mvp: MVP, dev: DEV_DIR },
+        steps: []
+    };
+    function writeLog() {
+        try { if (typeof summariseTiming === "function") summariseTiming(); } catch (e) {}
+        try { fs.writeFileSync(LOG_PATH, JSON.stringify(report, null, 2), "utf-8"); } catch (e) {}
+    }
+    // #71 (owner 2026-08-22: 「双击脚本后等待开面板的时间很长」+「加启动分段耗时日志」).
+    // 🔴 MEASURE ONLY. Nothing here changes what the script does; the round's
+    // deliverable is a table of numbers, not an optimisation. Which segment to
+    // attack is decided after reading it, not before.
+    // ⚠ Cost: the numbers are ACCUMULATED and written by the existing writeLog
+    // calls — no extra flush per segment. (plog rewrites its whole buffer on every
+    // call; italicprobe measured that as O(N²). A timer that is itself the cost
+    // would be worse than no timer.)
+    // ⚠ BLIND SPOT, stated rather than faked: 「双击 → idjs 开始跑」 is NOT visible
+    // from inside. The first line of this script is the earliest moment it can
+    // observe, so InDesign's own script-engine load sits before T0 and is not in
+    // this table. If the wait owner feels is mostly THAT, these numbers will look
+    // small and the table itself is the evidence for where to look next.
+    var T0 = Date.now();
+    function step(name, fn) {
+        var t = Date.now();
+        try {
+            var data = fn() || {};
+            data.step = name;
+            data.pass = data.pass !== false;
+            data.elapsed_ms = Date.now() - t;      // this segment
+            data.at_ms = t - T0;                   // when it started, since script entry
+            report.steps.push(data);
+            return data;
+        } catch (e) {
+            report.steps.push({ step: name, pass: false, error: String(e && e.message || e),
+                                elapsed_ms: Date.now() - t, at_ms: t - T0 });
+            return null;
+        }
+    }
+    // Human-readable roll-up, written once at the end alongside the raw steps.
+    function summariseTiming() {
+        var rows = [];
+        for (var i = 0; i < report.steps.length; i++) {
+            var st2 = report.steps[i];
+            rows.push({ step: st2.step, at_ms: st2.at_ms, elapsed_ms: st2.elapsed_ms });
+        }
+        report.startup_timing = rows;
+        report.startup_total_ms = Date.now() - T0;
+        report.startup_note = "at_ms is measured from this script's first line; "
+            + "InDesign's own load of the script before that is not observable from here.";
+    }
+
+    // Bridge mode: MCP-driven runs skip the dialog and do a no-op apply on
+    // sample data — only useful for smoke-testing wiring, not real apply.
+    var auto = null;
+    try { auto = await AutomationBridge.readAutomationOptions(SCRIPT_NAME); } catch (eAB) {}
+    var bridgeMode = !!(auto && auto.mode === "bridge");
+    report.mode = bridgeMode ? "bridge" : "interactive";
+
+    if (typeof document === "undefined") {
+        step("0_precondition", function () { return { pass: false, error: "document undefined" }; });
+        writeLog();
+        try { app.alert("FAIL: document undefined.\nlog: " + LOG_PATH); } catch (e) {}
+        return report;
+    }
+
+    // -------- Step 1a: enumerate installed font families (batch, ~30ms) -----
+    // Uses `app.fonts.everyItem().name` per CLAUDE.md "everyItem().prop"
+    // quirk — 1000× faster than per-item iteration. Used by both:
+    //   - Step 1b scan augmentation (every doc-used font gets all installed
+    //     weights listed, not just doc-used ones)
+    //   - Panel's Add language / Add font inline pickers
+    var installedFamilies = {};
+    step("1a_enumerate_installed_fonts", function () {
+        var nFonts = app.fonts.length;
+        var allNames;
+        try { allNames = app.fonts.everyItem().name; }
+        catch (eEvery) {
+            return { pass: false, error: "everyItem().name failed: " + String(eEvery.message || eEvery) };
+        }
+        var arr = (allNames && allNames.length !== undefined) ? [].slice.call(allNames) : [];
+        for (var i = 0; i < arr.length; i++) {
+            var n = String(arr[i] || "");
+            if (!n) continue;
+            var parts = n.split("\t");
+            var fam = parts[0];
+            if (!fam) continue;
+            var style = parts[1] || "Regular";
+            if (!installedFamilies[fam]) installedFamilies[fam] = [];
+            if (installedFamilies[fam].indexOf(style) === -1) installedFamilies[fam].push(style);
+        }
+        return { total_fonts: nFonts, names_returned: arr.length, family_count: Object.keys(installedFamilies).length };
+    });
+
+    // -------- Step 1b: scan active doc (passes installedFamilies for weight augmentation) -
+    var scanResult = null;
+    step("1b_scan_doc", function () {
+        scanResult = DocScan.scanActiveDoc({ installedFamilies: installedFamilies });
+        return scanResult;
+    });
+    if (!scanResult || !scanResult.ok) {
+        writeLog();
+        try { app.alert("Scan failed: " + (scanResult && scanResult.reason || "unknown") + "\nlog: " + LOG_PATH); } catch (e) {}
+        return report;
+    }
+    // Phase 8D-ext-0 lib/font_mapping_doc_scan returns panelData at top-level
+    // (the MVP nested it under .data; lib does not).
+    var panelData = scanResult.panelData;
+    // Codex r1 P1-2 fix: attach A4 outputs onto panelData so React + adapter
+    // can pass them through to the resolver / show collision confirmations.
+    if (panelData) {
+        // TODO#58: `equivalence_groups_auto` is now produced by face identity
+        // (Font.postscriptName), not by spelling. Same field, different criterion.
+        panelData.equivalence_groups = (scanResult.equivalence_groups_auto || []).slice();
+        panelData._confirmable_merges = (scanResult.confirmable_merges || []).slice();
+    }
+    // TODO#58 (5): the five counters, on their own log line so they are findable
+    // without reading the whole scan dump. 🔴 They are never summed — the one owner
+    // asked about (「因为没装而没合」) is `not-installed` alone.
+    step("1c_identity_readout", function () {
+        var IG = require("./lib/font_identity_groups.js");
+        return {
+            eg_count: (scanResult.equivalence_groups_auto || []).length,
+            readout: IG.formatIdentityReadout(scanResult.identity_readout),
+            detail: scanResult.identity_readout
+        };
+    });
+
+    // -------- Step 2: install shared panel globals + local Babel ------------
+    // React/ReactDOM/CanvasPan/WireHitTest go through FontPanelEnv.installGlobals (the single
+    // source shared with lib/font_mapping_panel_ui.js — so neither launcher can miss one, as
+    // happened with WireHitTest). Babel stays a LOCAL var (not a window-global; used by
+    // compileAndEval below). The React/ReactDOM/CanvasPan local vars are unused after this,
+    // so they're dropped — the React app reads window.React etc.
+    var Babel;
+    step("4_require_babel", function () {
+        Babel = require("./lib/vendor/babel.min.js");
+        return { version: Babel && Babel.version };
+    });
+    step("2_install_globals", function () {
+        // installs window/globalThis React, ReactDOM, CanvasPan, WireHitTest
+        return FontPanelEnv.installGlobals();
+    });
+
+    // -------- Step 3: read panel CSS ----------------------------------------
+    var cssText = "";
+    step("6_read_css", function () {
+        var cssPath = joinAll(DEV_DIR, "panel.css");
+        cssText = fs.readFileSync(cssPath, "utf-8");
+        return { css_path: cssPath, css_len: cssText.length };
+    });
+    if (!cssText) {
+        writeLog();
+        try { app.alert("FAIL: panel.css read failed.\nlog: " + LOG_PATH); } catch (e) {}
+        return report;
+    }
+
+    // -------- Step 4: inject initialData + installedFamilies + onDone hook --
+    // installedFamilies was populated in step 1a (re-used here).
+    // Captures apply result; the await-close path reads it back to alert.
+    var applyResult = null;
+    var doneCalled = false;
+    // univ-italic §7.4 ②: how many italic copies the operator authored this run.
+    // THIS entry point applies fonts to the document; it does not write a
+    // brand_config anywhere. Italic HOW is consumed at IMPORT time by reading
+    // brand_config.italic_by_weight, so a copy made here reaches nothing unless
+    // the operator exports the config. Counted so the summary can SAY that
+    // instead of the work silently evaporating (every other panel edit takes
+    // effect on the doc, so the operator has no reason to suspect this one does not).
+    var italicAuthored = 0;
+    // Baseline of the italic store as it arrived (an in-panel Import JSON seeds the
+    // whole store wholesale). Only entries ADDED or CHANGED relative to this are the
+    // operator's work THIS run — counting the raw key total would warn "6 copies will
+    // be lost" about six entries still sitting untouched in the file they came from,
+    // and would fire after a successful Export too.
+    var italicBaseline = {};
+    function _snapshotItalic(store) {
+        var snap = {};
+        try {
+            var keys = Object.keys(store || {});
+            for (var i = 0; i < keys.length; i++) snap[keys[i]] = JSON.stringify(store[keys[i]]);
+        } catch (e) {}
+        return snap;
+    }
+    function _countItalicAuthored(store) {
+        var n = 0;
+        try {
+            var keys = Object.keys(store || {});
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i];
+                if (!Object.prototype.hasOwnProperty.call(italicBaseline, k)) { n++; continue; }
+                if (italicBaseline[k] !== JSON.stringify(store[k])) n++;
+            }
+        } catch (e) {}
+        return n;
+    }
+    // Import/Export — UXP file picker integration. React app calls these
+    // via window.__fap.{importJson, exportJson}; entry handles the actual
+    // file I/O because lfs apis are in the idjs scope (and we want errors
+    // to surface to user via app.alert if needed).
+    var lfs;
+    try { lfs = require("uxp").storage.localFileSystem; } catch (eLfs) { lfs = null; }
+
+    // Codex r1 P1-5 fix: Import/Export routes via panel_adapter so persisted
+    // form is the validated lib config (brand_name + fonts_by_language +
+    // pairs + representative_by_lang + equivalence_groups). Import accepts
+    // either form (lib config OR legacy v2 panelData) — adapter detects shape.
+    async function importJson() {
+        if (!lfs) return { ok: false, reason: "lfs unavailable" };
+        try {
+            // 🔴 Two outcomes, two VALUES (not one value + a note: notes get ignored
+            // downstream, values do not). The picker is falsy for BOTH "operator
+            // cancelled" and "device returned nothing" and we cannot tell them apart
+            // here — so the value says exactly that and no more. See lib/picker_outcome.js.
+            var f;
+            try {
+                f = await lfs.getFileForOpening({
+                    types: ["json"],
+                    allowMultiple: false
+                });
+            } catch (ePick) {
+                return { ok: false, reason: "picker-threw", detail: String(ePick && ePick.message || ePick) };
+            }
+            if (!f) return { ok: false, reason: "picker-returned-nothing" };
+            var text = await f.read();
+            var obj = JSON.parse(text);
+            var imported;
+            // Detect shape: lib config has brand_name + fonts_by_language;
+            // legacy v2 panelData has languages[] array.
+            if (obj && obj.brand_name && obj.fonts_by_language) {
+                // Lib config form — convert to panelData via adapter for React.
+                // includeDocFonts: keep doc-present fonts as nodes after import
+                // (initial scan panelData shows them; import must not drop them).
+                imported = PanelAdapter.configToPanelData(obj, scanResult, { includeDocFonts: true, installedFamilies: installedFamilies, probeFace: FaceMissing.gateProbeFace });
+                if (!imported) {
+                    return { ok: false, reason: "lib config → panelData failed" };
+                }
+            } else if (obj && Array.isArray(obj.languages)) {
+                // Legacy v2 panelData — codex r5 P1-2 fix: REJECT on conversion
+                // failure rather than fall through to unscoped IDs (which
+                // would let cross-lang ID collisions back in).
+                var legCv = PanelAdapter.panelDataToConfig(obj);
+                if (!legCv.ok) {
+                    return { ok: false, reason: "legacy v2 panel data invalid: " + (legCv.errors || []).join("; ") };
+                }
+                imported = PanelAdapter.configToPanelData(legCv.config, scanResult, { includeDocFonts: true, installedFamilies: installedFamilies, probeFace: FaceMissing.gateProbeFace });
+            } else {
+                return { ok: false, reason: "unrecognized JSON shape: need {brand_name, fonts_by_language} or {languages[]}" };
+            }
+            // An import REPLACES the store; re-baseline so its entries do not read as
+            // the operator's unsaved work.
+            italicBaseline = _snapshotItalic(imported && imported.italic_by_winner);
+            // Re-attach A4 outputs (collisions remain doc-derived, not in import)
+            imported.equivalence_groups = imported.equivalence_groups
+                || (scanResult.equivalence_groups_auto || []).slice();
+            imported._confirmable_merges = (scanResult.confirmable_merges || []).slice();
+            return { ok: true, data: imported, path: (f.nativePath || f.name || "?") };
+        } catch (eImp) {
+            return { ok: false, reason: String(eImp.message || eImp) };
+        }
+    }
+
+    async function exportJson(currentData) {
+        if (!lfs) return { ok: false, reason: "lfs unavailable" };
+        try {
+            // Codex r1 P1-5 fix + r7 P1 brand_name: convert panelData → lib config
+            // and validate via panel_adapter (which calls validateBrandConfig).
+            var cv = PanelAdapter.panelDataToConfig(currentData);
+            if (!cv.ok) {
+                return { ok: false, reason: "config invalid: " + (cv.errors || []).join("; ") };
+            }
+            var config = cv.config;
+            var suggested = "font_apply_" + (config.brand_name || "panel") + ".json";
+            suggested = suggested.replace(/[\\/:*?"<>|]/g, "_");
+            // 🔴 Same conflation as importJson, swept per「修 finding = sweep 整个 concept」.
+            // `getFileForSaving` is falsy for BOTH cancel and a device that returned
+            // nothing, and handleExport swallowed the single reason just as silently.
+            var f;
+            try {
+                f = await lfs.getFileForSaving(suggested, { types: ["json"] });
+            } catch (ePick) {
+                return { ok: false, reason: "picker-threw", detail: String(ePick && ePick.message || ePick) };
+            }
+            if (!f) return { ok: false, reason: "picker-returned-nothing" };
+            await f.write(JSON.stringify(config, null, 2));
+            return { ok: true, path: (f.nativePath || f.name || "?") };
+        } catch (eExp) {
+            return { ok: false, reason: String(eExp.message || eExp) };
+        }
+    }
+
+    // Codex r1 P1-4 fix: precompute D4 enforcer eligibility so React can
+    // surface the tooltip + default the checkbox correctly. Computed once
+    // at scan time; entry script does NOT re-check before apply (user can
+    // override via the checkbox).
+    var enforcerEligibility = null;
+    try {
+        enforcerEligibility = Enforcer.detectEnforcerEligibility(app.activeDocument);
+    } catch (eElig) {
+        enforcerEligibility = { eligible: false, reasons: ["eligibility check threw: " + (eElig.message || eElig)] };
+    }
+
+    // per-launcher fields only; the shared common fields (cjkLangs + scan-derived +
+    // libDocScan/Adapter + initialUnresolvedByLang) are filled by FontPanelEnv.fillCommonFap
+    // below — single source, consistent-by-construction with lib/font_mapping_panel_ui.js.
+    var fap = {
+        // 🔴 The panel (app.jsx) cannot require libs — it only sees `window.*`.
+        // So the classifier is handed over here. app.jsx must NOT re-implement the
+        // decision: the whole defect was a consumer deciding to stay silent.
+        classifyImportOutcome: PickerOutcome.classifyImportOutcome,
+        classifyExportOutcome: PickerOutcome.classifyExportOutcome,
+        initialData: panelData,
+        installedFamilies: installedFamilies,
+        enforcerEligibility: enforcerEligibility,
+        importJson: importJson,
+        exportJson: exportJson,
+        onDone: function (currentData, skipDecisions, runEnforcer, primaryLang) {
+            if (doneCalled) return;
+            doneCalled = true;
+            try {
+                italicAuthored = _countItalicAuthored(currentData && currentData.italic_by_winner);
+            } catch (eIt) { italicAuthored = 0; }
+            // Apply pipeline (Phase 8D-ext-0):
+            //   panelData → config (panel_adapter) → scan (doc_scan)
+            //   → resolveDocActions → applyActionsToDoc → enforcer (if eligible + checkbox ON)
+            // Whole pipeline wrapped in single ENTIRE_SCRIPT doScript so a
+            // single Ctrl+Z reverts swap + enforcer (task_plan P1d single-txn).
+            skipDecisions = skipDecisions || {};
+            runEnforcer = runEnforcer !== false; // default ON
+            try {
+                var doc = app.activeDocument;
+                applyResult = app.doScript(
+                    function () {
+                        // Step 1: panelData → config
+                        var cv = PanelAdapter.panelDataToConfig(currentData);
+                        if (!cv.ok) {
+                            return { ok: false, errors: cv.errors,
+                                stage: "panelDataToConfig" };
+                        }
+                        var config = cv.config;
+                        // Step 2: scan doc (re-scan to get fresh tsrMap after
+                        // user pair edits in panel)
+                        var sr = DocScan.scanActiveDoc({
+                            installedFamilies: installedFamilies,
+                            config: config
+                        });
+                        if (!sr.ok) {
+                            return { ok: false, error: sr.reason,
+                                stage: "scanActiveDoc" };
+                        }
+                        // Step 3: resolvePanelActions — UNIFY-converge Phase 1
+                        // B-core. Routes panel Apply through the SHARED matching
+                        // core (SA / equivalence / collision-disambig / MM-rep),
+                        // closing the entry-point drift vs import byPair. faux
+                        // tier OFF (#2, panel keeps source italic). The "Phase 2
+                        // owns the faux button" this used to point at went away
+                        // with the #17 Y-model (99b9760) and has no owner: the
+                        // byPair path must NEVER write skew (§9 gate). Italic HOW
+                        // is authored per weight in the panel (italic_by_weight,
+                        // univ-italic §7.4) and realized on the APPLY path, not
+                        // here. ③ target-lang chain: primaryLang is
+                        // the user-selected authoritative CJK target signal.
+                        var langScriptTable = ByPairWiring.resolveLangScriptTable(config);
+                        var rr = Resolve.resolvePanelActions(
+                            sr, config, skipDecisions, langScriptTable,
+                            { primaryLang: primaryLang || "" }
+                        );
+                        // A-3 mutation-gate (safe floor; rich UI is B-ui):
+                        // blocked CJK TSRs are NEVER emitted into rr.actions
+                        // (resolvePanelActions `continue`s before bucketing), so
+                        // apply can't touch them — but the result/alert MUST
+                        // reflect that the run is PARTIAL, not complete, when the
+                        // resolver surfaced ambiguous/undecided items. Count the
+                        // gate-relevant rejections so Step 9 reports partial.
+                        var _rej = (rr.diagnostics && rr.diagnostics.rejections) || [];
+                        var ambiguousCount = 0;
+                        for (var _ri = 0; _ri < _rej.length; _ri++) {
+                            if (_rej[_ri] && _rej[_ri].type === "panel_target_lang_ambiguous") {
+                                ambiguousCount++;
+                            }
+                        }
+                        var blockedTargets = (rr.targetLangResolution &&
+                            rr.targetLangResolution.blocked) || [];
+                        var isPartial = (ambiguousCount > 0) || (blockedTargets.length > 0);
+                        // Step 4: apply actions
+                        var ar = ApplyToDoc.applyActionsToDoc(doc, rr.actions);
+                        // Enforcer preserve list (B-core): SA-fonted CJK runs
+                        // must NOT be reverted by the enforcer. Build from the
+                        // applied actions (same shape the import path feeds).
+                        var enfPreserve = ByPairWiring.buildEnforcerPreserveList(rr.actions);
+                        // Step 5: enforcer (if eligible + checkbox ON)
+                        var enforcerResult = null;
+                        if (runEnforcer) {
+                            try {
+                                var elig = Enforcer.detectEnforcerEligibility(doc);
+                                if (elig.eligible) {
+                                    // Use enforceScriptFontsInParagraph per paragraph.
+                                    // Codex r1 P2-2 fix: iterate doc paragraphs in stories
+                                    // AND in table cells (cjk_style_apply.idjs:587 pattern).
+                                    var totalStats = { cjkEnforced: 0, latinEnforced: 0, errors: 0 };
+                                    function _accumulate(para) {
+                                        // B-core: pass preserve so SA-fonted CJK
+                                        // runs (panel byPair swaps) are not reverted.
+                                        var st = Enforcer.enforceScriptFontsInParagraph(para, { preserve: enfPreserve });
+                                        if (st) {
+                                            totalStats.cjkEnforced += (st.cjkEnforced || 0);
+                                            totalStats.latinEnforced += (st.latinEnforced || 0);
+                                            totalStats.errors += (st.errors || 0);
+                                        }
+                                    }
+                                    for (var s = 0; s < doc.stories.length; s++) {
+                                        var story = doc.stories.item(s);
+                                        for (var p = 0; p < story.paragraphs.length; p++) {
+                                            _accumulate(story.paragraphs.item(p));
+                                        }
+                                        // Table-cell paragraphs (not in story.paragraphs)
+                                        try {
+                                            var tables = story.tables;
+                                            var nT = 0; try { nT = tables.length; } catch (eL) {}
+                                            for (var ti = 0; ti < nT; ti++) {
+                                                var tbl = tables.item(ti);
+                                                var cells = tbl.cells;
+                                                var nC = 0; try { nC = cells.length; } catch (eCL) {}
+                                                for (var ci = 0; ci < nC; ci++) {
+                                                    var cell = cells.item(ci);
+                                                    var cps;
+                                                    try { cps = cell.paragraphs; } catch (eCP) { continue; }
+                                                    var nCP = 0; try { nCP = cps.length; } catch (eCPL) {}
+                                                    for (var cpi = 0; cpi < nCP; cpi++) {
+                                                        try { _accumulate(cps.item(cpi)); } catch (eCPe) {}
+                                                    }
+                                                }
+                                            }
+                                        } catch (eTbl) {}
+                                    }
+                                    enforcerResult = { ran: true, stats: totalStats };
+                                } else {
+                                    enforcerResult = { ran: false, reasons: elig.reasons };
+                                }
+                            } catch (eEnf) {
+                                enforcerResult = { ran: false, error: String(eEnf.message || eEnf) };
+                            }
+                        }
+                        return {
+                            ok: true,
+                            // A-3: PARTIAL when the resolver surfaced ambiguous /
+                            // blocked CJK targets (those TSRs were NOT swapped).
+                            // Step 9 reads this to report "partial" instead of
+                            // "Apply complete" (safe floor — rich UI is B-ui).
+                            partial: isPartial,
+                            ambiguousCount: ambiguousCount,
+                            blockedTargets: blockedTargets,
+                            swapped: ar.swapped,
+                            actionsExecuted: ar.actionsExecuted,
+                            actionsTotal: ar.actionsTotal,
+                            errors: ar.errors,
+                            errorSamples: ar.errorSamples,
+                            diagnostics: rr.diagnostics,
+                            enforcer: enforcerResult,
+                            unresolvedByLang: rr.unresolvedByLang,
+                            // B-core: ③ target-lang resolution audit (resolved
+                            // source / multi-CJK block). Consumed by B-ui to
+                            // render the force-select/block prompt; here it just
+                            // rides the result back for visibility.
+                            targetLangResolution: rr.targetLangResolution
+                        };
+                    },
+                    indesign.ScriptLanguage.javascript,
+                    [],
+                    indesign.UndoModes.entireScript,
+                    "Font Apply (8D-ext-0 pipeline: scan → resolve → apply → enforcer)"
+                );
+            } catch (eA) {
+                applyResult = { ok: false, error: String(eA.message || eA) };
+            }
+            // close the dialog so script can finalize + alert
+            try {
+                if (typeof globalThis !== "undefined" && globalThis.__fapDialog) {
+                    globalThis.__fapDialog.close();
+                }
+            } catch (eC) {}
+        }
+    };
+    // fill the shared common fap fields (cjkLangs + scan-derived + libDocScan/Adapter) —
+    // single source shared with lib/font_mapping_panel_ui.js (consistent by construction).
+    FontPanelEnv.fillCommonFap(fap, scanResult, app);
+    if (typeof globalThis !== "undefined") globalThis.__fap = fap;
+    if (typeof window !== "undefined") window.__fap = fap;
+
+    // -------- Step 5: build <dialog> + inject CSS / JSX ---------------------
+    // Close any stale dialog from previous run before creating new.
+    var dlg = null;
+    var staleRemoved = 0;
+    step("7_dialog_setup", function () {
+        var stale = document.body.querySelectorAll("dialog");
+        for (var i = 0; i < stale.length; i++) {
+            try { stale[i].close(); } catch (eS) {}
+            try { stale[i].remove(); } catch (eR) {}
+            staleRemoved++;
+        }
+        dlg = document.createElement("dialog");
+        dlg.style.padding = "0";
+        dlg.style.border = "0";
+        dlg.style.background = "transparent";
+        dlg.style.maxWidth = "none";
+        dlg.style.maxHeight = "none";
+
+        // Google Fonts (Hanken Grotesk / Noto CJK / JetBrains Mono) for parity
+        // with the v2 prototype. Skip if you'd rather avoid CDN at this layer.
+        var fontsLink = document.createElement("link");
+        fontsLink.rel = "stylesheet";
+        fontsLink.href = "https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Sans+TC:wght@400;700&family=Noto+Sans+KR:wght@400;700&display=swap";
+        dlg.appendChild(fontsLink);
+
+        var style = document.createElement("style");
+        style.textContent = cssText + "\n"
+            + ".app{max-width:none !important;max-height:none !important;"
+            + "height:706px !important;width:1180px !important;}";
+        dlg.appendChild(style);
+
+        var bodyWrap = document.createElement("div");
+        bodyWrap.style.cssText = "width:1240px;height:780px;display:flex;"
+            + "align-items:center;justify-content:center;padding:12px;"
+            + "background:radial-gradient(1200px 700px at 50% -10%,#14161c 0%,#070809 60%);"
+            + "box-sizing:border-box;";
+
+        var rootDiv = document.createElement("div");
+        rootDiv.id = "root";
+        rootDiv.style.cssText = "width:1180px;height:706px;display:flex;"
+            + "align-items:center;justify-content:center;";
+
+        bodyWrap.appendChild(rootDiv);
+        dlg.appendChild(bodyWrap);
+        document.body.appendChild(dlg);
+        if (typeof globalThis !== "undefined") globalThis.__fapDialog = dlg;
+        dlg.showModal();
+        return {
+            stale_removed: staleRemoved,
+            in_dom: dlg.isConnected,
+            has_root: !!document.getElementById("root")
+        };
+    });
+    if (!dlg) {
+        writeLog();
+        try { app.alert("FAIL: dialog setup.\nlog: " + LOG_PATH); } catch (e) {}
+        return report;
+    }
+
+    // -------- Step 6: compile + eval data.jsx / components.jsx / app.jsx ----
+    function compileAndEval(filename) {
+        var jsxPath = joinAll(DEV_DIR, filename);
+        var src = fs.readFileSync(jsxPath, "utf-8");
+        var compiled = Babel.transform(src, { presets: ["react"] }).code;
+        (0, eval)(compiled);
+        return { file: filename, src_len: src.length, compiled_len: compiled.length };
+    }
+    step("8_eval_data", function () { return compileAndEval("data.jsx"); });
+    step("9_eval_components", function () { return compileAndEval("components.jsx"); });
+    step("10_eval_app", function () { return compileAndEval("app.jsx"); });
+
+    // -------- Step 7: wait for React commit + verify mount ------------------
+    // #71: the fixed 400ms wait would otherwise BE the "render" segment and tell us
+    // nothing. Poll inside the SAME window for the moment #root first has children,
+    // then sleep out whatever is left — total wait and behaviour are unchanged, we
+    // just stop being blind to where inside it the mount actually happened.
+    var __mountWaitStart = Date.now();
+    var __firstMountedMs = null;
+    while (Date.now() - __mountWaitStart < 400) {
+        var __r = document.getElementById("root");
+        if (__r && __r.children.length > 0) { __firstMountedMs = Date.now() - __mountWaitStart; break; }
+        await new Promise(function (resolve) { setTimeout(resolve, 25); });
+    }
+    var __left = 400 - (Date.now() - __mountWaitStart);
+    if (__left > 0) await new Promise(function (resolve) { setTimeout(resolve, __left); });
+    step("11_verify_mounted", function () {
+        var r = document.getElementById("root");
+        var ok = !!(r && r.children.length > 0);
+        return {
+            pass: ok,
+            root_child_count: r ? r.children.length : 0,
+            // #71: how long after the eval the first commit actually landed. The
+            // remainder of the 400ms wait is slack, not render time.
+            first_mounted_after_ms: __firstMountedMs,
+            mount_wait_total_ms: 400,
+            languages_scanned: scanResult.languages,
+            fonts_scanned: scanResult.fontsAcross,
+            tsrs_scanned: scanResult.totalTsrs,
+            chars_scanned: scanResult.totalChars
+        };
+    });
+
+    writeLog();
+
+    // -------- Step 8: bridge / interactive split ----------------------------
+    if (bridgeMode) {
+        // Bridge-driven smoke run: don't wait for user; close immediately.
+        step("12_cleanup_bridge", function () {
+            try { dlg.close(); } catch (eC) {}
+            try { dlg.remove(); } catch (eR) {}
+            return { removed: !dlg.isConnected, mode: "bridge" };
+        });
+        report.overall_pass = report.steps.every(function (s) { return s.pass !== false; });
+        writeLog();
+        return report;
+    }
+
+    // Interactive: block until dialog closes (user clicks Done OR Escape OR
+    // panel triggers close itself via the onDone path).
+    try {
+        await new Promise(function (resolve) {
+            dlg.addEventListener("close", resolve, { once: true });
+        });
+    } catch (eW) {}
+
+    // -------- Step 9: report result ----------------------------------------
+    step("13_apply_summary", function () {
+        return { applyResult: applyResult, doneCalled: doneCalled };
+    });
+    report.overall_pass = report.steps.every(function (s) { return s.pass !== false; });
+    writeLog();
+    try { dlg.remove(); } catch (eR) {}
+
+    var msg;
+    if (!doneCalled) {
+        msg = "Panel closed without Apply. No changes made.";
+    } else if (applyResult && applyResult.ok) {
+        // Codex r3 P2 fix: read counters from diagnostics (8D-ext-0 pipeline)
+        // not legacy top-level fields (which don't exist on the new path).
+        var diag = applyResult.diagnostics || {};
+        // A-3 mutation-gate: when the resolver surfaced ambiguous/blocked CJK
+        // targets, those runs were left UNCHANGED — report PARTIAL, not
+        // "Apply complete", so the operator knows there are undecided items
+        // needing a target choice (the rich force-select UI is B-ui).
+        var _ambig = applyResult.ambiguousCount || 0;
+        var _blocked = (applyResult.blockedTargets || []).length;
+        var _partialHdr = applyResult.partial
+            ? ("Apply PARTIAL — some runs left unchanged.\n"
+               + "⚠ Ambiguous CJK target (multiple CJK langs, no authoritative "
+               + "_meta/primaryLang signal): " + _ambig + " run(s) NOT swapped"
+               + (_blocked ? " across " + _blocked + " target group(s)" : "") + ".\n"
+               + "  → set a primary target language and re-apply to resolve them.\n")
+            : "Apply complete.\n";
+        msg = _partialHdr
+            + "Swapped: " + (applyResult.swapped || 0) + " runs\n"
+            + "Same-lang no-op: " + (diag.sameLangNoOp || 0) + "\n"
+            + "Skipped empty/neutral: " + (diag.skippedEmpty || 0) + "\n"
+            + "Skipped (user Skip & Continue): " + (diag.skipped || 0) + "\n"
+            + "Unmatched (no pair member for dominant lang): " + (diag.unmatched || 0) + "\n"
+            + "Errors: " + (applyResult.errors || 0) + "\n"
+            + "Enforcer: " + (function () {
+                // Codex r4 P2-2 fix: enforcer can return {ran:false, error}
+                // (exception) OR {ran:false, reasons} (eligibility fail).
+                // Distinguish in the alert so an attempted-but-failed enforcer
+                // doesn't hide behind "skipped — n/a".
+                var e = applyResult.enforcer;
+                if (!e) return "not run";
+                if (e.ran) return "ran (CJK=" + (e.stats.cjkEnforced || 0)
+                    + ", Latin=" + (e.stats.latinEnforced || 0) + ")";
+                if (e.error) return "ERROR — " + e.error;
+                if (e.reasons && e.reasons.length) return "skipped — " + e.reasons.join("; ");
+                return "skipped";
+            })() + "\n"
+            + "Press Ctrl+Z to undo all changes at once.";
+    } else {
+        msg = "Apply failed: " + (applyResult && applyResult.error || "unknown") + "\nlog: " + LOG_PATH;
+    }
+    // Italic copies are brand_config, not a document edit — this entry point does
+    // not persist a config, so say so rather than let the operator assume Done
+    // saved them (univ-italic §7.4 ②).
+    if (doneCalled && italicAuthored > 0) {
+        msg += "\n\n⚠ " + italicAuthored + " italic copy/copies were defined in the panel."
+            + "\nThis window applies FONTS to the document; it does not save a brand_config."
+            + "\nItalic settings only take effect on IMPORT, read from the brand_config —"
+            + "\nso use “Export JSON” to save them, or they are lost when this closes.";
+    }
+    // #58 ④ (owner): the result panel shows up ONLY on a problem, and when it does
+    // it is one line plus where to read the rest.
+    //
+    // 🔴 THE DETAIL IS RELOCATED, NOT DELETED. `msg` is the full apply summary
+    // that used to be the dialog; it now goes into the JSON log, which the one line
+    // points at. Dropping a successful run's numbers on the floor would trade a
+    // noisy dialog for an unanswerable "what did it actually do?".
+    report.summary = msg;
+    writeLog();
+
+    // What counts as "something the operator must see". Deliberately WIDER than
+    // `ok === false`:
+    //   - `partial` means runs were left unchanged — a silent success dialog there
+    //     is exactly the silent-loss shape this repo keeps getting bitten by;
+    //   - italic copies authored in this window are NOT saved by this entry point
+    //     (it applies fonts to the document; it writes no brand_config), so staying
+    //     quiet would let the operator close the window and lose that work.
+    // ⚠ That last one is a WARNING, not an error. Bundling it under "only on
+    // error" is my reading of owner's intent (he asked for silence on success, not
+    // for losing work quietly); flagged to arch rather than decided silently.
+    var problems = [];
+    if (!applyResult || !applyResult.ok) {
+        problems.push("Apply failed: " + ((applyResult && applyResult.error) || "unknown") + ".");
+    } else {
+        if (applyResult.partial) {
+            problems.push((applyResult.ambiguousCount || 0) + " run(s) were left unchanged because the "
+                + "target language was ambiguous — set a primary target language and apply again.");
+        }
+        if (applyResult.errors) problems.push(applyResult.errors + " error(s) occurred during apply.");
+    }
+    if (doneCalled && italicAuthored > 0) {
+        problems.push(italicAuthored + " italic copy/copies were defined here but are NOT saved by this "
+            + "window — use \u201cExport JSON\u201d or they are lost when it closes.");
+    }
+    if (problems.length) {
+        try { app.alert(problems.join("\n") + "\nThe full report was written to the log: " + LOG_PATH); } catch (e) {}
+    }
+    return report;
+}
+
+await main();

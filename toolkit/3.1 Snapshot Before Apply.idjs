@@ -1,0 +1,168 @@
+"use strict";
+
+// snapshot_before_apply.idjs
+//
+// Pre-flight script: run BEFORE any text replacement + CJK apply.
+// (Historically paired with import_translations, now retired → _retired/.)
+// 1. Expands geometry-split frames that are too short to hold CJK text (same as smoke does).
+// 2. Captures a "before" snapshot of all repairable stories.
+// 3. Saves the snapshot to <BASE_DIR>/before_snapshot_latest.json
+//    and also to <BASE_DIR>/<doc-basename>_before_snapshot.json.
+//
+// The repair script (repair_after_apply.idjs) reads this file and uses it
+// as the target state to restore after text replacement and CJK style apply.
+
+var RuntimePaths = require("./lib/runtime_paths.js");
+var BASE_DIR = RuntimePaths.getBaseDir();
+var DATA_DIR = RuntimePaths.getDataDir();
+var joinPath = RuntimePaths.joinPath;
+
+var indesign = require("indesign");
+var app = indesign.app;
+
+var utils = require("./lib/utils.js");
+var safe = utils.safe;
+var FileUtils = require("./lib/file_utils.js");
+var StoryUtils = require("./lib/story_utils.js");
+var SnapshotUtils = require("./lib/snapshot_utils.js");
+var SnapshotWriter = require("./lib/snapshot_writer.js");
+
+var DEFAULT_OUT_LOG = joinPath(RuntimePaths.getLogDir(), "snapshot_before_apply_output.txt");
+
+var lines = [];
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
+
+function log(text) {
+    lines.push(utils.getTimestamp() + " " + String(text));
+}
+
+function describeLastFileUtilsError() {
+    var err = null;
+    try { err = FileUtils.getLastFileUtilsError(); } catch (e0) {}
+    if (!err) {
+        return "";
+    }
+    return [
+        safe(err.operation),
+        safe(err.path),
+        safe(err.code),
+        safe(err.message)
+    ].join(" | ");
+}
+
+function recordWriteFailure(kind, pathValue, error) {
+    var detail = safe(error && error.message ? error.message : error);
+    var lastErr = describeLastFileUtilsError();
+    log("WRITE FAILED [" + safe(kind) + "]: " + safe(pathValue) + (detail ? " error=" + detail : ""));
+    if (lastErr) {
+        log("WRITE FAILED DETAIL [" + safe(kind) + "]: " + lastErr);
+    }
+}
+
+function writeTextFileObserved(pathValue, contents, kind) {
+    if (FileUtils.writeTextFile(pathValue, contents)) {
+        return true;
+    }
+    recordWriteFailure(kind || "text", pathValue, null);
+    return false;
+}
+
+function flushLog(outPath) {
+    return writeTextFileObserved(outPath, lines.join("\n") + "\n", "snapshot-before-apply-log");
+}
+
+// ---------------------------------------------------------------------------
+// Output path helpers
+// ---------------------------------------------------------------------------
+
+// getDocBaseName / getDocSnapshotPath -> lib/snapshot_writer.js
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+function main() {
+    var targetDoc;
+    var storyIds, storyId, liveStory;
+    var snapshots = {};
+    var storyOrder = [];
+    var i;
+    var outJson, outLogPath;
+    var docBaseName;
+    var snapshotPaths;
+
+    log("=== Before-Apply Snapshot ===");
+
+    if (!app.documents.length) {
+        log("ERROR: No open document.");
+        flushLog(DEFAULT_OUT_LOG);
+        return;
+    }
+
+    targetDoc = app.activeDocument;
+    docBaseName = SnapshotWriter.getDocBaseName(targetDoc.name);
+    snapshotPaths = SnapshotWriter.buildSnapshotPaths(targetDoc.name, DATA_DIR);
+    outLogPath = joinPath(RuntimePaths.getLogDir(), docBaseName + "_snapshot_before_apply_output.txt");
+
+    log("Document: " + safe(targetDoc.name));
+    log("Snapshot will be saved to: " + snapshotPaths.docSpecific);
+    log("Also saved as: " + snapshotPaths.latest);
+
+    storyIds = StoryUtils.collectRepairableStories(targetDoc, log);
+    log("Repairable stories: " + storyIds.length);
+
+    if (!storyIds.length) {
+        log("No repairable stories found. Nothing to snapshot.");
+        flushLog(outLogPath);
+        return;
+    }
+
+    for (i = 0; i < storyIds.length; i++) {
+        storyId = storyIds[i];
+        log("Story[" + i + "] storyId=" + storyId);
+        liveStory = StoryUtils.resolveLiveStoryById(targetDoc, storyId);
+        if (!StoryUtils.isUsableStoryObject(liveStory)) {
+            log("Story[" + i + "] skip: story no longer valid");
+            continue;
+        }
+
+        // Capture first, then expand. expandGeometrySplitFramesPreApply updates
+        // both the live frame and the snapshot's geometricBounds in place (same as smoke).
+        var snap = SnapshotUtils.captureStorySnapshot(liveStory);
+        SnapshotUtils.expandGeometrySplitFramesPreApply(liveStory, snap, "story[" + i + "]", log);
+        SnapshotUtils.logStorySnapshot("story[" + i + "]_before", snap, log);
+
+        snapshots[storyId] = SnapshotUtils.serializeStorySnapshot(snap);
+        storyOrder.push(storyId);
+    }
+
+    outJson = {
+        schemaVersion: 1,
+        capturedAt: new Date().toISOString ? new Date().toISOString() : String(new Date()),
+        documentName: safe(targetDoc.name),
+        storyCount: storyOrder.length,
+        storyOrder: storyOrder,
+        stories: snapshots
+    };
+
+    var snapshotPaths = SnapshotWriter.buildSnapshotPaths(targetDoc.name, DATA_DIR);
+    var snapshotJson = JSON.stringify(outJson, null, 2);
+
+    if (writeTextFileObserved(snapshotPaths.docSpecific, snapshotJson, "before-snapshot-doc")) {
+        log("Snapshot saved: " + snapshotPaths.docSpecific);
+    }
+
+    if (writeTextFileObserved(snapshotPaths.latest, snapshotJson, "before-snapshot-latest")) {
+        log("Snapshot saved (latest): " + snapshotPaths.latest);
+    }
+
+    log("=== Snapshot complete: " + storyOrder.length + " stories captured ===");
+    log("Next step: run your text replacement + CJK apply, then run repair_after_apply.idjs");
+
+    flushLog(outLogPath);
+}
+
+main();
