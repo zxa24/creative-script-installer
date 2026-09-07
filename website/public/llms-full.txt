@@ -42,13 +42,14 @@ Font pairing, CJK styles, style consolidation, missing-link repair, change highl
 
 Installs and updates itself
 
-One double-click on Windows or macOS. No GitHub account, no git, no password. Updates replace the whole folder atomically and keep the previous version for rollback.
+One command on Windows or macOS. No GitHub account, no git, no password - except Illustrator, which asks once. Everything is checksum-verified before anything is written.
 
 ## What this is
 
 `indesign-toolkit` is a folder of Adobe InDesign scripts that live in the
-**Scripts panel**. You install it once, and from then on the same double-click
-updates it.
+**Scripts panel**. You install it with one command, and from then on the same
+command updates it. The installer carries a small set of Illustrator scripts
+too, and says nothing about them if you have no Illustrator.
 
 The scripts serve one job: taking an InDesign document that is already laid out
 in one language, getting its text translated somewhere else, and putting the
@@ -155,86 +156,147 @@ convention and why it is shaped that way.
 
 Source: https://zxa24.github.io/creative-script-installer/guide/install
 
-Summary: One-click install and update of the InDesign toolkit on Windows and macOS, including the SmartScreen and Gatekeeper prompts, the install locations, and how updates roll back if anything fails.
+Summary: Install and update the InDesign and Illustrator scripts with one command on Windows or macOS - how to open a terminal, what the installer changes on the machine and what it deliberately does not, the single administrator step Illustrator needs, and how updates roll back if anything fails.
 
 # Install and update
 
-One double-click installs the toolkit into your machine's InDesign **Scripts
-panel**. From then on, the *same* button updates it.
+**One command** installs the toolkit and, run again later, updates it. There is
+nothing to download by hand and nothing to unzip.
 
-You do **not** need a GitHub account, git, or any password.
+You do not need a GitHub account, git, or an administrator password — with one
+exception, Illustrator, which is explained below and asks once.
 
-## Windows
+## Install
 
-1. Double-click **`install-update.bat`**.
-2. A black console window opens and checks for, then installs or updates, the
-   toolkit. You are done when you see the green **"updated to vX"** or
-   **"already up to date"** line.
-3. **Restart InDesign.** Open `Window → Utilities → Scripts`, expand the
-   `indesign-toolkit` folder, and double-click any script to run it.
+### macOS
 
-> **First run may show SmartScreen**
-Windows may show a blue **"Windows protected your PC"** dialog. Click
-**More info → Run anyway**. See [Security prompts](#security-prompts) below.
+**Open Terminal.** Press <kbd>Cmd</kbd> + <kbd>Space</kbd>, type `Terminal`,
+press <kbd>Return</kbd>. (It also lives in Applications → Utilities.)
 
-## macOS
+Paste this and press <kbd>Return</kbd>:
 
-1. **The first time**, grant permission to run it: right-click
-   `install-update.command` and choose **Open** — do not double-click it.
-2. After that, double-click **`install-update.command`**. A Terminal window
-   opens and checks for, then installs or updates, the toolkit.
-3. **Restart InDesign.** Open `Window → Utilities → Scripts`, expand
-   `indesign-toolkit`, and run a script from there.
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+```
 
-> **First run may show Gatekeeper**
-macOS may say the file **"cannot be opened because it is from an unidentified
-developer"**. Right-click the file → **Open** → **Open** again in the dialog.
-See [Security prompts](#security-prompts) below.
+### Windows
 
-## Security prompts
+**Open PowerShell.** Press the <kbd>Windows</kbd> key, type `PowerShell`, press
+<kbd>Enter</kbd>. (Or right-click the Start button and choose **Terminal**.)
 
-These scripts are not signed with a (costly) code-signing certificate, so the
-operating system flags them as coming from an unknown source the first time.
-This is **normal**. Allow it once and you will not be asked again.
+Paste this and press <kbd>Enter</kbd>:
 
-### Windows — SmartScreen
+```powershell
+irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
 
-- **What you see:** a blue box, *"Windows protected your PC"*, when you
-  double-click the `.bat`.
-- **To allow it:** click **More info** → **Run anyway**.
-- **If the files came from email or cloud storage,** Windows marks them as
-  "from the internet" (the `Zone.Identifier` mark). Right-click the file →
-  **Properties** → tick **Unblock** → **OK**, then run it again.
-- The `.bat` already invokes PowerShell with `-ExecutionPolicy Bypass`, so you
-  do **not** need to change your machine's script execution policy
-  (`Set-ExecutionPolicy`).
-- If your company's Group Policy disables PowerShell scripts entirely, contact
-  IT. That is a policy-level block; the toolkit cannot work around it, and it
-  should not try to.
+### Then
 
-### macOS — Gatekeeper
+The installer prints what it found and what it did, and finishes with a link to
+the next page. **Restart InDesign** (and Illustrator, if you use it) — both build
+their script menus at launch, so nothing appears until they restart.
 
-- **What you see:** *"cannot be opened because it is from an unidentified
-  developer"* when you double-click the `.command`.
-- **To allow it:** **right-click (or Control-click) the file → Open → Open**
-  in the dialog. Once is enough.
-- **If it says the `.command` is not executable,** run this once in Terminal:
+- InDesign: `Window → Utilities → Scripts`, then the
+  **indesign-toolkit-stable** folder.
+- Illustrator: `File → Scripts`, then **illustrator-toolkit-stable**.
 
-  ```bash
-  chmod +x "/path/to/install-update.command" "/path/to/install-update.sh"
-  ```
+> **Updating is the same command**
+Run the same line again whenever you want the latest version. If you are already
+current it says so and changes nothing.
 
-- **Files downloaded from cloud storage or email** carry a quarantine
-  attribute. You can also clear it in Terminal:
+## What it changes on your machine
 
-  ```bash
-  xattr -d com.apple.quarantine "/path/to/install-update.command"
-  ```
+Only these folders:
+
+| | |
+| --- | --- |
+| InDesign scripts | `%APPDATA%\Adobe\InDesign\…\Scripts Panel\indesign-toolkit-stable\` · `~/Library/Preferences/Adobe InDesign/…/Scripts Panel/indesign-toolkit-stable/` |
+| Illustrator scripts | one folder named `illustrator-toolkit-stable` inside Illustrator's own Scripts folder |
+
+Plus **one permission**, and only if you use Illustrator: the folder it creates
+there is made yours to write to — `chown` on macOS, an access-control entry on
+Windows. It applies to that one folder, not to Illustrator's Scripts folder
+around it.
+
+**Nothing else.** No entry in System Settings or Windows Settings, no login
+item, no `PATH` change, no registry key, no scheduled task, no `defaults write`,
+no preference in InDesign or Illustrator. Uninstalling removes what it wrote.
+
+Two things you are often told to change for scripts like this, and do **not**
+have to here:
+
+- **Windows: your PowerShell execution policy.** `iex` evaluates text, and the
+  policy governs script *files*, so the command runs even under `Restricted` —
+  measured, not assumed. You do not need `Set-ExecutionPolicy`.
+- **macOS: Gatekeeper.** Nothing is downloaded and opened as an application on
+  this route, so there is no "unidentified developer" dialog to allow.
+
+> **A company-managed PC can still say no**
+If Group Policy sets the execution policy, that overrides the installer's own
+`-ExecutionPolicy Bypass` and the run will fail. That is a policy-level block;
+the toolkit cannot work around it and should not try. Contact IT.
+
+## Illustrator asks for your password, once
+
+InDesign keeps its Scripts panel folder inside your own user folder, so
+installing there needs no permission at all. **Illustrator keeps its Scripts
+folder inside the application itself**, which you cannot write to — and there is
+no user-level alternative; Illustrator reads only that one folder.
+
+So the first Illustrator install needs **one administrator step, once**. The
+installer explains what it will create and asks — on macOS you then type your
+password in the same window, on Windows you approve the prompt Windows shows. It
+gives you a single folder of your own inside the application; it does not open
+the rest of it. After that, every install and update runs with no password.
+
+If no password is needed — macOS still remembers a recent `sudo`, or you are
+already an administrator on Windows — it does not explain and does not ask.
+There is nothing to warn you about, so the step passes in silence.
+
+Saying no is an answer, not a failure: the run carries on with everything else,
+and the exact command is printed at the end for you to run whenever you like.
+The installer itself never runs as an administrator — the one folder-creating
+command does.
+
+> **An Illustrator upgrade removes it**
+Upgrading Illustrator replaces the whole application, and that folder goes with
+it. Run the same one command again afterwards, then run the installer.
+
+> **Uninstalling leaves an empty folder**
+Removing the folder itself needs the same administrator permission that creating
+it did, and the installer does not ask for one twice. `Uninstall` removes the
+scripts and leaves the empty folder behind. It does nothing.
+
+## Without a terminal
+
+The repository also carries **`install-update.bat`** (Windows) and
+**`install-update.command`** (macOS) for machines where pasting a command is not
+practical, or for installing from a copy on a USB stick. Download the repository,
+then double-click the one for your platform.
+
+This route does meet the operating system's warnings about unsigned files, which
+the command above does not.
+
+**Windows — SmartScreen.** A blue *"Windows protected your PC"* box appears
+when you double-click the `.bat`. Click **More info → Run anyway**. If the
+files arrived by email or cloud storage, Windows also marks them as coming
+from the internet: right-click the file → **Properties** → tick **Unblock**.
+
+**macOS — Gatekeeper.** macOS says the file *"cannot be opened because it is
+from an unidentified developer"*. Right-click (or Control-click) the file →
+**Open** → **Open** again in the dialog. Once is enough. If it says the
+`.command` is not executable, run `chmod +x` on it once.
+
+These appear because the files are not signed with a paid certificate. It is
+normal, and it is the reason the command at the top of this page is the route
+worth preferring: nothing is downloaded and opened as an application there.
 
 ## What gets installed, and where
 
 The installer detects every installed InDesign version on the machine and
-installs one copy per version:
+installs one copy per version. Illustrator gets one folder inside whichever
+language folder Illustrator itself is using — it reads only one of them, and
+which one is read from Illustrator's own settings rather than guessed.
 
 | Platform | Install path |
 | --- | --- |
@@ -262,10 +324,17 @@ What it installs:
 
 ## How updating behaves
 
-- An update is an **atomic replacement of the whole folder**. The new version is
-  downloaded and verified *first*; only then is the folder swapped in.
-- **If any step fails, nothing changes.** There is no half-installed state — if
-  the swap itself goes wrong, the old folder is put back.
+- Everything is **downloaded and checksum-verified first**. Nothing is written
+  until the whole payload has been verified.
+- **InDesign:** the update is an **atomic replacement of the whole folder**. If
+  any step fails, nothing changes — there is no half-installed state, and if the
+  swap itself goes wrong the old folder is put back.
+- **Illustrator:** the files are replaced **in place**, each one atomically. A
+  whole-folder swap is not possible there: it would need write access to the
+  Adobe folder around it, which the installer deliberately does not have. Each
+  file is staged beside itself and then renamed, so the window in which the
+  folder holds a mixture is as small as that permission model allows — but it is
+  not the same guarantee as the InDesign path, and it is not claimed to be.
 - **A successful update does not leave the old version behind.** The installer
   does keep a temporary copy while it swaps, but it removes that copy once the
   new folder is in place: InDesign scans the Scripts panel recursively, so a
@@ -279,48 +348,6 @@ See [Advanced](/reference/advanced).
 
 - **Running it again is safe.** If you are already on the latest version it does
   nothing.
-
-## Illustrator
-
-The installer handles Illustrator as well, and for InDesign users nothing about
-that is visible: if you have no Illustrator, nothing about it is mentioned.
-
-Illustrator is different from InDesign in one way that you will notice. InDesign
-keeps its Scripts panel folder in your own user folder, so installing needs no
-special permission. **Illustrator keeps its Scripts folder inside the
-application itself**, which you do not have permission to write to — there is no
-user-level alternative; Illustrator reads only that one folder.
-
-So the first Illustrator install needs **one administrator step, once**. The
-installer explains what it will create and asks — on macOS you then type your
-password in the same window, on Windows you approve the prompt Windows shows. It
-gives you a single folder of your own inside the application; it does not open
-the rest of it. After that, every install and every update runs with no password
-at all.
-
-If no password is needed — you used `sudo` a few minutes ago and macOS still
-remembers, or you are already running as an administrator on Windows — it does
-not explain and does not ask. There is nothing to warn you about, so the step
-passes in silence. (It is recorded in the diagnostic log either way; see
-[Collecting a log](/reference/advanced#collecting-a-log-when-something-goes-wrong).)
-
-Saying no is an answer, not a failure: the run carries on with everything else,
-and the exact command is printed at the end for you to run whenever you like.
-The installer itself never runs as an administrator — the one folder-creating
-command does.
-
-> **An Illustrator upgrade removes it**
-Upgrading Illustrator replaces the whole application, and the folder goes with
-it. Run that same one command again afterwards, then run the installer.
-
-The scripts then appear under **File > Scripts**, in a submenu named
-`illustrator-toolkit-stable`. Illustrator builds that menu when it starts, so a
-newly installed script does not appear until you restart it.
-
-> **Uninstalling leaves an empty folder**
-Removing the folder itself needs the same administrator permission that creating
-it did, and the installer does not ask for one twice. `Uninstall` removes the
-scripts and leaves the empty folder behind. It does nothing.
 
 ## If something goes wrong
 

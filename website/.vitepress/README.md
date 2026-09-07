@@ -42,7 +42,7 @@ exits 1 when it finds a Markdown file on disk that is not in `SECTIONS`, and
 
 `llms.txt` and `llms-full.txt` embed absolute URLs, built from
 `SITE_ORIGIN` + `SITE_BASE` in `site.mjs`. The defaults are
-`https://zxa24.github.io` and `/indesign-toolkit/`. **Confirm those match the
+`https://zxa24.github.io` and `/creative-script-installer/`. **Confirm those match the
 real GitHub Pages URL before publishing**, or override at build time:
 
 ```bash

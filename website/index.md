@@ -29,7 +29,7 @@ features:
     link: /scripts/
     linkText: The full index
   - title: Installs and updates itself
-    details: One double-click on Windows or macOS. No GitHub account, no git, no password. Updates replace the whole folder atomically and keep the previous version for rollback.
+    details: One command on Windows or macOS. No GitHub account, no git, no password - except Illustrator, which asks once. Everything is checksum-verified before anything is written.
     link: /guide/install
     linkText: Install and update
 ---
@@ -37,8 +37,9 @@ features:
 ## What this is
 
 `indesign-toolkit` is a folder of Adobe InDesign scripts that live in the
-**Scripts panel**. You install it once, and from then on the same double-click
-updates it.
+**Scripts panel**. You install it with one command, and from then on the same
+command updates it. The installer carries a small set of Illustrator scripts
+too, and says nothing about them if you have no Illustrator.
 
 The scripts serve one job: taking an InDesign document that is already laid out
 in one language, getting its text translated somewhere else, and putting the
