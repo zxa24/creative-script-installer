@@ -283,32 +283,52 @@ if [ -z "$ACTION" ]; then
   done <<< "$PANELS"
 
   say ""
-  # Option 1 does NOT force. When everything is already current it therefore
-  # does nothing, and must not be labelled as if it did: it was previously
-  # "Reinstall (repair)", which promised a reinstall and delivered a no-op —
-  # silently, so someone trying to fix a problem would think they had.
-  # Repair is the option that actually rewrites the files, and is the only
-  # difference between the two.
+  # When everything is already current there is no install/update to offer, so
+  # it is not offered. An entry that does nothing still has to be read, chosen
+  # against, and understood — and the earlier attempt at one ("Reinstall
+  # (repair)") did not even do nothing honestly: it reported success and changed
+  # no files, which is the worst possible answer for someone reaching for a
+  # repair. Removing it is better than wording it well.
+  #
+  # Numbering follows the options actually shown rather than staying fixed, so
+  # there is never a gap for the reader to interpret. The default follows too:
+  # with nothing to install, Enter means quit, because Repair rewrites files and
+  # should be asked for rather than fallen into.
   if [ "$INSTALLED_ANY" = "1" ] && [ "$ALL_CURRENT" = "1" ]; then
-    say "  1) Check again - already on the latest version, so this changes nothing"
-  elif [ "$INSTALLED_ANY" = "1" ]; then
-    say "  1) Update     - install the newer version"
+    MENU_SHAPE="current"
+    say "  1) Repair    - rewrite the files even if the version already matches"
+    say "  2) Uninstall - remove the installed scripts"
+    say "  q) Quit"
+    say ""
+    CHOICE="$(ask '  Choose [q]: ')" || CHOICE="__NOTTY__"
+    case "$CHOICE" in
+      __NOTTY__)  ACTION="install" ;;
+      1)          ACTION="repair"; FORCE=1 ;;
+      2)          ACTION="uninstall" ;;
+      ""|q|Q)     say ""; say "Nothing was changed."; exit 0 ;;
+      *)          say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
+    esac
   else
-    say "  1) Install"
+    MENU_SHAPE="pending"
+    if [ "$INSTALLED_ANY" = "1" ]; then
+      say "  1) Update    - install the newer version"
+    else
+      say "  1) Install"
+    fi
+    say "  2) Repair    - rewrite the files even if the version already matches"
+    say "  3) Uninstall - remove the installed scripts"
+    say "  q) Quit"
+    say ""
+    CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
+    case "$CHOICE" in
+      __NOTTY__)  ACTION="install" ;;           # nobody to ask - behave as before
+      ""|1)       ACTION="install" ;;
+      2)          ACTION="repair"; FORCE=1 ;;
+      3)          ACTION="uninstall" ;;
+      q|Q)        say ""; say "Nothing was changed."; exit 0 ;;
+      *)          say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
+    esac
   fi
-  say "  2) Repair    - rewrite the files even if the version already matches"
-  say "  3) Uninstall - remove the installed scripts"
-  say "  q) Quit"
-  say ""
-  CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
-  case "$CHOICE" in
-    __NOTTY__) ACTION="install" ;;              # nobody to ask - behave as before
-    ""|1)      ACTION="install" ;;
-    2)         ACTION="repair"; FORCE=1 ;;
-    3)         ACTION="uninstall" ;;
-    q|Q)       say ""; say "Nothing was changed."; exit 0 ;;
-    *)         say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
-  esac
   say ""
 fi
 

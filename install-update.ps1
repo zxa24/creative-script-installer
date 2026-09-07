@@ -348,25 +348,43 @@ try {
       } else { $allCurrent = $false; Say ("  {0}: not installed" -f $label) }
     }
     Say ''
-    # 选项 1 不带 Force。所以在"已是最新"时它什么都不做, 就不能起一个像是会做事
-    # 的名字: 它原先叫 "Reinstall (repair)" —— 承诺重装、实际空操作, 而且不报错,
-    # 于是想修问题的人会以为自己修过了。Repair 才是真正重写文件的那个, 这也是两者
-    # 唯一的区别。
-    if ($anyInstalled -and $allCurrent) { Say '  1) Check again - already on the latest version, so this changes nothing' }
-    elseif ($anyInstalled)              { Say '  1) Update     - install the newer version' }
-    else                                { Say '  1) Install' }
-    Say '  2) Repair    - rewrite the files even if the version already matches'
-    Say '  3) Uninstall - remove the installed scripts'
-    Say '  q) Quit'
-    Say ''
-    $choice = ''
-    try { $choice = Read-Host '  Choose [1]' } catch { $choice = '' }
-    switch -Regex ($choice.Trim()) {
-      '^$|^1$' { $action = 'install' }
-      '^2$'    { $action = 'repair'; $Force = $true }
-      '^3$'    { $action = 'uninstall' }
-      '^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
-      default  { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+    # 已是最新时就不提供"安装/更新"这一项 —— 它无事可做。一个什么都不做的条目仍然
+    # 要被读、被排除、被理解; 而先前那个尝试 ("Reinstall (repair)") 连"什么都不做"
+    # 都没做诚实: 它报成功、不改任何文件, 对一个正想修复的人来说是最坏的回答。
+    # 删掉它, 好过把它的措辞写好。
+    #
+    # 编号跟着实际显示的条目走, 不固定, 免得留下一个空号让读者去猜。默认值也跟着走:
+    # 没有可安装项时回车 = 退出, 因为 Repair 会重写文件, 那应当是被主动选择的。
+    $shape = if ($anyInstalled -and $allCurrent) { 'current' } else { 'pending' }
+    if ($shape -eq 'current') {
+      Say '  1) Repair    - rewrite the files even if the version already matches'
+      Say '  2) Uninstall - remove the installed scripts'
+      Say '  q) Quit'
+      Say ''
+      $choice = ''
+      try { $choice = Read-Host '  Choose [q]' } catch { $choice = '' }
+      switch -Regex ($choice.Trim()) {
+        '^1$'       { $action = 'repair'; $Force = $true }
+        '^2$'       { $action = 'uninstall' }
+        '^$|^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
+        default     { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+      }
+    } else {
+      if ($anyInstalled) { Say '  1) Update    - install the newer version' }
+      else               { Say '  1) Install' }
+      Say '  2) Repair    - rewrite the files even if the version already matches'
+      Say '  3) Uninstall - remove the installed scripts'
+      Say '  q) Quit'
+      Say ''
+      $choice = ''
+      try { $choice = Read-Host '  Choose [1]' } catch { $choice = '' }
+      switch -Regex ($choice.Trim()) {
+        '^$|^1$' { $action = 'install' }
+        '^2$'    { $action = 'repair'; $Force = $true }
+        '^3$'    { $action = 'uninstall' }
+        '^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
+        default  { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+      }
     }
     Say ''
   }
