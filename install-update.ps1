@@ -491,7 +491,7 @@ function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   Say ''
   Say '  Windows will ask you to approve it.'
   $ans = ''
-  try { $ans = Read-Host '  Continue? [Y/n]' } catch { return $false }
+  try { $ans = Read-Host '  Continue? [y/n]' } catch { return $false }
   if ($ans -match '^\s*[nN]') { Say '  Skipped - the command to do it yourself is below.'; return $false }
 
   $inner = "New-Item -ItemType Directory -Force -Path '$dst' | Out-Null; icacls '$dst' /grant '$($who):(OI)(CI)F' | Out-Null"

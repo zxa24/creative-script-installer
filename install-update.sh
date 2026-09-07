@@ -456,7 +456,7 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   say "  It creates one folder inside Illustrator for these scripts. Nothing"
   say "  else on your Mac is changed, and you will not be asked again."
   say ""
-  ans="$(ask '  Continue? [Y/n]: ')" || return 1
+  ans="$(ask '  Continue? [y/n]: ')" || return 1
   case "$ans" in n|N|no|NO|No) say "  Skipped - the command to do it yourself is below."; return 1 ;; esac
 
   # sudo reads its password from the TERMINAL, not from stdin - which is the
