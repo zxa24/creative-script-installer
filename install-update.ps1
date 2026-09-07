@@ -965,7 +965,11 @@ try {
     # 由 $Owner/$Repo 推导, 不写死: 写死等于让仓库名多一个存放处, 而那一处正是
     # 改名时永远不会被跟着改的那一处。只在真装了东西的路径上出现 —— 对一台本来
     # 就是最新的机器重跑一次, 那不是一个"接下来做什么"的时刻。
-    Say ("What to do next: https://{0}.github.io/{1}/guide/workflow" -f $Owner, $Repo)
+    # 怎么打开它。终端里的链接不是网页里的链接 —— 没在这里点开过的人会当它是
+    # 一段文字。Windows 终端是 Ctrl+单击; macOS 那边是选中后右键"打开", 措辞
+    # 各自不同, 所以两个脚本各说各的, 不共用一句。
+    Say 'What to do next - Ctrl+click the link:'
+    Say ("  https://{0}.github.io/{1}/guide/workflow" -f $Owner, $Repo)
     if ($skipped -gt 0) { Say ("({0} location(s) were already up to date)" -f $skipped) }
     if ($blocked.Count -gt 0) { Say ("({0} location(s) were skipped, see above)" -f $blocked.Count) }
   } elseif ($blocked.Count -gt 0) {
