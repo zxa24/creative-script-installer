@@ -180,12 +180,14 @@ acquire_distribution() {
   # aborts. auth is empty whenever no token is set, i.e. the normal case, so the
   # plain form kills the download for everyone. Newer bash does not do this,
   # which is why it survived every test on this side.
-  # --progress-bar, not curl's default meter: the default is a table of twelve
-  # numbers that redraws in place, and next to two lines of plain English it
-  # reads like something went wrong. A bar says the one thing worth saying here,
-  # which is that it is still moving. (Not -s: silence during a multi-megabyte
-  # download reads as a hang.)
-  if ! curl -fL --progress-bar ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
+  # Neither the default meter nor --progress-bar. The default is a table of
+  # twelve numbers redrawing in place; --progress-bar, against a source that
+  # sends no Content-Length (GitHub builds this zip on the fly), degrades to a
+  # bouncing `-=#=- #  #  #` that carries no information. Both read as a fault
+  # rather than as progress. Words, before and after, instead.
+  say "Downloading (about 2 MB)..."
+  if ! curl -fL -sS ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
+  say "Downloaded."
   unzip -q "$WORK/dist.zip" -d "$WORK/extract"
   DIST_ROOT="$(find_dist_root "$WORK/extract")"
 }

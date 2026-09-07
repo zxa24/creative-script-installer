@@ -33,11 +33,18 @@ for cmd in curl unzip; do
 done
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/csi.XXXXXX")"
-printf '%s\n' "Downloading..."
-# A bar rather than silence: this is the multi-megabyte download, and it is the
-# first thing that happens after the person pastes the one-liner. -f still means
-# an HTTP error is an exit code rather than a saved error page.
-curl -fL --progress-bar -o "$TMP/csi.zip" "$ZIP_URL"
+# No progress meter, and the reason is specific: GitHub builds this zip on the
+# fly and sends no Content-Length, so curl cannot compute a percentage. What
+# --progress-bar shows instead is its unknown-size animation - `-=#=- #  #  #`
+# bouncing in place - which on a fast download is the ONLY thing that ever
+# appears. It was read as mojibake, which is a fair reading: it carries no
+# information and does not look like output.
+#
+# So: say what is happening in words, before and after. -sS keeps HTTP errors
+# visible; -f keeps an error page from being saved as if it were the payload.
+printf '%s\n' "Downloading (about 2 MB)..."
+curl -fL -sS -o "$TMP/csi.zip" "$ZIP_URL"
+printf '%s\n' "Downloaded."
 unzip -q "$TMP/csi.zip" -d "$TMP/x"
 
 DIR="$(find "$TMP/x" -maxdepth 1 -mindepth 1 -type d | head -n1)"
