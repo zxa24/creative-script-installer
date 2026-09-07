@@ -970,6 +970,11 @@ elif [ "$TOT_INSTALLED" -gt 0 ]; then
   [ "$INSTALLED" -gt 0 ] && APPS="InDesign"
   [ "$AI_INSTALLED" -gt 0 ] && APPS="${APPS:+$APPS and }Illustrator"
   say "Installed v${VERSION} - restart ${APPS} to see the scripts."
+  # Derived from OWNER/REPO rather than written out: a hard-coded URL here would
+  # be a second place the repository name lives, and the one that never gets
+  # updated when it changes. Only on the path where something was installed -
+  # someone re-running an up-to-date machine is not at a "what next" moment.
+  say "What to do next: https://${OWNER}.github.io/${REPO}/guide/workflow"
   [ "$TOT_SKIPPED" -gt 0 ] && say "(${TOT_SKIPPED} location(s) were already up to date)"
   [ "$BLOCKED" -gt 0 ] && say "(${BLOCKED} location(s) were skipped, see above)"
 elif [ "$BLOCKED" -gt 0 ]; then

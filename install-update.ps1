@@ -962,6 +962,10 @@ try {
     if ($idInstalled -gt 0) { $apps += 'InDesign' }
     if ($aiInstalled -gt 0) { $apps += 'Illustrator' }
     Ok ("Installed v{0} - restart {1} to see the scripts." -f $version, ($apps -join ' and '))
+    # 由 $Owner/$Repo 推导, 不写死: 写死等于让仓库名多一个存放处, 而那一处正是
+    # 改名时永远不会被跟着改的那一处。只在真装了东西的路径上出现 —— 对一台本来
+    # 就是最新的机器重跑一次, 那不是一个"接下来做什么"的时刻。
+    Say ("What to do next: https://{0}.github.io/{1}/guide/workflow" -f $Owner, $Repo)
     if ($skipped -gt 0) { Say ("({0} location(s) were already up to date)" -f $skipped) }
     if ($blocked.Count -gt 0) { Say ("({0} location(s) were skipped, see above)" -f $blocked.Count) }
   } elseif ($blocked.Count -gt 0) {
