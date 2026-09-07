@@ -21,7 +21,10 @@
 param(
   [string]$Source        = $env:TOOLKIT_SOURCE,   # 本地 zip 或目录 (最高优先)
   [switch]$Force,                                 # 版本相同也重装
-  [switch]$DryRun                                 # 只探测+校验, 不写任何文件
+  [switch]$DryRun,                                # 只探测+校验, 不写任何文件
+  [switch]$Install,                               # 跳过菜单, 直接装/更新
+  [switch]$Repair,                                # 重装当前版本 (= Force)
+  [switch]$Uninstall                              # 移除已安装的脚本
 )
 
 $ErrorActionPreference = 'Stop'
@@ -215,6 +218,35 @@ function Remove-LegacyFolder([string]$panelDir) {
   Log "removed previous install $LEGACY_FOLDER"
 }
 
+# 卸载。与安装同一道护栏, 理由相同: 这里若是链接, 那是开发桥接, 删掉等于抽走
+# 别人与工作树的连接 —— 而那样的卸载看起来完全成功。
+function Uninstall-From([string]$panelDir) {
+  $dst = Join-Path $panelDir $INSTALL_FOLDER
+  if (-not (Test-Path -LiteralPath $dst)) { return 'absent' }
+  if ((Get-Item -LiteralPath $dst -Force).LinkType) { return 'blocked' }
+  if ($DryRun) { return 'would-remove' }
+  try { Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction Stop; return 'removed' }
+  catch { Log ("uninstall failed -> $dst : " + $_.Exception.Message); return 'failed' }
+}
+
+function Get-InstalledVersion([string]$panelDir) {
+  $mk = Join-Path (Join-Path $panelDir $INSTALL_FOLDER) $VERSION_MARKER
+  if (-not (Test-Path -LiteralPath $mk)) { return $null }
+  try { return (Get-Content $mk -Raw | ConvertFrom-Json).version } catch { return $null }
+}
+
+# 有没有人可问。在打印任何东西【之前】判断 —— 无人值守时不该吐出一个没人能回答
+# 的菜单: 在日志里它读起来像"安装器停下来等人"。
+# UserInteractive 单独不够: 输入被重定向时它仍为真, 那时 Read-Host 会抛
+# "PowerShell is in NonInteractive mode"。两条都看, 再用 try/catch 兜底。
+function Test-CanAsk {
+  try {
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Console]::IsInputRedirected) { return $false }
+    return $true
+  } catch { return $false }
+}
+
 function Install-Into([string]$panelDir, [string]$payloadDir, [string]$version) {
   $dst = Join-Path $panelDir $INSTALL_FOLDER
 
@@ -286,6 +318,77 @@ try {
   }
   Log ("panels=" + ($panels -join ' | '))
 
+  # --- 状态 + 菜单 ------------------------------------------------------------
+  $action = ''
+  if ($Uninstall) { $action = 'uninstall' }
+  elseif ($Repair) { $action = 'repair'; $Force = $true }
+  elseif ($Install) { $action = 'install' }
+
+  if (-not $action -and -not (Test-CanAsk)) { $action = 'install' }
+
+  if (-not $action) {
+    $rver = $null
+    if (-not $Source) {
+      try { $rver = (Fetch-RemoteManifest (Resolve-RemoteUrls).Manifest).version } catch { }
+    }
+    $anyInstalled = $false; $allCurrent = $true
+    Say ''
+    foreach ($p in $panels) {
+      $label = if ($p -match 'InDesign\\([^\\]+)\\([^\\]+)\\Scripts') { "$($Matches[1]) ($($Matches[2]))" } else { $p }
+      $dst = Join-Path $p $INSTALL_FOLDER
+      if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) {
+        Say ("  {0}: a link is in the way (development bridge) - see DEV-BRIDGE.md" -f $label)
+        continue
+      }
+      $lv = Get-InstalledVersion $p
+      if ($lv) {
+        $anyInstalled = $true
+        if ($rver -and $lv -ne $rver) { $allCurrent = $false; Say ("  {0}: installed v{1} - v{2} available" -f $label, $lv, $rver) }
+        else { Say ("  {0}: installed v{1}" -f $label, $lv) }
+      } else { $allCurrent = $false; Say ("  {0}: not installed" -f $label) }
+    }
+    Say ''
+    if ($anyInstalled -and $allCurrent) { Say '  1) Reinstall (repair)' }
+    elseif ($anyInstalled)              { Say '  1) Update' }
+    else                                { Say '  1) Install' }
+    Say '  2) Repair    - reinstall, replacing whatever is there'
+    Say '  3) Uninstall - remove the installed scripts'
+    Say '  q) Quit'
+    Say ''
+    $choice = ''
+    try { $choice = Read-Host '  Choose [1]' } catch { $choice = '' }
+    switch -Regex ($choice.Trim()) {
+      '^$|^1$' { $action = 'install' }
+      '^2$'    { $action = 'repair'; $Force = $true }
+      '^3$'    { $action = 'uninstall' }
+      '^[qQ]$' { Say ''; Ok 'Nothing was changed.'; exit 0 }
+      default  { Say ''; Warn ("Not one of the choices: " + $choice); exit 2 }
+    }
+    Say ''
+  }
+
+  if ($action -eq 'uninstall') {
+    $removed = 0; $blockedU = 0; $failedU = 0
+    foreach ($p in $panels) {
+      switch (Uninstall-From $p) {
+        'removed'      { $removed++;  Log "uninstalled -> $p" }
+        'would-remove' { $removed++;  Log "would-uninstall -> $p" }
+        'blocked'      { $blockedU++; Log "uninstall blocked(bridge) -> $p" }
+        'failed'       { $failedU++ }
+      }
+    }
+    Say ''
+    if ($blockedU -gt 0) { Warn ("Skipped {0} location(s): {1} there is a link, not a folder." -f $blockedU, $INSTALL_FOLDER) }
+    if ($DryRun) { Ok ("[dry run] Would remove {0} installation(s). Nothing was written." -f $removed) }
+    elseif ($failedU -gt 0) {
+      Err ("Removed {0}, failed {1} - InDesign may have the files open. Close it and try again." -f $removed, $failedU)
+      $exitCode = 1
+    }
+    elseif ($removed -gt 0) { Ok ("Removed {0} installation(s). Restart InDesign for the panel to catch up." -f $removed) }
+    else { Ok 'Nothing to remove - no installation was found.' }
+    exit $exitCode
+  }
+
   # 远端预检 (设计 §2.2): 只取小 manifest, 若所有面板已是该版本则直接收工,
   # 不下载整包 (否则每次"检查更新"都白拉 ~6MB)。仅远端 + 非 DryRun 时生效;
   # 本地源无此开销。预检失败(离线/无 manifest)则回落到完整 acquire, 由那里
@@ -355,7 +458,13 @@ try {
     Say  ''
   }
   if ($DryRun) {
-    Ok ("[dry run] Would install into {0} location(s) (v{1}). Nothing was written." -f $wouldInstall, $version)
+    # 两个数都报。"Would install into 0 locations" 单独出现读起来像"什么都没找到",
+    # 而真实原因是每个位置都已是最新 —— 同一句话背后是两件完全不同的事。
+    if ($wouldInstall -eq 0 -and $skipped -gt 0) {
+      Ok ("[dry run] Nothing to do: {0} location(s) already have v{1}." -f $skipped, $version)
+    } else {
+      Ok ("[dry run] Would install into {0} location(s) (v{1}); {2} already current. Nothing was written." -f $wouldInstall, $version, $skipped)
+    }
   } elseif ($failed -gt 0 -and $installed -gt 0) {
     Warn ("Updated to v{0} in some locations, but {1} failed - InDesign may have the files open. Close InDesign and run again." -f $version, $failed)
     $exitCode = 1
