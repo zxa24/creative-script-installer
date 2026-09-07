@@ -42,9 +42,13 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/csi.XXXXXX")"
 #
 # So: say what is happening in words, before and after. -sS keeps HTTP errors
 # visible; -f keeps an error page from being saved as if it were the payload.
-printf '%s\n' "Downloading (about 2 MB)..."
+# Transient: shown while the download runs, erased when it is done. It answers
+# a question that stops existing the moment the step finishes, so leaving it in
+# the scrollback only puts noise between the person and the result.
+# Only on a terminal - in a redirected log, \r and erase codes are garbage.
+if [ -t 1 ]; then printf '\r\033[KLoading...'; else printf '%s\n' "Loading..."; fi
 curl -fL -sS -o "$TMP/csi.zip" "$ZIP_URL"
-printf '%s\n' "Downloaded."
+[ -t 1 ] && printf '\r\033[K' || true
 unzip -q "$TMP/csi.zip" -d "$TMP/x"
 
 DIR="$(find "$TMP/x" -maxdepth 1 -mindepth 1 -type d | head -n1)"

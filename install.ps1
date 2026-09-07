@@ -24,8 +24,15 @@ $tmp = Join-Path $env:TEMP ('csi-' + [guid]::NewGuid().ToString('N').Substring(0
 try {
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   $zip = Join-Path $tmp 'csi.zip'
-  Write-Host 'Downloading...'
+  # Transient: shown while the download runs, erased when it is done. It answers
+  # a question that stops existing the moment the step finishes, so leaving it
+  # in the scrollback only puts noise between the person and the result.
+  # Spaces and `r rather than ANSI erase codes: Windows PowerShell 5.1 does not
+  # enable VT processing by default, so ANSI would print as literal garbage.
+  $onScreen = -not [Console]::IsOutputRedirected
+  if ($onScreen) { Write-Host "`rLoading..." -NoNewline } else { Write-Host 'Loading...' }
   Invoke-WebRequest -Uri $ZipUrl -OutFile $zip -UseBasicParsing
+  if ($onScreen) { Write-Host ("`r" + (' ' * 10) + "`r") -NoNewline }
 
   $ex = Join-Path $tmp 'x'
   Expand-Archive -Path $zip -DestinationPath $ex -Force

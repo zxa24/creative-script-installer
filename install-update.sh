@@ -83,6 +83,7 @@ done
 # configured". Measured. So the file is actually opened, and failing to open it
 # is what means "nobody is there".
 ask() {  # $1 = prompt; echoes the answer, returns 1 when there is no terminal
+  status_clear
   if [ -t 0 ]; then
     printf '%s' "$1" >&2
     IFS= read -r __ans || return 1
@@ -124,6 +125,7 @@ WORK=""
 cleanup() {
   # 必须是第一行: 后面任何一条命令都会改写 $?, 而这里要的是【触发退出的那个】状态。
   __rc=$?
+  status_clear
   [ -n "$WORK" ] && [ -d "$WORK" ] && rm -rf "$WORK" || true
   if [ -n "$LOGFILE" ]; then
     printf '\n%s\n' "Diagnostic log saved to: $LOGFILE"
@@ -136,8 +138,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-say()  { printf '%s\n' "$*"; log "$*"; }
-fail() { printf '%s\n' "$*" >&2; log "! $*"; }
+# A transient status line: shown while a step runs, gone once it is done.
+#
+# These lines ("Loading...", "Checking for updates...") answer a question that
+# stops existing the moment the step finishes. Left in the scrollback they are
+# just noise between the person and the two lines they actually wanted.
+#
+# Only on a terminal. Redirected to a file or a CI log, \r and erase codes are
+# garbage, so there it stays an ordinary line - a log wants the history a screen
+# does not.
+STATUS_ON=0
+status() {
+  log "$*"
+  if [ -t 1 ]; then printf '\r\033[K%s' "$*"; STATUS_ON=1
+  else printf '%s\n' "$*"; fi
+}
+status_clear() {
+  # ${:-0} because the EXIT trap is armed a few lines above where STATUS_ON is
+  # first set: an exit in that window would otherwise hit an unbound variable
+  # inside the trap, under `set -u`.
+  [ "${STATUS_ON:-0}" = "1" ] || return 0
+  printf '\r\033[K'; STATUS_ON=0
+}
+# Every real output wipes a pending status line first. Done here rather than at
+# each call site so it cannot be forgotten at one of them - and a forgotten one
+# leaves the next line printed on top of the status text.
+say()  { status_clear; printf '%s\n' "$*"; log "$*"; }
+fail() { status_clear; printf '%s\n' "$*" >&2; log "! $*"; }
 
 # --- 1. 探测 Scripts Panel 目录 (可能多版本 / 多 locale) -----------------------
 #   ~/Library/Preferences/Adobe InDesign/Version <N>/<locale>/Scripts/Scripts Panel
@@ -185,9 +212,8 @@ acquire_distribution() {
   # sends no Content-Length (GitHub builds this zip on the fly), degrades to a
   # bouncing `-=#=- #  #  #` that carries no information. Both read as a fault
   # rather than as progress. Words, before and after, instead.
-  say "Downloading (about 2 MB)..."
+  status "Loading..."
   if ! curl -fL -sS ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
-  say "Downloaded."
   unzip -q "$WORK/dist.zip" -d "$WORK/extract"
   DIST_ROOT="$(find_dist_root "$WORK/extract")"
 }
@@ -418,16 +444,20 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   # prompt nobody will ever see.
   has_tty || return 1
 
+  # 说人话, 不贴命令。用户在这里需要知道的是三件事: 为什么要密码、它会改什么、
+  # 是不是每次都要 —— 两行 sudo 命令回答不了其中任何一个, 只会让人把它当噪音跳过。
+  #
+  # 精确命令没有消失, 它在【拒绝之后】打印 —— 那正是想先看清楚再决定的人会走到
+  # 的地方。这样两种人都被照顾到, 而不必让所有人先读一遍 shell。
   say ""
-  say "${2:-Illustrator} needs one administrator step, once. It will run:"
+  say "  ${2:-Illustrator} keeps its scripts inside the application itself, so"
+  say "  installing them there needs your permission - once."
   say ""
-  say "    sudo mkdir -p \"$dst\""
-  say "    sudo chown \"$me\" \"$dst\""
+  say "  It creates one folder inside Illustrator for these scripts. Nothing"
+  say "  else on your Mac is changed, and you will not be asked again."
   say ""
-  say "  That creates one folder inside the application and makes it yours."
-  say "  It changes nothing else, and it is the only time a password is needed."
-  ans="$(ask '  Do it now? [Y/n]: ')" || return 1
-  case "$ans" in n|N|no|NO|No) say "  Skipped."; return 1 ;; esac
+  ans="$(ask '  Continue? [Y/n]: ')" || return 1
+  case "$ans" in n|N|no|NO|No) say "  Skipped - the command to do it yourself is below."; return 1 ;; esac
 
   # sudo reads its password from the TERMINAL, not from stdin - which is the
   # whole reason this can work under `curl | bash`, where stdin is the script
@@ -435,7 +465,7 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   #
   # One sudo, one command, spelled out above before it runs. The installer is
   # still not run as an administrator: only this mkdir+chown is.
-  if ! sudo -p "  Password for %u (used once, not stored): " sh -c \
+  if ! sudo -p "  Enter your Mac password to install (it is not saved): " sh -c \
        'mkdir -p "$1" && chown "$2" "$1"' _ "$dst" "$me" </dev/tty; then
     say ""
     say "  That did not go through - nothing was changed."
@@ -446,7 +476,8 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   # a folder we can write into. (A command can succeed and still not leave the
   # state its caller assumed.)
   if ai_writable "$sdir"; then
-    say "  Done. No password will be needed for this again."
+    # Nothing to announce. The install line that follows is the proof it worked,
+    # and a separate "done" above it only pushes that line further from the top.
     return 0
   fi
   say "  The command reported success, but the folder still is not writable."
@@ -552,7 +583,7 @@ report_pending_ai_setup() {  # prints the one-time command for each blocked targ
 
 # ============================ 主流程 ==========================================
 say ""
-say "Checking for updates..."
+status "Checking for updates..."
 
 PANELS="$(find_panels)"
 AI_DIRS="$(find_illustrator_dirs 2>/dev/null || true)"
@@ -911,10 +942,14 @@ elif [ "$TOT_FAILED" -gt 0 ]; then
   say "Update failed in ${TOT_FAILED} location(s); nothing was updated. Your existing scripts are unchanged. Close the application and run again, or ask IT."
   exit 1
 elif [ "$TOT_INSTALLED" -gt 0 ]; then
-  # Named separately on purpose: "restart the application" is no use to someone
-  # with both open when only one of them changed.
-  [ "$INSTALLED" -gt 0 ] && say "Updated InDesign to v${VERSION}. Restart InDesign to see the scripts in the Scripts panel."
-  [ "$AI_INSTALLED" -gt 0 ] && say "Updated Illustrator to v${VERSION}. Restart Illustrator to see them under File > Scripts."
+  # One sentence. The applications are still named - "restart the application"
+  # is no use to someone with both open when only one changed - but naming them
+  # takes a clause, not a line each. Where each script appears is in the docs;
+  # at this point the person needs to know it worked and what to do next.
+  APPS=""
+  [ "$INSTALLED" -gt 0 ] && APPS="InDesign"
+  [ "$AI_INSTALLED" -gt 0 ] && APPS="${APPS:+$APPS and }Illustrator"
+  say "Installed v${VERSION} - restart ${APPS} to see the scripts."
   [ "$TOT_SKIPPED" -gt 0 ] && say "(${TOT_SKIPPED} location(s) were already up to date)"
   [ "$BLOCKED" -gt 0 ] && say "(${BLOCKED} location(s) were skipped, see above)"
 elif [ "$BLOCKED" -gt 0 ]; then

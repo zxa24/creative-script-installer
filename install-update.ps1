@@ -62,10 +62,33 @@ $AI_MANIFEST_NAME  = 'illustrator.manifest.json'
 # ------------------------------------------------------------------
 # 消息 (中文, 非技术, 无 ETA / 栈)
 # ------------------------------------------------------------------
-function Say([string]$m)   { Write-Host $m }
-function Ok([string]$m)    { Write-Host $m -ForegroundColor Green }
-function Warn([string]$m)  { Write-Host $m -ForegroundColor Yellow }
-function Err([string]$m)   { Write-Host $m -ForegroundColor Red }
+# 临时状态行: 步骤进行时显示, 做完就抹掉。
+# "Loading..." / "Checking for updates..." 回答的问题在那一步结束的瞬间就不存在了,
+# 留在滚动区里只是把人和他真正想看的那两行隔开。
+#
+# 用空格覆盖 + \r, 不用 ANSI 擦除码 —— Windows PowerShell 5.1 默认不开 VT 处理,
+# 那里 ANSI 会原样打成乱码。输出被重定向时退化成普通行: 日志要的是历史, 屏幕不要。
+$Script:StatusLen = 0
+function Status([string]$m) {
+  Log $m
+  if ([Console]::IsOutputRedirected) { Write-Host $m; return }
+  $pad = [Math]::Max(0, $Script:StatusLen - $m.Length)
+  Write-Host ("`r" + $m + (' ' * $pad)) -NoNewline
+  $Script:StatusLen = $m.Length
+}
+function Clear-Status {
+  if ($Script:StatusLen -le 0) { return }
+  if (-not [Console]::IsOutputRedirected) {
+    Write-Host ("`r" + (' ' * $Script:StatusLen) + "`r") -NoNewline
+  }
+  $Script:StatusLen = 0
+}
+# 每一条真实输出先抹掉待清的状态行。放在这里而不是各调用点, 是为了不会在某一处
+# 漏掉 —— 漏掉一处, 下一行就会打在状态文字上面。
+function Say([string]$m)   { Clear-Status; Write-Host $m }
+function Ok([string]$m)    { Clear-Status; Write-Host $m -ForegroundColor Green }
+function Warn([string]$m)  { Clear-Status; Write-Host $m -ForegroundColor Yellow }
+function Err([string]$m)   { Clear-Status; Write-Host $m -ForegroundColor Red }
 
 $Script:LogLines = @()
 function Log([string]$m) {
@@ -121,6 +144,7 @@ function Find-DistRoot([string]$dir) {
 }
 
 function Invoke-Download([string]$url, [string]$outFile) {
+  Status 'Loading...'
   $headers = @{}
   if ($env:TOOLKIT_AUTH_TOKEN) { $headers['Authorization'] = "token $($env:TOOLKIT_AUTH_TOKEN)" }
   Invoke-WebRequest -Uri $url -OutFile $outFile -Headers $headers -UseBasicParsing
@@ -456,17 +480,19 @@ function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   # 没人可问就别问。无人值守的运行不该停在一个没人会看到的提示上。
   if (-not (Test-CanAsk)) { return $false }
 
+  # 说人话, 不贴命令。用户在这里要知道的是: 为什么要批准、会改什么、是不是每次都要。
+  # 精确命令在【拒绝之后】打印 —— 想先看清楚再决定的人正好走到那里。
   Say ''
-  Say ("{0} needs one administrator step, once. It will run, elevated:" -f $label)
+  Say ("  {0} keeps its scripts inside the application itself, so installing" -f $label)
+  Say '  them there needs your permission - once.'
   Say ''
-  Say ("    New-Item -ItemType Directory -Force -Path '{0}'" -f $dst)
-  Say ("    icacls '{0}' /grant '{1}:(OI)(CI)F'" -f $dst, $who)
+  Say '  It creates one folder inside Illustrator for these scripts. Nothing else'
+  Say '  on your PC is changed, and you will not be asked again.'
   Say ''
-  Say '  That creates one folder inside the application and gives you access to it.'
-  Say '  It changes nothing else, and it is the only time this is needed.'
+  Say '  Windows will ask you to approve it.'
   $ans = ''
-  try { $ans = Read-Host '  Do it now? [Y/n]' } catch { return $false }
-  if ($ans -match '^\s*[nN]') { Say '  Skipped.'; return $false }
+  try { $ans = Read-Host '  Continue? [Y/n]' } catch { return $false }
+  if ($ans -match '^\s*[nN]') { Say '  Skipped - the command to do it yourself is below.'; return $false }
 
   $inner = "New-Item -ItemType Directory -Force -Path '$dst' | Out-Null; icacls '$dst' /grant '$($who):(OI)(CI)F' | Out-Null"
   try {
@@ -484,7 +510,8 @@ function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
 
   # 不把退出码当答案。检查真正需要的东西: 一个写得进去的文件夹。
   if (Test-IllustratorWritable $scriptsDir) {
-    Say '  Done. This will not be needed again.'
+    # 不另行宣布。紧随其后的安装结果就是它成功的证据, 在它上面再加一行
+    # "完成" 只会把那一行推得离顶部更远。
     return $true
   }
   Say '  The command reported success, but the folder still is not writable.'
@@ -585,7 +612,7 @@ $exitCode = 0
 $work = $null
 try {
   Say ''
-  Say 'Checking for updates...'
+  Status 'Checking for updates...'
 
   $panels = Find-ScriptsPanelDirs
   $aiDirs = @(Find-IllustratorDirs)
@@ -904,8 +931,12 @@ try {
   } elseif ($installed -gt 0) {
     # 分应用点名: 对一个同时开着两个应用、只有一个被改动的人来说,
     # "重启该应用"是没有信息量的。
-    if ($idInstalled -gt 0) { Ok ("Updated InDesign to v{0}. Restart InDesign to see the scripts in the Scripts panel." -f $version) }
-    if ($aiInstalled -gt 0) { Ok ("Updated Illustrator to v{0}. Restart Illustrator to see them under File > Scripts." -f $version) }
+    # 一句话。应用仍然点名 —— 对同时开着两个、只有一个被改的人来说 "重启该应用"
+    # 没有信息量 —— 但点名只占一个从句, 不必各占一行。
+    $apps = @()
+    if ($idInstalled -gt 0) { $apps += 'InDesign' }
+    if ($aiInstalled -gt 0) { $apps += 'Illustrator' }
+    Ok ("Installed v{0} - restart {1} to see the scripts." -f $version, ($apps -join ' and '))
     if ($skipped -gt 0) { Say ("({0} location(s) were already up to date)" -f $skipped) }
     if ($blocked.Count -gt 0) { Say ("({0} location(s) were skipped, see above)" -f $blocked.Count) }
   } elseif ($blocked.Count -gt 0) {
