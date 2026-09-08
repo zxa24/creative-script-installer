@@ -349,6 +349,25 @@ function _shouldClearParaOverrides(paraStyleName, srcUniform) {
     return srcUniform !== true;                                               // non-cluster: clear unless uniform
 }
 
+// #HANG-LOG (20260908) — per-item tracing is OPT-IN, and here is the arithmetic.
+//
+// The hang instrumentation writes ~5 lines per worklist item, and plog does one
+// writeFileSync per line into <docDir>/script_outputs/log/ — which sits next to the
+// document, i.e. routinely on a network share. Measured on the run that closed the
+// font bug: the log went 100 -> 2164 lines and the settle pass went ~6ms to ~35ms
+// per item, 14.0s of a 69.7s import. That was worth paying WHILE diagnosing and is
+// not worth paying every day.
+//
+// So the split is by FREQUENCY, not by usefulness: everything that fires once per
+// item is gated here; everything RARE stays always-on (a widen, a font-catalog
+// scan, a frame that actually reads overset, any single item over a second). The
+// always-on set still names the face and the frame — it just cannot name the item
+// index. Set IMPORT_TRACE_SETTLE=1 to get that back before re-running a hang.
+function _traceSettle() {
+    try { return !!(typeof process !== "undefined" && process.env && process.env.IMPORT_TRACE_SETTLE); }
+    catch (e) { return false; }
+}
+
 // ─── overset-widen-before-emphasis (SPEC #ac-overset-widen, part A) ─────────
 //
 // Root cause (host-verified 20260714): appliedCharacterStyle= SILENTLY fails on
@@ -459,6 +478,28 @@ function _widenOversetFrameForEmphasis(para, workDoc, deps, applyResults, tid) {
 
         var direction = _widenDirectionFromJustification(para);
 
+        // #HANG-LOG (20260908). The per-frame line at the bottom of this function
+        // reports a COMPLETION, and a hang has no completion: the 20260908 stall
+        // burned a core for 10+ minutes and produced ZERO `widen:` lines, because
+        // the FIRST call never returned. Completion lines answer "which call was
+        // slow"; only an ENTER line answers "which call is stuck". So every probe
+        // is bracketed, and each host call inside it is timed separately — the
+        // last line in the log then names the operation still running, and says
+        // whether the cost is the geometry set, the story recompose, the frame
+        // recompose, or the overflows read. (Same lesson as #REALTIME-LOG, one
+        // layer down: that one was about a channel that never arrived, this one
+        // about a line that only prints when the work is already over.)
+        var __wlog = (deps && typeof deps.plog === "function") ? deps.plog : null;
+        var __wnow = function () { return (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; };
+        var __wt0 = __wnow();
+        var __wprobe = 0;
+        if (__wlog) {
+            try {
+                __wlog("widen enter: frame=" + frameId + " dir=" + direction
+                    + " w=" + Math.round(origWidth) + "pt");
+            } catch (eWE) {}
+        }
+
         // Grow the frame the MINIMUM horizontal distance that clears the overflow
         // (user-required 20260714: expand as little as possible — do NOT balloon; the
         // widened text should just barely fit, poking minimally past the design box).
@@ -470,14 +511,19 @@ function _widenOversetFrameForEmphasis(para, workDoc, deps, applyResults, tid) {
             if (direction === "LEFT") nb = [y1, x1 - a, y2, x2];          // right-aligned → grow left edge
             else if (direction === "BOTH") nb = [y1, x1 - a / 2, y2, x2 + a / 2]; // centered → symmetric
             else nb = [y1, x1, y2, x2 + a];                              // left / justify / default → grow right
+            var __pn = ++__wprobe, __p0 = __wnow();
+            if (__wlog) { try { __wlog("widen probe " + __pn + ": added=" + Math.round(a) + " — set bounds"); } catch (eL0) {} }
             try { frame.geometricBounds = nb; } catch (eGB) { return null; }
+            if (__wlog) { try { __wlog("widen probe " + __pn + ": bounds set +" + (__wnow() - __p0) + "ms — story.recompose"); } catch (eL1) {} }
             try { var _st = frame.parentStory; if (_st && typeof _st.recompose === "function") _st.recompose(); } catch (e) {}
+            if (__wlog) { try { __wlog("widen probe " + __pn + ": story.recompose +" + (__wnow() - __p0) + "ms — frame.recompose"); } catch (eL2) {} }
             try { if (typeof frame.recompose === "function") frame.recompose(); } catch (e) {}
-            try { return (frame.overflows === true); } catch (e) { return false; }
+            if (__wlog) { try { __wlog("widen probe " + __pn + ": frame.recompose +" + (__wnow() - __p0) + "ms — read overflows"); } catch (eL3) {} }
+            var __ov = false;
+            try { __ov = (frame.overflows === true); } catch (e) { __ov = false; }
+            if (__wlog) { try { __wlog("widen probe " + __pn + ": DONE overflows=" + __ov + " +" + (__wnow() - __p0) + "ms"); } catch (eL4) {} }
+            return __ov;
         };
-
-        var __wlog = (deps && typeof deps.plog === "function") ? deps.plog : null;
-        var __wt0 = (typeof Date !== "undefined" && Date.now) ? Date.now() : 0;
 
         var MAX_ADD = Math.max(origWidth * 3, 3000);     // horizontal ceiling (a vertical-only overflow can't clear)
         // Phase 1 — geometric growth to BRACKET the minimal clearing width. Small initial
@@ -1538,7 +1584,17 @@ function applyOnePara(workDoc, locateResult, sheet, plan, translation, applyResu
             var __tuFrame = _firstTextFrame(para.parentTextFrames);
             if (!__tuFrame) { try { __tuFrame = _firstTextFrame(para.parentStory.textContainers); } catch (eTU0) {} }
             var __tuId = null; try { __tuId = __tuFrame && __tuFrame.id; } catch (eTU1) {}
+            // #HANG-LOG (20260908): bracket the LIVE overflows read. It is a host call
+            // OUTSIDE the widen, so a hang in it prints no `widen enter` line either —
+            // without this pair the instrumentation one level down still sees nothing.
+            var __tuLog = (deps && typeof deps.plog === "function") ? deps.plog : null;
+            // The "about to read" line is the one that survives a hang, so it is gated on
+            // the trace flag; the RESULT line stays always-on when the frame IS overset,
+            // because that is rare and is what the widen lines below hang off.
+            var __tuTrace = _traceSettle();
+            if (__tuLog && __tuTrace) { try { __tuLog("ac2 topup: tid=" + tid + " frame=" + __tuId + " — read overflows"); } catch (eTL0) {} }
             var __tuOver = false; try { __tuOver = (__tuFrame && __tuFrame.overflows === true); } catch (eTU2) {}
+            if (__tuLog && (__tuOver || __tuTrace)) { try { __tuLog("ac2 topup: tid=" + tid + " frame=" + __tuId + " overflows=" + __tuOver); } catch (eTL1) {} }
             // Overset NOW, after the style landed — regardless of whether this frame was
             // overset BEFORE. The earlier version only topped up frames already present in
             // framesWidened, which missed the case the comment above actually describes: a
@@ -1640,14 +1696,58 @@ function runEmphasisSettlePass(workDoc, pending) {
     // Progress, on the same principle as the apply loop: a phase that can run for
     // minutes has to say so WHILE it runs, not once at the end.
     var __splog = (d && typeof d.plog === "function") ? d.plog : null;
+    var __spTrace = _traceSettle();   // #HANG-LOG: the per-item lines are opt-in, see _traceSettle
     var __spNow = function () { return (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; };
     var __spT0 = __spNow();
     if (__splog) { try { __splog("emphasis settle: begin worklist=" + pending.worklist.length); } catch (eS0) {} }
+    // #HANG-LOG (20260908): hand the run's log to style_applier for the duration of this
+    // pass, so the font-catalog scan (the one host cost in here that is a product of
+    // catalog size x unresolved faces x sub-runs, and that has never appeared in any log)
+    // can report itself. Cleared where the pass returns — a logger left pointing at a
+    // finished run's plog would keep writing into it. (Every throw inside the pass is
+    // already caught locally, so that single clear point is reached; if a future edit
+    // adds an escaping throw, wrap this in a try/finally rather than adding a second
+    // clear — two clear points is how one of them gets forgotten.)
+    try {
+        var __saMod = d && d.lib && d.lib.styleApplier;
+        if (__saMod && typeof __saMod.setDiagLogger === "function") __saMod.setDiagLogger(__splog);
+        // #FONT-SCAN (20260908): open the face-resolution cache for this pass. This is
+        // the window in which the claim "the font catalog cannot change" is actually
+        // true — one synchronous doScript — which is why the cache is opened by the
+        // caller rather than being always-on inside style_applier. The cost it removes
+        // is real and measured: this pass asked for one absent face once per Latin
+        // script sub-run, 35 times over the document, at 8m18s each.
+        if (__saMod && typeof __saMod.beginFaceCache === "function") __saMod.beginFaceCache();
+    } catch (eSD) {}
 
     for (var i = 0; i < pending.worklist.length; i++) {
         var w = pending.worklist[i];
         var __spItem = __spNow();
+        // #HANG-LOG (20260908): the enter line goes HERE — before the two `continue`s and
+        // before _refreshParaWrapper — not next to the applyOnePara call. An item that
+        // hits `continue` at the isValid check, or that hangs inside _refreshParaWrapper,
+        // emits NOTHING at all, so an enter line placed after them leaves exactly the
+        // paths that produce silence uncovered. (First placement of this line was after
+        // the refresh; an adversarial read pointed out that it therefore covered neither
+        // the slow-then-skipped item nor the refresh itself — the two shapes that look
+        // identical to a stuck item from outside.) `s4` is the site-4 gate, computed from
+        // data only: it says whether this row had emphasis work at all, which the failing
+        // run could not answer without a second run.
+        if (__splog && __spTrace) {
+            var __seSeg = (w && w.lr && w.lr.seg) || null;
+            var __seFs = (__seSeg && __seSeg.format_snapshot) || null;
+            var __seBl = (__seFs && __seFs.baseline) || null;
+            var __seS4 = !!(__seFs && __seFs.uniform === true && !__seFs.scriptByFont
+                && __seBl && /italic/i.test(String(__seBl.fontStyle || "")));
+            try {
+                __splog("settle enter: " + (i + 1) + "/" + pending.worklist.length
+                    + " tid=" + ((__seSeg && __seSeg.tid) || "-")
+                    + " s4=" + __seS4
+                    + " carry=" + (((w && w.carryDirectOverrideRanges) || []).length));
+            } catch (eS2) {}
+        }
         if (!w || !w.lr) continue;
+        if (__splog && __spTrace) { try { __splog("settle " + (i + 1) + ": refresh wrapper"); } catch (eS3) {} }
         // Re-resolve the wrapper: the paragraph may have been split/merged since pass 1
         // (soft-break merge deletes paragraphs outright), and a leaked wrapper reads the
         // wrong char range (CLAUDE.md gate #12).
@@ -1663,6 +1763,9 @@ function runEmphasisSettlePass(workDoc, pending) {
 
         d.editTextOnly = w.editTextOnly;
         d.carryDirectOverrideRanges = w.carryDirectOverrideRanges || null;
+        // #HANG-LOG (20260908): the last marker before the call, so the three regions of
+        // one iteration — refresh / validity / apply — are separable in the log.
+        if (__splog && __spTrace) { try { __splog("settle " + (i + 1) + ": applyOnePara"); } catch (eS4) {} }
         try {
             applyOnePara(workDoc, w.lr, pending.sheet, pending.plan, w.t, applyResults, d);
             out.parasApplied++;
@@ -1695,9 +1798,17 @@ function runEmphasisSettlePass(workDoc, pending) {
     // emphasis run is wiped by pass 2 and nothing puts it back, while every counter
     // still reports success (impl-audit 20260715, A-class). Same for a manual `bold`
     // annotation, whose font dim is deliberately never replayed.
+    // #HANG-LOG (20260908): the loop above can also end SILENTLY — every remaining item
+    // taking a `continue` emits nothing — and the restamp that follows emits nothing at
+    // all while walking the whole locate plan. So "loop still running" and "loop finished,
+    // stuck in the restamp" produced identical evidence: no line, either way. These two
+    // lines separate them.
+    if (__splog) { try { __splog("emphasis settle: loop done, applied=" + out.parasApplied + " skipped=" + out.skippedInvalid + " throws=" + out.throws + " +" + (__spNow() - __spT0) + "ms"); } catch (eS5) {} }
     if (pending.locatePlan && pending.translations) {
+        if (__splog) { try { __splog("restamp: begin rows=" + (pending.locatePlan.length || 0)); } catch (eS6) {} }
         try {
             _restampAnnotationFormats(workDoc, pending.locatePlan, pending.translations, applyResults, d);
+            if (__splog) { try { __splog("restamp: end +" + (__spNow() - __spT0) + "ms"); } catch (eS7) {} }
             out.restampedAfterEmphasis = true;
         } catch (eRs) {
             out.restampedAfterEmphasis = false;
@@ -1710,6 +1821,12 @@ function runEmphasisSettlePass(workDoc, pending) {
 
     out.fields = _emphasisReportFields(applyResults);
     out.ok = true;
+    // #HANG-LOG (20260908): see the setDiagLogger call at the top of this pass.
+    try {
+        var __saMod2 = d && d.lib && d.lib.styleApplier;
+        if (__saMod2 && typeof __saMod2.setDiagLogger === "function") __saMod2.setDiagLogger(null);
+        if (__saMod2 && typeof __saMod2.endFaceCache === "function") __saMod2.endFaceCache();
+    } catch (eSD2) {}
     return out;
 }
 

@@ -1826,43 +1826,161 @@ function _resolveInstalledFaceCaseTolerant(workDoc, family, style, I) {
     return null;
 }
 
+// #HANG-LOG (20260908): a diagnostic-only sink, set once by the caller that owns the
+// run's log. Module-level because the expensive function below is four call-frames
+// away from anything holding `deps`, and threading a logger through those frames for
+// a diagnostic would change four signatures on the hot path. Null unless set, so this
+// module keeps its "no ambient state" property for every caller that does not opt in.
+// It is a LOGGER, never a control input — nothing below branches on it except whether
+// to write a line.
+var _SA_DIAG = null;
+function setDiagLogger(fn) { _SA_DIAG = (typeof fn === "function") ? fn : null; }
+
 // Scan the SYSTEM font catalog (app.fonts) ONLY for a case-insensitive match,
 // returning the exact-case ".name". Starts at workDoc.parent (skipping
 // workDoc.fonts) and walks up to the app — mirroring _isSystemFontInstalled so
 // case recovery can't return a doc-only embedded ghost (style_sheet_builder.js:2002).
+// #FONT-SCAN (20260908) — measured, and the reason this function was rewritten.
+//
+// The old body read `.name` on EVERY font of the collection, one cross-bridge
+// property read each. Host measurement from the run that produced this fix:
+//
+//     fontscan: MISS after 3786 fonts +498447ms      ← 8 min 18 s, for ONE lookup
+//
+// 3786 = 6 hops x 631 fonts — the parent walk re-read the same catalog six times.
+// It is entered ONLY when a face did not resolve, i.e. exactly when a face is
+// MISSING, and nothing cached the answer, so it repeated per script sub-run: the
+// document that produced this had 35 Latin sub-runs on italic-baseline paragraphs
+// wanting one absent face, i.e. ~4.8 hours of it. InDesign stayed responsive and
+// burned one core; from outside it is indistinguishable from a hang.
+//
+// 🔴 This exact lesson was ALREADY recorded in this repo, in the file next door:
+// lib/font_italic_probe.js's header (univ-italic 2026-06-28) says iterating
+// app.fonts "is a per-Font cross-bridge property read x N, runs SYNC on the V8
+// main thread, and FROZE InDesign uninterruptibly (CLAUDE.md gate #9) -> the user
+// had to force-restart", and ends "DO NOT call it on app.fonts in host code".
+// That fix swept its own file and stopped. THIS function is the violator it left
+// behind — the same anti-pattern, still on the resolution path, for ten weeks.
+// The lesson is not "iterating fonts is slow"; it is that fixing a finding means
+// grepping the whole concept, not patching the line the report pointed at.
+//
+// Three changes, each independently sufficient to avoid the 8 minutes:
+//   1. `everyItem().name` — ONE bridge call for all names instead of N. The idiom
+//      is already used in this repo (import_integrated.idjs:251) and measured in
+//      lib/font_mapping_doc_scan.js:311-314 at 2492ms -> 60ms for the same shape.
+//   2. Cache the answer for the session, keyed by catalog SIZE so installing or
+//      activating a font invalidates it. Negative results are cached too — that is
+//      the whole point, since the MISS is the case that repeats.
+//   3. The six hops are now six cheap calls, so the redundant walk stops mattering
+//      and needs no fragile de-duplication.
+//
+// Semantics are unchanged (case-insensitive match on the canonical "Family\tStyle",
+// status must read INSTALLED) EXCEPT on a host with no `everyItem`: there we now
+// fall back to a CAPPED item() walk and say so, rather than freezing. That is the
+// same trade font_italic_probe.js made deliberately — a face with an exotic
+// spelling may go unfound, which lands on the already-correct "face_not_installed"
+// path, and a wrong answer in milliseconds beats a right one in eight minutes.
+// The cache is OPT-IN and OFF by default: null here means every lookup is fresh,
+// exactly as before. It is opened only by code that knows the font catalog cannot
+// change while it runs (one synchronous doScript), and closed after.
+//
+// 🔴 It started out as an always-on module cache keyed by catalog SIZE, and
+// dst_gate_uniform_tests caught that within minutes: three lookups of the same
+// name against three collections of size 1 that differ only in the font's STATUS,
+// so a cached HIT was returned where a fail-closed null was required. Size is not
+// an identity — it was equal to one by coincidence, not by any guarantee, and the
+// repo has a rule about exactly that. Keying on identity is not available either:
+// UXP host objects fail `===`. So the honest key is not a value at all, it is a
+// SCOPE: the caller states the window in which the answer cannot change.
+var _FACE_CACHE = null;                  // null = OFF; else { size, map: { wantLower: name|null } }
+var _FACE_SCAN_CAP = 64;                 // fallback-only; the host path never iterates
+
+// Open / close the face-resolution cache for one run. Idempotent; safe to call
+// when the module is used from Node with no host at all.
+function beginFaceCache() { _FACE_CACHE = { size: -2, map: {} }; }
+function endFaceCache() { _FACE_CACHE = null; }
+
 function _scanFontsCaseInsensitive(workDoc, wantLower) {
+    var __now = function () { return (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; };
+    var __sn0 = __now();
+    var __snSeen = 0;
     var ref = null;
-    // skip workDoc.fonts — start at the parent (app or doc→app chain).
     try { ref = workDoc && workDoc.parent; } catch (e0) { return null; }
-    for (var hop = 0; hop < 6 && ref; hop++) {
+
+    var __size = -1;
+    try {
+        var __c0 = ref && ref.fonts;
+        __size = (__c0 && typeof __c0.length === "number") ? __c0.length : -1;
+    } catch (eSz) { __size = -1; }
+
+    if (_FACE_CACHE) {
+        // Second line of defence inside the opened scope: if the catalog size moved
+        // (a font installed or activated mid-run), drop everything rather than answer
+        // from a table describing a catalog that no longer exists.
+        if (_FACE_CACHE.size !== __size) { _FACE_CACHE.size = __size; _FACE_CACHE.map = {}; }
+        else if (Object.prototype.hasOwnProperty.call(_FACE_CACHE.map, wantLower)) {
+            var __c = _FACE_CACHE.map[wantLower];
+            if (_SA_DIAG) { try { _SA_DIAG("fontscan: cached " + (__c === null ? "MISS" : "HIT") + " want=" + wantLower); } catch (eDc) {} }
+            return __c;
+        }
+    }
+
+    if (_SA_DIAG) { try { _SA_DIAG("fontscan: begin want=" + wantLower + " catalog=" + __size); } catch (eD0) {} }
+
+    var found = null;
+    for (var hop = 0; hop < 6 && ref && found === null; hop++) {
         var fonts = null;
         try { fonts = ref.fonts; } catch (eF) { fonts = null; }
         if (fonts) {
-            var n = 0;
-            try { n = fonts.length; } catch (eN) { n = 0; }
-            for (var i = 0; i < n; i++) {
-                var nm = "";
-                try { nm = String(fonts.item(i).name); } catch (eNm) { nm = ""; }
+            var names = null;
+            if (typeof fonts.everyItem === "function") {
+                try { names = fonts.everyItem().name; } catch (eEv) { names = null; }
+            }
+            if (names !== null && names !== undefined) {
+                // A one-font collection returns a bare string, not an array.
+                if (Object.prototype.toString.call(names) !== "[object Array]") names = [names];
+            } else {
+                // No everyItem (Node mocks; a host build without it). Walk, but CAPPED —
+                // an uncapped walk here is the eight minutes this rewrite exists to remove.
+                names = [];
+                var n = 0;
+                try { n = fonts.length; } catch (eN) { n = 0; }
+                var lim = (n > _FACE_SCAN_CAP) ? _FACE_SCAN_CAP : n;
+                for (var i = 0; i < lim; i++) {
+                    try { names.push(String(fonts.item(i).name)); } catch (eNm) { names.push(""); }
+                }
+                if (_SA_DIAG && n > lim) {
+                    try { _SA_DIAG("fontscan: no everyItem — item() walk CAPPED at " + lim + " of " + n + "; case recovery is incomplete for this lookup"); } catch (eD3) {}
+                }
+            }
+            __snSeen += names.length;
+            for (var j = 0; j < names.length; j++) {
+                var nm = String(names[j] || "");
                 if (nm && nm.toLowerCase() === wantLower) {
                     // TODO#38 (owner 3A 2026-08-13): status must READ as installed —
                     // the old `!st ||` arm treated an unreadable status as installed
                     // (fail-open). Census 20260813_14: 0/631 unreadable — scoped to
                     // THIS machine's table at that moment (mid font-sync/activation
                     // elsewhere may differ); a live guard-rail, not dead code.
+                    // Read via itemByName: a hash lookup, not a walk.
                     var st = "";
-                    try { st = String(fonts.item(i).status); } catch (eSt) { st = ""; }
+                    try { st = String(fonts.itemByName(nm).status); } catch (eSt) { st = ""; }
                     if (st === "INSTALLED" || st.indexOf("INSTALLED") >= 0 || st.indexOf("Installed") >= 0) {
-                        return nm;
+                        found = nm;
+                        break;
                     }
                 }
             }
-            // this level didn't have it → keep walking up.
         }
         var nxt = null;
         try { nxt = ref.parent; } catch (eP) { nxt = null; }
         if (!nxt || nxt === ref) break;
         ref = nxt;
     }
+
+    if (_FACE_CACHE) _FACE_CACHE.map[wantLower] = found;
+    if (_SA_DIAG) { try { _SA_DIAG("fontscan: " + (found ? "HIT" : "MISS") + " want=" + wantLower + " after " + __snSeen + " names +" + (__now() - __sn0) + "ms"); } catch (eD1) {} }
+    if (found !== null) return found;
     return null;
 }
 
@@ -2839,6 +2957,11 @@ function restoreDocDirectOverrides(doc, captured, plog, deps) {
 }
 
 module.exports = {
+    // #HANG-LOG (20260908): diagnostic sink, see setDiagLogger's comment.
+    setDiagLogger: setDiagLogger,
+    // #FONT-SCAN (20260908): opt-in face-resolution cache, see beginFaceCache.
+    beginFaceCache: beginFaceCache,
+    endFaceCache: endFaceCache,
     applyClusterStyleToParagraph: applyClusterStyleToParagraph,
     applyAnnotationsToParagraph: applyAnnotationsToParagraph,
     applyEmphasisRunsToParagraph: applyEmphasisRunsToParagraph,

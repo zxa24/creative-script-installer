@@ -524,10 +524,26 @@ async function main() {
     try { await ScriptLogPaths.ensureLogDirAsync(__logBaseDir); } catch (eELD) {}
     var progressLogPath = ScriptLogPaths.resolveLogPath(__logBaseDir, "import_integrated");
     var _logBuffer = "";
+    var _logStarted = false;
     var _fsRef = require("fs");
+    // #HANG-LOG (20260908): APPEND one line per call instead of re-writing the whole
+    // buffer every time. The old form re-wrote every byte of the log on every call —
+    // O(n^2) in bytes, and this file lives next to the document, which is routinely a
+    // network share. That was invisible at ~100 lines; the hang instrumentation raises
+    // this run to ~10x that. The `{flag:"a"}` form is the one the host probes already
+    // use (probes/20260528_02_probe_modal_during_work.idjs:14). If append is ever
+    // unsupported, the catch re-writes the accumulated buffer — i.e. it degrades to
+    // exactly the old behaviour rather than losing the log, which is the failure mode
+    // that matters here (a diagnostic log that silently truncates is worse than a slow one).
     function plog(msg) {
-        _logBuffer += "[" + new Date().toISOString() + "] " + msg + "\n";
-        try { _fsRef.writeFileSync(progressLogPath, _logBuffer, "utf-8"); } catch (e) {}
+        var line = "[" + new Date().toISOString() + "] " + msg + "\n";
+        _logBuffer += line;
+        try {
+            if (!_logStarted) { _fsRef.writeFileSync(progressLogPath, _logBuffer, "utf-8"); _logStarted = true; }
+            else { _fsRef.writeFileSync(progressLogPath, line, { flag: "a" }); }
+        } catch (e) {
+            try { _fsRef.writeFileSync(progressLogPath, _logBuffer, "utf-8"); } catch (e2) {}
+        }
     }
     var __importStartMs = Date.now();
     plog("=== import_translations_v2 begin (rev " + IMPORT_V2_REV + ") ===");
@@ -2314,10 +2330,36 @@ async function main() {
                     // composition each per-paragraph mutation. Parking on a
                     // page that doesn't contain the edited stories lets
                     // InDesign batch the recomposition until save / scroll.
+                    //
+                    // 🔴 2026-09-08: THIS BLOCK HAD NEVER EXECUTED. It read
+                    // `workDoc.activeLayoutWindow`, and **that property does not exist** —
+                    // it appears nowhere in the InDesign DOM reference (`Adobe_docs/
+                    // indesign-18-dom-main`); the real accessors are `Document.layoutWindows`
+                    // (a collection) and `Application.activeWindow`. So `__fastPageWin` was
+                    // `undefined` on every run, the `if` fell through, the surrounding
+                    // `try/catch` swallowed nothing because nothing threw, and the whole
+                    // remedy was inert — silently, for as long as it has existed.
+                    // The 185s-vs-11s figure quoted above measures the PROBLEM; there is no
+                    // recorded measurement that this fix ever helped, and now we know why.
+                    // It became visible only when a line was added saying it did NOT happen:
+                    // a device that quietly does nothing is indistinguishable from one that
+                    // works, until something makes the absence itself a reading.
+                    // The correct idiom was already in this repo, twice — lib/
+                    // repair_after_apply.js:69 and cjk_style_apply.idjs:633 — so this is a
+                    // working pattern that failed to propagate, the mirror image of the
+                    // usual "fix one line, leave the concept unswept".
+                    // ⚠ Deliberately NO `app.layoutWindows` fallback (repair_after_apply has
+                    // one): item 0 there can belong to a DIFFERENT document, and parking it
+                    // would move a page in a document this import was never asked to touch.
+                    // No window for workDoc = genuinely headless = correctly skipped.
                     var __fastPageOrigPage = null;
                     var __fastPageWin = null;
                     try {
-                        __fastPageWin = workDoc.activeLayoutWindow;
+                        try {
+                            if (workDoc.layoutWindows && workDoc.layoutWindows.length) {
+                                __fastPageWin = getCollectionItem(workDoc.layoutWindows, 0);
+                            }
+                        } catch (eLW) { __fastPageWin = null; }
                         if (__fastPageWin) {
                             try { __fastPageOrigPage = __fastPageWin.activePage; } catch (eOP) {}
                             try {
@@ -2325,9 +2367,18 @@ async function main() {
                                 var __lastPg = __pages.item(__pages.length - 1);
                                 if (__lastPg && __lastPg.isValid) {
                                     __fastPageWin.activePage = __lastPg;
+                                    // #HANG-LOG (20260908): say whether the park actually
+                                    // happened. An unparked run is several times slower for
+                                    // a reason no other line reports, so "it was on" must be
+                                    // readable from the log rather than assumed.
+                                    plog("#FAST-PAGE: parked window from page "
+                                        + ((__fastPageOrigPage && __fastPageOrigPage.name) || "?")
+                                        + " to " + (__lastPg.name || "?")
+                                        + " (covers pipeline + repair + byPair + enforcer + emphasis settle)");
                                 }
                             } catch (eLP) {}
                         }
+                        if (!__fastPageWin) plog("#FAST-PAGE: NOT parked — workDoc.layoutWindows is empty (genuinely headless / bridge-opened)");
                     } catch (eFP0) {}
 
                     var entry = ctx.skipStyleCleanup
@@ -2337,8 +2388,18 @@ async function main() {
                     // dialog DOM patch 全排队，每次 callback 都是空调用。
                     // 进度条状态在 doScript 开始前已经设好，退出后下方 update
                     // 接管。__PROGRESS_MAP 的内部 plog 日志仍会写、便于追踪。
-                    try {
-                        pipelineResult = entry(workDoc, ctx, {
+                    // #FAST-PAGE (widened 20260908). The park above used to be released
+                    // in a `finally` around runPipeline ALONE. Everything after it —
+                    // repair, the byPair sweep, the enforcer, and the emphasis settle
+                    // pass — therefore ran with the window back on the page the operator
+                    // left it on, i.e. with exactly the per-mutation visible-page
+                    // recomposition the park exists to avoid. That is the whole reason a
+                    // double-clicked run diverges from a bridge-driven one, and the
+                    // divergence was only ever fixed for the first of the five phases.
+                    // The release now lives in the `finally` of the enclosing try, so the
+                    // park covers every phase inside this doScript and a throw anywhere
+                    // still restores the operator's page.
+                    pipelineResult = entry(workDoc, ctx, {
                             lib: {
                                 fontMapping: FontMapping,
                                 segmentLocator: SegmentLocator,
@@ -2370,17 +2431,7 @@ async function main() {
                             // process freezes mid-commit.
                             plog: plog
                         });
-                    } finally {
-                        // Restore the originally-active page so the user
-                        // sees the doc where they left it — important for
-                        // manual runs where the user is watching.
-                        try {
-                            if (__fastPageWin && __fastPageOrigPage && __fastPageOrigPage.isValid) {
-                                __fastPageWin.activePage = __fastPageOrigPage;
-                            }
-                        } catch (eFP1) {}
-                    }
-                    plog("doScript: runPipeline DONE");
+                    plog("doScript: runPipeline DONE (window still parked — released at the end of this doScript)");
 
                     // ── Repair inside same undo block (#2 fix) ──
                     // Use runRepairCore() (no nested doScript) so this
@@ -2623,11 +2674,40 @@ async function main() {
                                     skipped_invalid: __empOut.skippedInvalid,
                                     throws: __empOut.throws
                                 };
+                                // 🔴 2026-09-08: this used to print `readbackFailures=<n>`.
+                                // The name was wrong and the number was unusable. The array
+                                // is `summary.surfaced` (style_applier.js:1300 returns
+                                // "surfaced", not "failed"), and it carries ~20 distinct
+                                // reasons — at least three of which fire on sub-runs that
+                                // APPLIED CORRECTLY. The clearest is `collision_skipped_chars`
+                                // (style_applier.js:1386-1394 via the per-char gate at :1688):
+                                // an emphasis run overlapping a translator annotation, a
+                                // hyperlink CS or a designer CS applies to the rest of the run,
+                                // correctly preserves the annotation, and increments the count
+                                // by one. Zero defect, guaranteed +1.
+                                // So a bare count conflates a by-design skip with a silently
+                                // dropped emphasis, under a name that asserts the latter — a
+                                // reading whose precision is below the claim its own name makes.
+                                // Print the reason histogram instead: same cost, and it says
+                                // WHAT IT COVERS, which is what makes the number usable at all.
+                                var __surf = (__empOut.fields && __empOut.fields.target_emphasis_run_failures) || [];
+                                var __hist = {}, __hk;
+                                for (var __si = 0; __si < __surf.length; __si++) {
+                                    __hk = String((__surf[__si] && __surf[__si].reason) || "(no reason)");
+                                    __hist[__hk] = (__hist[__hk] || 0) + 1;
+                                }
+                                var __histParts = [];
+                                for (__hk in __hist) {
+                                    if (Object.prototype.hasOwnProperty.call(__hist, __hk)) __histParts.push(__hk + "=" + __hist[__hk]);
+                                }
+                                __histParts.sort();
                                 plog("emphasis settle pass: paras=" + __empOut.parasApplied
                                     + " skippedInvalid=" + __empOut.skippedInvalid
                                     + " throws=" + __empOut.throws
                                     + " framesWidened=" + ((__empOut.fields && __empOut.fields.frames_widened) || []).length
-                                    + " readbackFailures=" + ((__empOut.fields && __empOut.fields.target_emphasis_run_failures) || []).length);
+                                    + " surfaced=" + __surf.length
+                                    + (__histParts.length ? " [" + __histParts.join(" ") + "]" : "")
+                                    + "  (surfaced != failed — some of these reasons fire on runs that applied)");
                             } else {
                                 report.emphasis_settle_pass = { ok: false, error: __empOut && __empOut.error };
                                 report.errors.push("emphasis settle pass did not run"
@@ -2694,6 +2774,19 @@ async function main() {
                 } catch (eInner) {
                     report.errors.push("runPipeline threw: " + (eInner && eInner.message ? eInner.message : eInner));
                     plog("doScript: INNER THROW " + (eInner && eInner.message ? eInner.message : eInner));
+                } finally {
+                    // #FAST-PAGE (widened 20260908): release the park here, so it spans
+                    // every phase in this doScript rather than runPipeline alone. Restores
+                    // the originally-active page so the operator sees the document where
+                    // they left it — that part is unchanged, only the moment is later.
+                    // A throw anywhere above lands here too, so the page is never left
+                    // parked. See the widening note at the runPipeline call.
+                    try {
+                        if (__fastPageWin && __fastPageOrigPage && __fastPageOrigPage.isValid) {
+                            __fastPageWin.activePage = __fastPageOrigPage;
+                            plog("#FAST-PAGE: window restored to the operator's page");
+                        }
+                    } catch (eFP1) {}
                 }
             }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, "Import v2 Pipeline");
         } catch (eDS) {
@@ -3647,11 +3740,45 @@ async function main() {
     }
 
     // Report files (always written, regardless of outcome)
+    //
+    // 🔴 2026-09-08: this used to be written into `parentDir` — the UNZIPPED PACKAGE
+    // FOLDER — which the clean-success path then deletes a few lines below. The run
+    // printed `Report: <path>` for a file it had just removed, on every successful
+    // import. Verified: after a clean run neither the file nor its folder existed.
+    // The report is the ONLY irreproducible thing in that folder (everything else
+    // came out of the .zip, and the .zip survives), and it is the only artifact that
+    // carries the per-entry `reason` behind the emphasis surfaced-count — so its
+    // deletion is what makes that count unclassifiable.
+    //
+    // It now goes next to the durable log, under <docDir>/script_outputs/ — the same
+    // move the .log itself was given on 2026-05-28 and for the same reason.
+    // ⚠ NOT inside script_outputs/log/: `purgeOldLogsAsync` (lib/script_log_paths.js)
+    // sweeps that directory by age (14d) and size with NO extension filter, so parking
+    // the one irreproducible diagnostic there would re-create this bug on a delay.
+    // ⚠ This also satisfies the 2026-08-22 「路径就够」 ruling rather than fighting it:
+    // no copy inside the zip, nothing beside the zip, no unzipped folder kept, and no
+    // second drifting copy of anything.
     if (__processing) __processing.update("Writing import report", 98);
     var stamp = compactTimestampNow();
-    var reportJsonPath = parentDir + sep + "writeback_v2_report_" + stamp + ".json";
+    var __reportDir = __logBaseDir + sep + "script_outputs";
+    var reportJsonPath = __reportDir + sep + "writeback_v2_report_" + stamp + ".json";
+    var __reportBody = JSON.stringify(report, null, 2);
+    var __reportWritten = false;
     try {
-        writeUtf8File(reportJsonPath, JSON.stringify(report, null, 2));
+        writeUtf8File(reportJsonPath, __reportBody);
+        __reportWritten = true;
+    } catch (eR0) {
+        // Durable location unavailable (script_outputs/ absent because ensureLogDir
+        // failed, permissions, …). Fall back to the OLD location rather than losing the
+        // report — and say so, because in the fallback it is the cleanup guard below
+        // that keeps it alive, not the path.
+        plog("report: durable write failed (" + (eR0 && eR0.message || eR0)
+            + ") — falling back to the package folder");
+        reportJsonPath = parentDir + sep + "writeback_v2_report_" + stamp + ".json";
+    }
+    try {
+        if (!__reportWritten) writeUtf8File(reportJsonPath, __reportBody);
+        plog("report: written to " + reportJsonPath);
     } catch (eR) {
         if (__processing) { try { __processing.close(); } catch (eCp) {} __processing = null;
                             try { __topLevelProcessing = null; } catch (eExp) {} }
@@ -3671,15 +3798,39 @@ async function main() {
     // 调试）。`EXPORT_KEEP_FOLDER` env var 不适用 import，import 用
     // `IMPORT_KEEP_UNZIPPED` opt-out。
     // 2026-06-20 (bypair-tofu-ux): a BLOCKED / skipped save does NOT early-return
-    // — it falls through to here. The writeback report is written into this same
-    // unzipped folder (parentDir), so cleaning it on a block deletes the very
-    // diagnostics needed to see WHY it blocked (the unowned-CJK list). Treat a
-    // skipped output like the early-return failures the comment above intends:
-    // keep the folder + report. Only the clean-success path cleans up.
+    // — it falls through to here, so a block would otherwise clean away the payload
+    // an operator needs to inspect (the unowned-CJK list). Treat a skipped output
+    // like the early-return failures the comment above intends: keep the folder.
+    // ⚠ REWRITTEN 2026-09-08 — the original reason given here was "the writeback
+    // report is written into this same unzipped folder, so cleaning it on a block
+    // deletes the very diagnostics". That is no longer true: the report now lives in
+    // <docDir>/script_outputs/ and survives every path. The guard is kept because the
+    // PAYLOAD is still worth keeping on a block, which is a different reason — left
+    // explicit so the next reader does not inherit a premise that has been retired.
+    //
+    // 🔴 And a second guard, which is what actually closes the class: refuse to delete
+    // a folder that contains the log or the report. Both normally live under the
+    // document's directory, but both fall back to `parentDir` when there is no open
+    // document with a path (see __logBaseDir above, and the report fallback) — and in
+    // that case the run would delete its own only surviving evidence. The condition is
+    // cheap and it is checked against the ACTUAL paths, not against the assumption
+    // that they are elsewhere.
     var __keepUnzipped = false;
     try { __keepUnzipped = !!(process && process.env && process.env.IMPORT_KEEP_UNZIPPED); } catch (eKE) {}
     var __outputSkipped = !!(report.output && report.output.skipped);
-    if (__zipExtractedFolderToCleanup && !__keepUnzipped && !__outputSkipped) {
+    var __holdsEvidence = false;
+    try {
+        var __folderPfx = String(__zipExtractedFolderToCleanup || "");
+        if (__folderPfx) {
+            __holdsEvidence = (String(reportJsonPath || "").indexOf(__folderPfx) === 0)
+                || (String(progressLogPath || "").indexOf(__folderPfx) === 0);
+        }
+    } catch (eHE) { __holdsEvidence = true; }   // unreadable → keep, never delete on a guess
+    if (__holdsEvidence) {
+        plog("cleanup: SKIPPED — the folder holds this run's log and/or report "
+            + "(no document directory to put them in); deleting it would remove the only evidence");
+    }
+    if (__zipExtractedFolderToCleanup && !__keepUnzipped && !__outputSkipped && !__holdsEvidence) {
         plog("cleanup: 删除 zip 解压文件夹 " + __zipExtractedFolderToCleanup);
         try {
             var cleanupRes = await FileUtils.deleteFolderRecursiveAsync(__zipExtractedFolderToCleanup, plog);

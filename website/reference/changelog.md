@@ -9,6 +9,47 @@ The version is the payload version — the number the installer prints, and the
 one it writes into every installed folder. One number covers both the InDesign
 and the Illustrator sets; they are released together.
 
+## 1.0.2 — 2026-09-08
+
+**Fixed: an import could take hours when a font was missing.**
+
+If the document used a font face this machine did not have installed, the import
+searched the whole font catalogue to be sure — and that search took **eight
+minutes**, once for every stretch of Latin text inside a Chinese paragraph. On a
+real job that added up to nearly five hours, with InDesign responsive the whole
+time and nothing on screen to say why. The same import now finishes in about
+seventy seconds; the search that took eight minutes takes half a second, and is
+remembered for the rest of the run rather than repeated.
+
+Nothing about the answer changed — a face that isn't installed is still reported
+and skipped, never quietly substituted. Only the cost of finding that out.
+
+**Fixed: a speed-up for manual runs that had never actually run.**
+
+Running a script from InDesign's Scripts panel is slower than driving it
+automatically, because InDesign keeps re-laying-out the page you are looking at
+after every change. There has been a remedy for this in the code for some time —
+park the window on a page nothing is being edited on — and it turns out it never
+executed once: it asked InDesign for the window using a name InDesign does not
+have, got nothing back, and skipped itself in silence. It now works. You will see
+the document jump to its last page during the import and return to where you were
+when it finishes.
+
+**Fixed: the report the import points you at no longer deletes itself.**
+
+Every run ends by printing the location of a JSON report. On a successful run that
+file sat inside the temporary folder the same run then cleaned up, so the path led
+nowhere. The report is now written beside the log, under `script_outputs/`, and
+survives. The import also refuses to clean up a folder that happens to hold this
+run's own log or report.
+
+**Changed: one line in the log was renamed, because it was lying.**
+
+A counter labelled `readbackFailures` was really a list of *everything the emphasis
+step wanted to mention* — including cases where the text was styled correctly and
+an existing annotation or hyperlink was correctly left alone. It is now called
+`surfaced`, and prints a breakdown by reason instead of a single number.
+
 ## 1.0.1 — 2026-09-08
 
 **Fixed: an import that looked frozen.**

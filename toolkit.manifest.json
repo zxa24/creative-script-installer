@@ -1,7 +1,7 @@
 {
   "name": "indesign-toolkit",
-  "version": "1.0.1",
-  "generatedAt": "2026-09-08T13:50:56.594Z",
+  "version": "1.0.2",
+  "generatedAt": "2026-09-08T19:38:22.294Z",
   "payloadDir": "toolkit",
   "fileCount": 126,
   "files": [
@@ -57,8 +57,8 @@
     },
     {
       "path": "1.2 Import Translation Package.idjs",
-      "sha256": "15b420406c4f308e490422893af33c98249131e6ed1ace284af6b0b8f468a8b7",
-      "bytes": 279516
+      "sha256": "1fe4784ab375060b4d30b84d6ae9fac9cd23b2faa7d71e23015fd3b5066a038f",
+      "bytes": 291121
     },
     {
       "path": "lib/annot_italic_demand.js",
@@ -452,8 +452,8 @@
     },
     {
       "path": "lib/style_applier.js",
-      "sha256": "9bd48e1e892ff66f2ca88290cf75b499f9f90fee6aa8b4cba17afb918c61fd2b",
-      "bytes": 154314
+      "sha256": "39fb392a632d70967f3fdecf9afd00783a2bae6a0ce14796fbd20ea26389ff08",
+      "bytes": 161813
     },
     {
       "path": "lib/style_config_io.js",
@@ -497,8 +497,8 @@
     },
     {
       "path": "lib/v2_pipeline.js",
-      "sha256": "41e41c14fd10a1adef5cde9d1ffbc97cb67125f412980c9a4e6e45815e72628d",
-      "bytes": 267338
+      "sha256": "89cc9c133a8bf8e0a5d5615cc0cc6fa0ba50a385832c27b4436cd2fb23ea9c0f",
+      "bytes": 276195
     },
     {
       "path": "lib/vendor/babel.min.js",
