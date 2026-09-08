@@ -212,6 +212,11 @@ collision live on every machine nobody got to.
 If a plain `indesign-toolkit` folder is present, the installer removes it only
 when it is one of its own earlier installations — recognised by the version
 marker it writes. A link, or a folder someone else put there, is left alone.
+
+If a link sits at the `-stable` name itself — a development bridge pointing at a
+working tree — the installer refuses to write there and says so, because an
+install that replaced it would look successful while having deleted your link.
+Rename or remove the link and run again.
 :::
 
 What it installs:
@@ -232,6 +237,10 @@ What it installs:
   file is staged beside itself and then renamed, so the window in which the
   folder holds a mixture is as small as that permission model allows — but it is
   not the same guarantee as the InDesign path, and it is not claimed to be.
+  An update also removes from that folder any script an older version shipped
+  and this one does not — otherwise a renamed script would appear twice — and
+  treats every `.jsx` in the folder as its own for that purpose. Files of any
+  other kind that you put there are left alone, on update and on uninstall.
 - **A successful update does not leave the old version behind.** The installer
   does keep a temporary copy while it swaps, but it removes that copy once the
   new folder is in place: InDesign scans the Scripts panel recursively, so a

@@ -1,11 +1,11 @@
-# indesign-toolkit — full documentation
+# Creative Script Installer — full documentation
 
-> Adobe InDesign scripts for a translation and localization workflow: export a translation package, import the translated text back into the layout, and repair typography afterwards.
+> One command installs and updates scripts for Adobe InDesign and Illustrator. The InDesign set carries a translation and localization workflow: export a translation package, import the translated text back into the layout, and repair typography afterwards. The Illustrator set is five stand-alone tools.
 
-This file is the concatenated full text of all 11 pages of https://zxa24.github.io/creative-script-installer/. It is generated from the site's Markdown sources; do not edit it by hand.
+This file is the concatenated full text of all 13 pages of https://zxa24.github.io/creative-script-installer/. It is generated from the site's Markdown sources; do not edit it by hand.
 
 Contents:
-- indesign-toolkit — https://zxa24.github.io/creative-script-installer/
+- Creative Script Installer — https://zxa24.github.io/creative-script-installer/
 - What this toolkit is — https://zxa24.github.io/creative-script-installer/guide/
 - Install and update — https://zxa24.github.io/creative-script-installer/guide/install
 - The normal path — https://zxa24.github.io/creative-script-installer/guide/workflow
@@ -15,22 +15,24 @@ Contents:
 - Group 2 — Type & Styles — https://zxa24.github.io/creative-script-installer/scripts/type-and-styles
 - Group 3 — Check & Repair — https://zxa24.github.io/creative-script-installer/scripts/check-and-repair
 - Group 4 — Brand Presets — https://zxa24.github.io/creative-script-installer/scripts/brand-presets
+- Illustrator scripts — https://zxa24.github.io/creative-script-installer/scripts/illustrator
 - Advanced install and distribution — https://zxa24.github.io/creative-script-installer/reference/advanced
+- Changelog — https://zxa24.github.io/creative-script-installer/reference/changelog
 
 ---
 
 <!-- page: index.md -->
-# indesign-toolkit
+# Creative Script Installer
 
 Source: https://zxa24.github.io/creative-script-installer/
 
-Summary: Adobe InDesign scripts for a translation and localization workflow — export a translation package, import the translated text back into the layout, and repair typography afterwards.
+Summary: One command installs and updates scripts for Adobe InDesign and Illustrator. The InDesign set takes a laid-out document out to a translator and brings the translated text back into the same layout; the Illustrator set is five stand-alone tools.
 
-indesign-toolkit
+Creative Script Installer
 
 Translation, back into the layout.
 
-A set of Adobe InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke.
+One pasted command installs a set of InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke. Five Illustrator tools ride along.
 
 Two scripts for the normal day
 
@@ -46,10 +48,11 @@ One command on Windows or macOS. No GitHub account, no git, no password - except
 
 ## What this is
 
-`indesign-toolkit` is a folder of Adobe InDesign scripts that live in the
-**Scripts panel**. You install it with one command, and from then on the same
-command updates it. The installer carries a small set of Illustrator scripts
-too, and says nothing about them if you have no Illustrator.
+**Creative Script Installer** puts two sets of scripts where the applications
+read them, with one command, and updates them with the same command afterwards.
+The larger set, `indesign-toolkit`, lives in InDesign's **Scripts panel**; a
+small set of Illustrator tools lives under Illustrator's File → Scripts, and is
+not mentioned at all if you have no Illustrator.
 
 The scripts serve one job: taking an InDesign document that is already laid out
 in one language, getting its text translated somewhere else, and putting the
@@ -368,6 +371,11 @@ If a plain `indesign-toolkit` folder is present, the installer removes it only
 when it is one of its own earlier installations — recognised by the version
 marker it writes. A link, or a folder someone else put there, is left alone.
 
+If a link sits at the `-stable` name itself — a development bridge pointing at a
+working tree — the installer refuses to write there and says so, because an
+install that replaced it would look successful while having deleted your link.
+Rename or remove the link and run again.
+
 What it installs:
 
 - **Scripts only** — the `.idjs` files plus their `lib/` folder.
@@ -386,6 +394,10 @@ What it installs:
   file is staged beside itself and then renamed, so the window in which the
   folder holds a mixture is as small as that permission model allows — but it is
   not the same guarantee as the InDesign path, and it is not claimed to be.
+  An update also removes from that folder any script an older version shipped
+  and this one does not — otherwise a renamed script would appear twice — and
+  treats every `.jsx` in the folder as its own for that purpose. Files of any
+  other kind that you put there are left alone, on update and on uninstall.
 - **A successful update does not leave the old version behind.** The installer
   does keep a temporary copy while it swaps, but it removes that copy once the
   new folder is in place: InDesign scans the Scripts panel recursively, so a
@@ -1173,6 +1185,102 @@ Read all four together.
 
 ---
 
+<!-- page: scripts/illustrator.md -->
+# Illustrator scripts
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/illustrator
+
+Summary: The five Illustrator tools the installer carries — Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts, CJK Composer and Mojikumi — what each asks, what each writes, and where.
+
+# Illustrator scripts
+
+Five tools, installed only when Illustrator is on the machine, under
+**File → Scripts → illustrator-toolkit-stable**. They are not numbered: each
+stands alone, and none of them is part of the InDesign translation path.
+
+All five refuse to run with no document open. Three of them also need the
+document to have been **saved** first, because they write next to it.
+
+> **Undo**
+Illustrator's own undo applies. Scripts that write files (the three export
+tools) cannot un-write them — the files stay where they were put.
+
+## Unembed All Images
+
+Turns embedded images back into linked files.
+
+- **Asks:** a dialog headed *Asset Management* showing how many embedded images
+  and how many broken links it found, with two checkboxes — export the embedded
+  images and relink them as external files; remove all broken links — and the
+  output folder, which you can change.
+- **Writes:** one file per embedded image into that folder, as Photoshop
+  (`.psd`), then relinks the artwork to those files. The default folder sits
+  next to the document; if it already exists, a numbered sibling is used rather
+  than writing into it.
+- **Needs:** a saved document.
+- If there is nothing embedded and nothing broken, it says so and stops.
+
+## Export Artboard PDFs
+
+One PDF per artboard, each made by duplicating that artboard into a new
+document so nothing from the other artboards bleeds in.
+
+- **Checks first:** broken links. If any, a dialog offers to relink them from a
+  folder you choose, skip them during export, delete them from the document, or
+  cancel.
+- **Asks:** a dialog headed *Export Artboards as PDF* that names how many
+  artboards it will export, with the export options.
+- **Writes:** into a new folder next to the document, named with a timestamp
+  and `_export`. Depending on the options, each artboard is saved as a PDF, a
+  print-ready PDF, or an `.ai` file.
+- **Needs:** a saved document with at least one artboard.
+
+## Export Small PDF
+
+The quick end-of-job actions in one dialog.
+
+- **Asks:** a dialog headed *Quick Actions* with four checkboxes — export the
+  smallest PDF, export the largest PDF, save the document, package it.
+- **Writes:** the PDFs next to the document; the package into a folder next to
+  it.
+- **Needs:** a saved document.
+
+## Replace Fonts
+
+Batch font replacement across the document, from a list of pairs.
+
+- **Asks:** a resizable dialog headed *Replace Fonts*. A filter box and
+  **Search** narrow the font list; **+ Add** adds a *from → to* row; rules can
+  be **saved** and **loaded** again later. Three options: list every font in the
+  *From* menu (not only the ones in use), grow text frames that overset after
+  the replacement, and touch **halfwidth characters only** — Latin letters,
+  digits and punctuation — leaving CJK text on its current font. A *Scope*
+  panel chooses what to run over.
+- **Writes:** nothing to disk; it edits the document. Saved rules go where you
+  put them.
+
+## CJK Composer and Mojikumi
+
+Puts CJK text on the right composer, and optionally the right spacing and
+line-breaking sets.
+
+- **Asks:** if something is selected, whether to process only the selected text
+  frames (OK) or every text frame (Cancel); then a confirmation of what it is
+  about to change, with a preview of the effect.
+- **Does:** switches the text to the CJK every-line composer (or the
+  single-line one, if the script is configured that way) and, if enabled,
+  applies a Mojikumi set and a Kinsoku set. Which sets: the ones named at the
+  top of the script, or — if left blank — one that looks Chinese or Japanese
+  among those the document has; if none does, that part is skipped.
+- **Writes:** nothing to disk.
+- **Configuring it:** the choices (selection or whole document, composer mode,
+  whether to set Mojikumi and Kinsoku, which sets by name) are variables at the
+  top of the script, in a block marked as the place to change them. The
+  defaults are: whole document, every-line composer, both sets on, names
+  guessed.
+
+---
+
 <!-- page: reference/advanced.md -->
 # Advanced install and distribution
 
@@ -1267,6 +1375,21 @@ appended to and nothing grows. Send that file on; delete it when you are done.
 
 A failed run tells you this command itself, so nobody has to remember it.
 
+## How Illustrator's Scripts folder is found
+
+Illustrator keeps one Scripts folder per language inside the application, and
+the folder's **name is localised** — `Scripts`, `脚本`, `スクリプト`, `Komut
+Dosyaları` and so on. The installer does not match the name. Inside the language
+folder Illustrator has recorded as its own (see the install page), it looks for
+**the sub-folder that contains `.jsx` files** — normally Adobe's three sample
+scripts, or an earlier installation of ours.
+
+That is what makes the one known failure mode: if the sample scripts were deleted
+and nothing of ours is there yet, no folder identifies itself, and the run says
+*Found Illustrator, but could not identify its Scripts folder* and stops with
+exit code 3. Putting any `.jsx` back into the right folder — or repairing the
+Illustrator installation, which restores the samples — resolves it.
+
 ## Building the distribution bundle
 
 From the development repository:
@@ -1354,3 +1477,57 @@ npm run build    # regenerate, then build the site
 The generator reads the page list out of `.vitepress/site.mjs` — the same list
 that produces the navigation — and fails the build if it finds a Markdown page
 that is not on it. That is what keeps the two surfaces from drifting apart.
+
+---
+
+<!-- page: reference/changelog.md -->
+# Changelog
+
+Source: https://zxa24.github.io/creative-script-installer/reference/changelog
+
+Summary: What each released version of the toolkit and its installer contains, newest first. The version is the one the installer reports and the one written into each installed folder.
+
+# Changelog
+
+The version is the payload version — the number the installer prints, and the
+one it writes into every installed folder. One number covers both the InDesign
+and the Illustrator sets; they are released together.
+
+## 1.0.0 — 2026-09-08
+
+First public release.
+
+**Installer**
+
+- One pasted command installs and updates, on Windows (`irm … | iex`) and macOS
+  (`curl … | bash`); the same command run again updates. Everything is
+  downloaded and checksum-verified before anything is written.
+- An interactive menu when run in a terminal — Install, Update, Repair,
+  Uninstall — offering only the choices that apply.
+- Illustrator support with the single administrator step it needs, done in the
+  session: a password on macOS, the Windows prompt on Windows, asked only when
+  actually needed, and skipped with an explanation when Illustrator has never
+  been launched.
+- No log file unless asked for (`--log` / `CSI_LOG=1`); when asked, one file on
+  the Desktop per run.
+- `install-update.bat` / `.command` for machines without a terminal; they
+  install the copy they sit in.
+
+**InDesign — 15 scripts in four groups**
+
+- `1.x` Workflow: Export Translation Package, Import Translation Package.
+- `2.x` Type and Styles: Apply Font Pairing, Apply CJK Styles, Set Selection
+  Weight, Reorganize Styles, Repair Cluster GREP, Convert Underline to Rule.
+- `3.x` Check and Repair: Snapshot Before Apply, Repair After Apply, Relink
+  Missing Links, Highlight Translation Changes, Save and Reveal.
+- `4.x` Brand Presets: Export Brand Preset, Apply Brand Preset.
+
+**Illustrator — 5 tools**
+
+- Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts,
+  CJK Composer and Mojikumi.
+
+**Documentation**
+
+- This site, in English, with a machine-readable copy (`llms.txt`,
+  `llms-full.txt`) so an AI assistant can be handed the address and asked.

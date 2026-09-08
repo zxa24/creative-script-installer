@@ -1,13 +1,13 @@
 ---
 layout: home
-title: indesign-toolkit
-titleTemplate: InDesign scripts for translation work
-description: Adobe InDesign scripts for a translation and localization workflow — export a translation package, import the translated text back into the layout, and repair typography afterwards.
+title: Creative Script Installer
+titleTemplate: Scripts for InDesign and Illustrator, installed with one command
+description: One command installs and updates scripts for Adobe InDesign and Illustrator. The InDesign set takes a laid-out document out to a translator and brings the translated text back into the same layout; the Illustrator set is five stand-alone tools.
 
 hero:
-  name: indesign-toolkit
+  name: Creative Script Installer
   text: Translation, back into the layout.
-  tagline: A set of Adobe InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke.
+  tagline: One pasted command installs a set of InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke. Five Illustrator tools ride along.
   actions:
     - theme: brand
       text: Install it
@@ -36,10 +36,11 @@ features:
 
 ## What this is
 
-`indesign-toolkit` is a folder of Adobe InDesign scripts that live in the
-**Scripts panel**. You install it with one command, and from then on the same
-command updates it. The installer carries a small set of Illustrator scripts
-too, and says nothing about them if you have no Illustrator.
+**Creative Script Installer** puts two sets of scripts where the applications
+read them, with one command, and updates them with the same command afterwards.
+The larger set, `indesign-toolkit`, lives in InDesign's **Scripts panel**; a
+small set of Illustrator tools lives under Illustrator's File → Scripts, and is
+not mentioned at all if you have no Illustrator.
 
 The scripts serve one job: taking an InDesign document that is already laid out
 in one language, getting its text translated somewhere else, and putting the

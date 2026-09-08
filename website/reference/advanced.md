@@ -92,6 +92,21 @@ appended to and nothing grows. Send that file on; delete it when you are done.
 
 A failed run tells you this command itself, so nobody has to remember it.
 
+## How Illustrator's Scripts folder is found
+
+Illustrator keeps one Scripts folder per language inside the application, and
+the folder's **name is localised** — `Scripts`, `脚本`, `スクリプト`, `Komut
+Dosyaları` and so on. The installer does not match the name. Inside the language
+folder Illustrator has recorded as its own (see the install page), it looks for
+**the sub-folder that contains `.jsx` files** — normally Adobe's three sample
+scripts, or an earlier installation of ours.
+
+That is what makes the one known failure mode: if the sample scripts were deleted
+and nothing of ours is there yet, no folder identifies itself, and the run says
+*Found Illustrator, but could not identify its Scripts folder* and stops with
+exit code 3. Putting any `.jsx` back into the right folder — or repairing the
+Illustrator installation, which restores the samples — resolves it.
+
 ## Building the distribution bundle
 
 From the development repository:

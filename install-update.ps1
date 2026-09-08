@@ -152,6 +152,28 @@ function Invoke-Download([string]$url, [string]$outFile) {
   Invoke-WebRequest -Uri $url -OutFile $outFile -Headers $headers -UseBasicParsing -TimeoutSec 120
 }
 
+# 本地 -Source 的版本号。-Source 可以是目录, 也可以是 .zip —— 与 macOS 侧同样接受,
+# 首部注释也这么写。Get-ChildItem 在一个普通文件上递归找不到任何东西, 于是版本
+# 留空, 每个安装看起来都是最新, 菜单永远给不出 Update; macOS 侧修过同一个坑
+# (unzip -p), 这边一直没有。抽成函数, 是为了能拿文件里的真实字节单独测它。
+function Get-LocalSourceVersion([string]$src) {
+  try {
+    if (Test-Path -LiteralPath $src -PathType Leaf) {
+      Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+      $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $src).Path)
+      try {
+        $entry = $zip.Entries | Where-Object { $_.Name -eq $MANIFEST_NAME } | Select-Object -First 1
+        if (-not $entry) { return $null }
+        $sr = New-Object System.IO.StreamReader($entry.Open())
+        try { return ($sr.ReadToEnd() | ConvertFrom-Json).version } finally { $sr.Dispose() }
+      } finally { $zip.Dispose() }
+    }
+    $lm = Get-ChildItem -Path $src -Recurse -Filter $MANIFEST_NAME -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($lm) { return (Get-Content $lm.FullName -Raw | ConvertFrom-Json).version }
+  } catch { }
+  return $null
+}
+
 function Resolve-RemoteUrls {
   $zipUrl      = $env:TOOLKIT_ZIP_URL
   $manifestUrl = $env:TOOLKIT_MANIFEST_URL
@@ -861,13 +883,12 @@ try {
     # 恰好本来就是最新的那种运行, 读数完全一样。
     $rver = $null
     if ($Source) {
-      try {
-        $lm = Get-ChildItem -Path $Source -Recurse -Filter $MANIFEST_NAME -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($lm) { $rver = (Get-Content $lm.FullName -Raw | ConvertFrom-Json).version }
-      } catch { }
+      $rver = Get-LocalSourceVersion $Source
     } else {
       try { $rver = (Fetch-RemoteManifest (Resolve-RemoteUrls).Manifest).version } catch { }
     }
+    # 进日志: 这个值决定菜单给不给 Update, 而它读空时屏幕上没有任何迹象。
+    Log ("available version: " + $(if ($rver) { $rver } else { '(none read)' }) + " from " + $(if ($Source) { $Source } else { 'remote' }))
     $anyInstalled = $false; $allCurrent = $true
     Say ''
     foreach ($p in $panels) {

@@ -7,12 +7,16 @@
 // Override the published origin/base at build time, e.g.:
 //   SITE_ORIGIN=https://example.github.io SITE_BASE=/creative-script-installer/ npm run build
 
-export const SITE_TITLE = "indesign-toolkit";
+// The repository's name, not the InDesign folder's. The site had three names
+// for one thing - this, the repository, and the README - and the InDesign
+// set is now one of two things it installs. Owner decision, 2026-09-08.
+export const SITE_TITLE = "Creative Script Installer";
 
 export const SITE_DESCRIPTION =
-  "Adobe InDesign scripts for a translation and localization workflow: " +
-  "export a translation package, import the translated text back into the " +
-  "layout, and repair typography afterwards.";
+  "One command installs and updates scripts for Adobe InDesign and Illustrator. " +
+  "The InDesign set carries a translation and localization workflow: export a " +
+  "translation package, import the translated text back into the layout, and " +
+  "repair typography afterwards. The Illustrator set is five stand-alone tools.";
 
 export const SITE_ORIGIN = (process.env.SITE_ORIGIN || "https://zxa24.github.io").replace(/\/+$/, "");
 
@@ -53,7 +57,7 @@ export const SECTIONS = [
         text: "Install and update",
         link: "/guide/install",
         file: "guide/install.md",
-        summary: "One-click install on Windows and macOS, the SmartScreen/Gatekeeper prompts, install paths, and the atomic-replace update behaviour."
+        summary: "One pasted command on Windows or macOS, how to open a terminal, what the installer changes and does not, the single administrator step Illustrator needs, uninstalling, and how updates behave."
       },
       {
         text: "The normal path",
@@ -76,7 +80,7 @@ export const SECTIONS = [
         text: "All scripts",
         link: "/scripts/",
         file: "scripts/index.md",
-        summary: "The complete numbered index of every script the installer distributes."
+        summary: "Every script the installer distributes: the numbered InDesign groups, and the Illustrator tools."
       },
       {
         text: "1. Workflow",
@@ -101,6 +105,12 @@ export const SECTIONS = [
         link: "/scripts/brand-presets",
         file: "scripts/brand-presets.md",
         summary: "4.1 Export Brand Preset and 4.2 Apply Brand Preset — move tuned paragraph-style geometry between sibling documents."
+      },
+      {
+        text: "Illustrator",
+        link: "/scripts/illustrator",
+        file: "scripts/illustrator.md",
+        summary: "The five Illustrator tools — Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts, CJK Composer and Mojikumi — what each asks and writes."
       }
     ]
   },
@@ -111,7 +121,13 @@ export const SECTIONS = [
         text: "Advanced install and distribution",
         link: "/reference/advanced",
         file: "reference/advanced.md",
-        summary: "Installer flags, the TOOLKIT_SOURCE / TOOLKIT_ZIP_URL / TOOLKIT_AUTH_TOKEN overrides, and how the distribution bundle is produced."
+        summary: "Installer flags, the TOOLKIT_SOURCE / TOOLKIT_ZIP_URL / TOOLKIT_AUTH_TOKEN overrides, exit codes, and how the distribution bundle is produced."
+      },
+      {
+        text: "Changelog",
+        link: "/reference/changelog",
+        file: "reference/changelog.md",
+        summary: "What each released version contains, newest first."
       }
     ]
   }
