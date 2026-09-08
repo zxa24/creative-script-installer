@@ -1,7 +1,7 @@
 {
   "name": "indesign-toolkit",
   "version": "1.0.0",
-  "generatedAt": "2026-09-08T13:22:09.505Z",
+  "generatedAt": "2026-09-08T13:32:25.124Z",
   "payloadDir": "toolkit",
   "fileCount": 126,
   "files": [
@@ -627,8 +627,8 @@
     },
     {
       "path": "3.1 Snapshot Before Apply.idjs",
-      "sha256": "4fb7f443454ed1888c1b42931dc0ec01d4d7cd0fc74864b006f717b4c25c7db9",
-      "bytes": 5926
+      "sha256": "6ff500ebde5a8373d2b6c035daea2219eef05752fb47e6eee31d2540b4494ead",
+      "bytes": 5925
     },
     {
       "path": "3.4 Highlight Translation Changes.idjs",

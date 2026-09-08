@@ -160,7 +160,7 @@ function main() {
     }
 
     log("=== Snapshot complete: " + storyOrder.length + " stories captured ===");
-    log("Next step: run your text replacement + CJK apply, then run repair_after_apply.idjs");
+    log("Next step: run your text replacement + CJK apply, then run 3.2 Repair After Apply");
 
     flushLog(outLogPath);
 }
