@@ -476,6 +476,9 @@ function _widenOversetFrameForEmphasis(para, workDoc, deps, applyResults, tid) {
             try { return (frame.overflows === true); } catch (e) { return false; }
         };
 
+        var __wlog = (deps && typeof deps.plog === "function") ? deps.plog : null;
+        var __wt0 = (typeof Date !== "undefined" && Date.now) ? Date.now() : 0;
+
         var MAX_ADD = Math.max(origWidth * 3, 3000);     // horizontal ceiling (a vertical-only overflow can't clear)
         // Phase 1 — geometric growth to BRACKET the minimal clearing width. Small initial
         // step + growth so we find a clearing upper bound fast WITHOUT a big overshoot.
@@ -491,8 +494,9 @@ function _widenOversetFrameForEmphasis(para, workDoc, deps, applyResults, tid) {
             it++;
         }
         // Phase 2 — binary-search (lo, hi] down to the minimal clearing width (~2pt).
+        var it2 = 0;                                     // hoisted: the log below reads it
         if (hi >= 0) {
-            var it2 = 0;
+            it2 = 0;
             while (hi - lo > 2 && it2 < 40) {
                 var mid = (lo + hi) / 2;
                 var bset = _setAdded(mid);
@@ -505,6 +509,24 @@ function _widenOversetFrameForEmphasis(para, workDoc, deps, applyResults, tid) {
 
         var stillOverflows = true;
         try { stillOverflows = (frame.overflows === true); } catch (eO3) {}
+
+        // One line per widened frame, carrying the two numbers that say WHY it was
+        // slow. Every iteration of either phase costs a story recompose, so
+        // `phase1=40 cleared=false` is the expensive-and-useless case: the overflow
+        // was vertical, the horizontal ceiling could never clear it, and the whole
+        // budget was spent before reverting. From outside, that case was previously
+        // indistinguishable from a hang - the pass logged one line, at the end.
+        if (__wlog) {
+            var __wms = ((typeof Date !== "undefined" && Date.now) ? Date.now() : 0) - __wt0;
+            try {
+                __wlog("widen: frame=" + frameId + " dir=" + direction
+                    + " phase1=" + it + "/" + MAX_IT
+                    + " phase2=" + it2
+                    + " cleared=" + (!stillOverflows)
+                    + (stillOverflows ? " (reverted - not horizontally fixable)" : "")
+                    + " +" + __wms + "ms");
+            } catch (eWL) {}
+        }
         if (stillOverflows) {
             // Never cleared within the horizontal ceiling → vertical / not horizontally
             // fixable (out of SCOPE). REVERT to the original box: the width bought nothing,
@@ -1615,8 +1637,16 @@ function runEmphasisSettlePass(workDoc, pending) {
     d.deferEmphasis = false;
     d.emphasisOnly  = true;
 
+    // Progress, on the same principle as the apply loop: a phase that can run for
+    // minutes has to say so WHILE it runs, not once at the end.
+    var __splog = (d && typeof d.plog === "function") ? d.plog : null;
+    var __spNow = function () { return (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; };
+    var __spT0 = __spNow();
+    if (__splog) { try { __splog("emphasis settle: begin worklist=" + pending.worklist.length); } catch (eS0) {} }
+
     for (var i = 0; i < pending.worklist.length; i++) {
         var w = pending.worklist[i];
+        var __spItem = __spNow();
         if (!w || !w.lr) continue;
         // Re-resolve the wrapper: the paragraph may have been split/merged since pass 1
         // (soft-break merge deletes paragraphs outright), and a leaked wrapper reads the
@@ -1636,6 +1666,18 @@ function runEmphasisSettlePass(workDoc, pending) {
         try {
             applyOnePara(workDoc, w.lr, pending.sheet, pending.plan, w.t, applyResults, d);
             out.parasApplied++;
+            // Every 25, and ANY single item over a second - a slow phase is usually a
+            // few slow items, and an every-N line hides exactly those. The widen lines
+            // above then name the frame.
+            if (__splog) {
+                var __spMs = __spNow() - __spItem;
+                if (__spMs > 1000 || (i % 25) === 0) {
+                    try {
+                        __splog("emphasis settle: " + (i + 1) + "/" + pending.worklist.length
+                            + " (item +" + __spMs + "ms, phase +" + (__spNow() - __spT0) + "ms)");
+                    } catch (eS1) {}
+                }
+            }
         } catch (eE) {
             out.throws++;
             applyResults.clusterApplyFailures.push({
@@ -2426,6 +2468,15 @@ function runPipeline(workDoc, ctx, deps) {
     };
 
     var paraDeps = {
+        // #REALTIME-LOG, again. The 2026-05-26 note in import_integrated.idjs says
+        // why the top-level deps carries plog: without it a 160s sub-phase writes
+        // nothing and the log is useless the moment the run freezes. paraDeps did
+        // not copy it through, so everything downstream of here - applyOnePara, the
+        // overset widen, the emphasis settle pass - was silent for exactly that
+        // reason. Measured 2026-09-08: a real import sat at 100% of one core for
+        // 8+ minutes between two log lines, with nothing from outside able to tell
+        // it apart from a hang.
+        plog: deps.plog,
         lib: deps.lib,
         ColorSpace: deps.ColorSpace,
         // SPEC §13.3.2: the combined-char-style emphasis helper's _resolveFillColor

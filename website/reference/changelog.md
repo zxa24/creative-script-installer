@@ -9,6 +9,31 @@ The version is the payload version — the number the installer prints, and the
 one it writes into every installed folder. One number covers both the InDesign
 and the Illustrator sets; they are released together.
 
+## 1.0.1 — 2026-09-08
+
+**Fixed: an import that looked frozen.**
+
+The emphasis settle pass — the step that applies emphasis once the layout has
+settled, and widens a frame whose text oversets — wrote **one log line, at the
+end**. A real import spent more than eight minutes inside it at full CPU with
+nothing between two log lines, and from outside that is indistinguishable from
+a crash.
+
+The cause was one missing hand-off: the logging channel reached the pipeline
+but was not passed down to the code doing this work, so it had nothing to write
+with. It does now, and the phase reports as it goes:
+
+- when it starts, and how many sites it has to visit;
+- every 25 sites, and **any single site that takes over a second**;
+- one line per widened frame, naming the frame and how hard it tried.
+
+That last line also answers a question the old log could not: a frame whose
+text oversets *vertically* can never be fixed by making it wider, so the search
+spends its whole budget and reverts. It now says so, instead of looking like a
+hang.
+
+Nothing about what the scripts *do* changed in this release.
+
 ## 1.0.0 — 2026-09-08
 
 First public release.

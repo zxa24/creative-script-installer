@@ -1,7 +1,7 @@
 {
   "name": "indesign-toolkit",
-  "version": "1.0.0",
-  "generatedAt": "2026-09-08T13:32:25.124Z",
+  "version": "1.0.1",
+  "generatedAt": "2026-09-08T13:50:56.594Z",
   "payloadDir": "toolkit",
   "fileCount": 126,
   "files": [
@@ -497,8 +497,8 @@
     },
     {
       "path": "lib/v2_pipeline.js",
-      "sha256": "cda5e50595912eaccc488cd90da8deab4aefe5dfa99688002e5dceccdf5735d9",
-      "bytes": 264291
+      "sha256": "41e41c14fd10a1adef5cde9d1ffbc97cb67125f412980c9a4e6e45815e72628d",
+      "bytes": 267338
     },
     {
       "path": "lib/vendor/babel.min.js",
