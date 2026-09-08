@@ -1,6 +1,8 @@
 # website/ — developer notes
 
-VitePress documentation site for `indesign-toolkit`.
+VitePress documentation site for Creative Script Installer — the installer and
+both script sets it carries (`indesign-toolkit` for InDesign, and the
+Illustrator tools).
 
 This file lives inside `.vitepress/` deliberately: VitePress does not render
 pages from this directory, and `gen-llms.mjs` skips it, so a note here cannot

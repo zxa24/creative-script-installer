@@ -1,9 +1,14 @@
 #!/bin/bash
-# install-update.sh  —  InDesign 工具箱 一键安装/更新 (macOS)
+# install-update.sh  —  Creative Script Installer 一键安装/更新 (macOS)
 #
-# 设计师双击 "install-update.command" (它调用本脚本) 即可。与 Windows 版对等:
-#   探测 Scripts Panel → 取远端版本 → 已最新则跳过 → 否则下载 zip →
-#   校验 sha256 (shasum -c) → 备份旧版 → 原子换入 → 失败自动回滚。绝不半装。
+# 装两套脚本: InDesign 的(Scripts Panel, 用户目录, 无需权限)与 Illustrator 的
+# (应用包内部, 需要一次性管理员步骤)。没装某个应用时对它只字不提。
+#
+# 设计师双击 "install-update.command" (它调用本脚本) 即可; 主路径是一行命令
+# (install.sh)。与 Windows 版对等:
+#   探测两个应用 → 取版本 → 已最新则跳过 → 否则下载 zip → 校验 sha256
+#   (shasum -c) → InDesign 整目录原子换入(失败回滚) / Illustrator 目录内逐文件
+#   原子替换。绝不半装。
 #
 # 依赖均系统自带: bash / curl / unzip / shasum。无需 jq / python。
 #

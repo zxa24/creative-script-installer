@@ -1,9 +1,13 @@
 ﻿<#
-  install-update.ps1  —  InDesign 工具箱 一键安装/更新 (Windows)
+  install-update.ps1  —  Creative Script Installer 一键安装/更新 (Windows)
 
-  设计师双击 "install-update.bat"（它以 -ExecutionPolicy Bypass 调本脚本）即可。
-  流程: 探测 Scripts Panel → 取远端版本 → 已最新则跳过 → 否则下载 zip →
-        校验 sha256 → 备份旧版 → 原子换入 → 失败自动回滚。绝不半装。
+  装两套脚本: InDesign 的（Scripts Panel，用户目录，无需权限）与 Illustrator 的
+  （应用包内部，需要一次性管理员步骤）。没装某个应用时对它只字不提。
+
+  设计师双击 "install-update.bat"（它以 -ExecutionPolicy Bypass 调本脚本）即可；
+  主路径是一行命令（install.ps1）。流程: 探测两个应用 → 取版本 → 已最新则跳过
+  → 否则下载 zip → 校验 sha256 → InDesign 整目录原子换入（失败回滚）/
+  Illustrator 目录内逐文件原子替换。绝不半装。
 
   兼容 Windows PowerShell 5.1（设计师机器自带；不依赖 pwsh 7）。
 
