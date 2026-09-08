@@ -147,7 +147,9 @@ function Invoke-Download([string]$url, [string]$outFile) {
   Status 'Loading...'
   $headers = @{}
   if ($env:TOOLKIT_AUTH_TOKEN) { $headers['Authorization'] = "token $($env:TOOLKIT_AUTH_TOKEN)" }
-  Invoke-WebRequest -Uri $url -OutFile $outFile -Headers $headers -UseBasicParsing
+  # 超时是有意给的。没有超时的话, 一个丢包(而不是拒绝)的防火墙会让运行停在
+  # "Checking for updates..." 上一动不动到 IWR 自己的默认上限, 屏幕上什么都没有。
+  Invoke-WebRequest -Uri $url -OutFile $outFile -Headers $headers -UseBasicParsing -TimeoutSec 120
 }
 
 function Resolve-RemoteUrls {
@@ -162,7 +164,8 @@ function Resolve-RemoteUrls {
 function Fetch-RemoteManifest([string]$manifestUrl) {
   $headers = @{ 'Cache-Control' = 'no-cache' }
   if ($env:TOOLKIT_AUTH_TOKEN) { $headers['Authorization'] = "token $($env:TOOLKIT_AUTH_TOKEN)" }
-  $json = Invoke-WebRequest -Uri $manifestUrl -Headers $headers -UseBasicParsing
+  # 这是那个"小 manifest"预检, 它跑在任何输出之前 —— 卡在这里是最难看的一种卡。
+  $json = Invoke-WebRequest -Uri $manifestUrl -Headers $headers -UseBasicParsing -TimeoutSec 20
   return ($json.Content | ConvertFrom-Json)
 }
 
@@ -180,7 +183,14 @@ function Test-PanelsNeedUpdate($panels, [string]$version, $aiTargets) {
     # 但它没有因此被忘记 —— Show-PendingIllustratorSetup 会在本函数能把流程
     # 引向的每条路径上打印它, 包括"已是最新版本"那条退出。
     $dst = Join-Path $t.Dir $AI_FOLDER
-    if (-not (Test-Path -LiteralPath $dst)) { continue }
+    # 目录不存在 != 没事可做。只有在【同时写不进去】时才是没事可做(那是在等
+    # 一次性管理员步骤, 由 Show-PendingIllustratorSetup 打印)。写得进去却没有
+    # 目录 = 根本没装, 在这里跳过会让运行对一台什么都没装的机器回答
+    # "Already up to date" 然后退出 0。
+    if (-not (Test-Path -LiteralPath $dst)) {
+      if (Test-IllustratorWritable $t.Dir) { return $true }
+      continue
+    }
     $marker = Join-Path $dst $VERSION_MARKER
     if (-not (Test-Path $marker)) { return $true }
     try { $cur = (Get-Content $marker -Raw | ConvertFrom-Json).version } catch { return $true }
@@ -257,6 +267,14 @@ function Get-Sha256Hex([string]$path) {
 
 function Verify-Payload([object]$manifest, [string]$payloadDir) {
   $bad = @()
+  # 没有 files 不是"没有不匹配", 是"根本没校验"。此前两种情况都返回空数组, 于是
+  # 一份丢了 files 的 manifest 会让整道闸静默让行 —— 而控制台输出与真的校验过
+  # 126 个文件时【逐字相同】(唯一区别在默认关闭的日志里)。macOS 侧对等情况一直是
+  # 硬失败退出 4; 这个 return 让 Windows 也走到 exit 4, 两边现在一致 —— 描述的是
+  # 打这个补丁【之前】的状态, 别把它读成现状。
+  if (-not $manifest.files -or @($manifest.files).Count -eq 0) {
+    return @('the manifest carries no file list - nothing could be verified')
+  }
   foreach ($f in $manifest.files) {
     $p = Join-Path $payloadDir ($f.path -replace '/', '\')
     if (-not (Test-Path $p)) { $bad += "缺文件 $($f.path)"; continue }
@@ -278,6 +296,11 @@ function Verify-Payload([object]$manifest, [string]$payloadDir) {
 # 单看任一条纸面上都够; 两条都在是因为失效方式不同: 里面混了个杂散标记文件的链接
 # 骗得过第 2 条, 手工建的普通目录骗得过第 1 条。
 function Remove-LegacyFolder([string]$panelDir) {
+  # dry run 不许删任何东西。它是在调用点被放宽到也走 `skip` 路径之后才可达的:
+  # `skip` 在 install_into 的 dry-run 闸【之前】返回, 于是一台已是当前版本的
+  # 机器直接走到这里、把文件夹删了, 然后打印 "Nothing was written."。
+  # 而伤害只落在设计师身上 —— 开发机上那个旧名字是桥接, 下面的链接检查会拒绝。
+  if ($DryRun) { return }
   $old = Join-Path $panelDir $LEGACY_FOLDER
   if (-not (Test-Path -LiteralPath $old)) { return }
   $item = Get-Item -LiteralPath $old -Force
@@ -288,6 +311,9 @@ function Remove-LegacyFolder([string]$panelDir) {
     Log "keep $LEGACY_FOLDER (no version marker; not installed by us)"; return
   }
   Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+  # 先看, 再宣布。原来是删完无条件宣布, 而删除是 SilentlyContinue 的 —— 于是
+  # InDesign 占着文件时, 用户被告知旧副本已移除, 而面板里两套脚本都还在。
+  if (Test-Path -LiteralPath $old) { Log "legacy folder could not be removed -> $old"; return }
   Say ("(removed a previous installation under the old name {0})" -f $LEGACY_FOLDER)
   Log "removed previous install $LEGACY_FOLDER"
 }
@@ -296,10 +322,32 @@ function Remove-LegacyFolder([string]$panelDir) {
 # 别人与工作树的连接 —— 而那样的卸载看起来完全成功。
 function Uninstall-From([string]$panelDir) {
   $dst = Join-Path $panelDir $INSTALL_FOLDER
-  if (-not (Test-Path -LiteralPath $dst)) { return 'absent' }
-  if ((Get-Item -LiteralPath $dst -Force).LinkType) { return 'blocked' }
+  $bak = "$dst.bak"
+  $new = "$dst.new"
+  if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) { return 'blocked' }
+  # 没有版本标记就不是我们的 —— 旧名清理和两条 Illustrator 路径都这么判, 唯独
+  # 这一处删除不查, 于是一份复制过来的检出、一份解开的备份, 只要顶着这个保留名
+  # 就会被整个删掉。
+  if ((Test-Path -LiteralPath $dst) -and -not (Test-Path -LiteralPath (Join-Path $dst $VERSION_MARKER))) { return 'not-ours' }
+
+  # .bak / .new 也是我们的。一次在换入中途被杀的运行会留下其中一个或两个而
+  # 【没有】$dst —— 原来的卸载只看 $dst, 什么也没找到, 报"没有找到安装", 而
+  # InDesign 递归扫描这个面板, 用户此刻看到的是两整套工具包。
+  $leftovers = @(@($bak, $new) | Where-Object { Test-Path -LiteralPath $_ })
+  if (-not (Test-Path -LiteralPath $dst)) {
+    if ($leftovers.Count -eq 0) { return 'absent' }
+    if ($DryRun) { return 'would-remove' }
+    try {
+      foreach ($p in $leftovers) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }
+      return 'removed'
+    } catch { Log ("uninstall failed (leftovers) : " + $_.Exception.Message); return 'failed' }
+  }
   if ($DryRun) { return 'would-remove' }
-  try { Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction Stop; return 'removed' }
+  try {
+    Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction Stop
+    foreach ($p in $leftovers) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+    return 'removed'
+  }
   catch { Log ("uninstall failed -> $dst : " + $_.Exception.Message); return 'failed' }
 }
 
@@ -322,7 +370,17 @@ function Get-InstalledVersion([string]$panelDir) {
 # ⚠ Windows 与 macOS 在此并非对称, 不可互相假设: 那边的目录符号链接
 # Illustrator 不认(实测), 这边的 Junction 认。这里两边都不用 —— 装真文件。
 function Get-IllustratorScriptsDirIn([string]$localeDir) {
-  foreach ($d in (Get-ChildItem -LiteralPath $localeDir -Directory -ErrorAction SilentlyContinue)) {
+  # 两个信号, 因为第一个是借来的。"里面有 .jsx" 成立, 全靠 Adobe 那三个样例脚本
+  # —— 扛着它的是它们, 不是我们的东西: 我们自己装到 <脚本目录>/$AI_FOLDER/,
+  # 深一层, 所以一次成功的安装对"下次还能不能被找到"没有任何贡献。样例一旦被删,
+  # Illustrator 就永久不可见 —— 连更新和卸载明明就在那儿的脚本都做不到。
+  #
+  # 所以"里面有我们的文件夹"也算。这让一次已存在的安装靠自己的证据被发现。
+  $subs = @(Get-ChildItem -LiteralPath $localeDir -Directory -ErrorAction SilentlyContinue)
+  foreach ($d in $subs) {
+    if (Test-Path -LiteralPath (Join-Path $d.FullName $AI_FOLDER)) { return $d.FullName }
+  }
+  foreach ($d in $subs) {
     if (@(Get-ChildItem -LiteralPath $d.FullName -Filter *.jsx -File -ErrorAction SilentlyContinue).Count -gt 0) {
       return $d.FullName
     }
@@ -330,38 +388,89 @@ function Get-IllustratorScriptsDirIn([string]$localeDir) {
   return $null
 }
 
-function Get-IllustratorPreferredLocale {
-  # Illustrator 自己在首次启动时写下这个目录, 所以它反映的是 Illustrator 实际
-  # 在用的语言 —— 而不是系统语言(那是另一个问题, 只是常常同解)。
+function Get-IllustratorSettingsLocales {
+  # Illustrator 首次启动时自己建这个目录, 并以它运行的语言命名。那与系统语言是
+  # 两个问题, 只是在很多机器上碰巧同解。
+  #
+  # 取【全部】而不是第一个: 切过语言、或装了两个版本的机器上会有不止一个, 取
+  # 第一个等于在它们之间掷硬币 —— 而掷错时是静默的(装进一个 Illustrator 不读
+  # 的语言目录, 用户看到"装好了"然后菜单里空空如也)。
   $base = Join-Path $env:APPDATA 'Adobe'
-  if (-not (Test-Path -LiteralPath $base)) { return $null }
+  if (-not (Test-Path -LiteralPath $base)) { return @() }
+  $names = @()
   foreach ($d in (Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
                   Where-Object { $_.Name -like 'Adobe Illustrator * Settings' })) {
-    $l = @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue)
-    if ($l.Count -gt 0) { return $l[0].Name }
+    $names += @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Name })
   }
-  return $null
+  return @($names | Sort-Object -Unique)
 }
+
+# 为什么选了这些 locale —— 由 Find-IllustratorDirs 设置, 主流程逐行打印。
+# 每个 Illustrator 安装一条, 不是整次运行一条: 原来是单个变量按应用覆盖,
+# 两个版本时最后一个会用"(Nothing was written)"盖掉刚刚被写入的第一个。
+$Script:AiLocaleNote = ''
+function Add-AiNote([string]$m) {
+  if ($Script:AiLocaleNote) { $Script:AiLocaleNote += "`n" }
+  $Script:AiLocaleNote += $m
+}
+$Script:AiAppsSeen = 0
 
 function Find-IllustratorDirs {
   $out = @()
+  $Script:AiLocaleNote = ''
+  $Script:AiAppsSeen = 0
   $root = if ($env:CSI_APP_ROOT) { $env:CSI_APP_ROOT } else { Join-Path $env:ProgramFiles 'Adobe' }
   if (-not (Test-Path -LiteralPath $root)) { return @() }
-  $pref = Get-IllustratorPreferredLocale
+  $want = @(Get-IllustratorSettingsLocales)
   foreach ($app in (Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
                     Where-Object { $_.Name -like 'Adobe Illustrator*' })) {
     $presets = Join-Path $app.FullName 'Presets'
     if (-not (Test-Path -LiteralPath $presets)) { continue }
+    $Script:AiAppsSeen++
     $ver = $app.Name -replace '^Adobe Illustrator\s*', ''
-    # 优先 Illustrator 记下的那个 locale; 认不出就全都装。装进一个它不读的
-    # locale 只是无害的多余, 一个都没装才是静默的空操作。
-    $locales = @()
-    if ($pref -and (Test-Path -LiteralPath (Join-Path $presets $pref))) {
-      $locales = @(Get-Item -LiteralPath (Join-Path $presets $pref))
-    } else {
-      $locales = @(Get-ChildItem -LiteralPath $presets -Directory -ErrorAction SilentlyContinue)
+
+    # 这个安装确实有对应文件夹的、每一个被记录过的 locale。
+    $picked = @()
+    foreach ($w in $want) {
+      $p = Join-Path $presets $w
+      if (Test-Path -LiteralPath $p) { $picked += (Get-Item -LiteralPath $p) }
     }
-    foreach ($l in $locales) {
+
+    # 再加上【已经装着我们东西】的每一个语言目录, 不管记录到的 locale 怎么说。
+    # 没有这一步, 下面的拒装会让既有安装变得不可达: 被早期版本(它曾撒遍所有
+    # locale)写入过的机器, 卸载时报"没有找到安装", 而脚本就在那儿。"我们的" =
+    # 版本标记, 与卸载自己用的是同一个判据。
+    foreach ($l in (Get-ChildItem -LiteralPath $presets -Directory -ErrorAction SilentlyContinue)) {
+      if ($picked.FullName -contains $l.FullName) { continue }
+      $sdir = Get-IllustratorScriptsDirIn $l.FullName
+      if ($sdir -and (Test-Path -LiteralPath (Join-Path (Join-Path $sdir $AI_FOLDER) $VERSION_MARKER))) { $picked += $l }
+    }
+
+    if ($picked.Count -eq 0) {
+      # owner 2026-09-07 拍: 拒装, 不要撒。
+      #
+      # 原来的兜底是装进【每一个】语言目录 —— 测试 Mac 上是二十五个。其中二十四个
+      # 是 Illustrator 根本不读的目录, 位于应用包内部, 而卸载只能清空它们:
+      # 删掉那些文件夹需要 Adobe 目录的写权限, 这个安装器没有。所以猜错的代价是
+      # 在别人的应用里留下永久垃圾。
+      #
+      # CSI_ALL_LOCALES=1 保留旧行为, 给那种 Illustrator 确实从不记录语言的机器。
+      # 刻意不在本文件之外宣传: 它是逃生口, 不是选项。
+      if ($env:CSI_ALL_LOCALES -eq '1') {
+        $picked = @(Get-ChildItem -LiteralPath $presets -Directory -ErrorAction SilentlyContinue)
+        Add-AiNote ("Illustrator {0}: could not tell which language it uses; CSI_ALL_LOCALES=1 is set, so every language folder is being used." -f $ver)
+      } else {
+        Add-AiNote ("Illustrator {0} has not recorded which language it runs in, so there is no way to tell which of its language folders it reads. Launch it once, then run this again. (Nothing was written to it.)" -f $ver)
+      }
+    } elseif ($picked.Count -gt 1) {
+      # 记录了不止一个, 而且无法判断哪个属于哪个安装 —— 应用目录以年份命名、
+      # 设置目录以版本号命名, 要配对就得有一张会过期的对照表。全都用, 并说出来。
+      # 用【真正选中的】拼这句, 不是用记录到的。
+      Add-AiNote ("Illustrator {0} is set up for more than one language; the scripts are being installed for each of these: {1}" -f $ver, (($picked | ForEach-Object { $_.Name }) -join ' '))
+    }
+
+    foreach ($l in $picked) {
       $sdir = Get-IllustratorScriptsDirIn $l.FullName
       if ($sdir) {
         $out += [pscustomobject]@{ Dir = $sdir; Label = "Illustrator $ver ($($l.Name))" }
@@ -462,13 +571,32 @@ function Uninstall-FromIllustrator([string]$scriptsDir) {
   if ((Get-Item -LiteralPath $dst -Force).LinkType) { return 'blocked' }
   if (-not (Test-Path -LiteralPath (Join-Path $dst $VERSION_MARKER))) { return 'not-ours' }
   if ($DryRun) { return 'would-remove' }
+
+  # 顺序是有意的, 原来是无序的两步。版本标记是这个目录属于我们的【唯一】凭证:
+  # 脚本还在而标记先没了, 这个目标就永远报 'not-ours' —— 脚本仍在 Illustrator
+  # 菜单里, 而卸载再也删不掉它。所以先删脚本, 全删掉了才删标记。
+  Get-ChildItem -LiteralPath $dst -Filter *.jsx -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  # 暂存与探针残留也是我们的; 留一个就足以让这个目录永远非空, 而那会让此后每一次
+  # 卸载都为"目录还在"给出错误的理由。
+  Get-ChildItem -LiteralPath $dst -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like '*.csi-new' -or $_.Name -eq '.csi_probe' } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
+  # 看一眼, 不靠假设。上面每一步都吞了错误, 唯一诚实的答案来自复查。
+  if (@(Get-ChildItem -LiteralPath $dst -Filter *.jsx -File -ErrorAction SilentlyContinue).Count -gt 0) {
+    return 'failed'
+  }
+  Remove-Item -LiteralPath (Join-Path $dst $VERSION_MARKER) -Force -ErrorAction SilentlyContinue
+
+  # 先看空不空, 再删 —— 不拿 `Remove-Item -Force` 当 rmdir 使, 它不是。对非空目录
+  # 交互时会弹 "has children … Recurse not specified": 答 Y 递归删掉别人放这儿的
+  # 文件(正是上面说不动的东西), 答 N 不报错于是被当成"已删除"。非交互直接抛。
+  # Windows PowerShell 5.1 实测: 抛 NullReferenceException, 目录和文件都还在。
+  if (@(Get-ChildItem -LiteralPath $dst -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+    return 'emptied'
+  }
   try {
-    Get-ChildItem -LiteralPath $dst -Filter *.jsx -File -ErrorAction SilentlyContinue |
-      Remove-Item -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $dst $VERSION_MARKER) -Force -ErrorAction SilentlyContinue
-    # 删掉这个目录本身要父目录的写权限, 我们没有也不要。有的机器碰巧有, 那就删掉;
-    # 没有就留一个空目录并【说出来】—— 被告知"已移除"却发现它还在, 任何人都会
-    # 认为卸载失败了, 而真正的原因他猜不到。
     Remove-Item -LiteralPath $dst -Force -ErrorAction Stop
     return 'removed'
   } catch { return 'emptied' }
@@ -477,6 +605,14 @@ function Uninstall-FromIllustrator([string]$scriptsDir) {
 function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   $dst = Join-Path $scriptsDir $AI_FOLDER
   $who = "$env:USERDOMAIN\$env:USERNAME"
+
+  # 已存在却写不进去的文件夹是别人的 —— 同一台机器上另一个账户的授权。把它
+  # 改成这个人的, 无论静默还是征得他同意, 都是把一个用户的文件夹交给另一个。
+  # 拒绝; 末尾打印的命令仍允许人有意识地那样做。
+  if (Test-Path -LiteralPath $dst) {
+    Log "$dst exists but is not writable by $who; not re-owning it"
+    return $false
+  }
 
   # 已经以管理员身份在跑 → 不会有 UAC 弹窗, 也就没有什么要声明、要征求同意的。
   # 下面那段说明存在的理由是"向你解释为什么要弹这个框"; 框不会出现时, 它只是挡在
@@ -517,15 +653,33 @@ function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   Say '  Windows will ask you to approve it.'
   $ans = ''
   try { $ans = Read-Host '  Continue? [y/n]' } catch { return $false }
+  # 只有肯定答复才继续。原来是"不匹配 n 就当同意", 于是 q / ? / 随手一个键都会
+  # 走到 UAC。在一个权限问题上, 认不出的回答必须当作否。
   if ($ans -match '^\s*[nN]') { Say '  Skipped - the command to do it yourself is below.'; return $false }
+  if ($ans -notmatch '^\s*$' -and $ans -notmatch '^\s*[yY]') {
+    Say '  Not a yes - skipping. The command to do it yourself is below.'
+    return $false
+  }
 
-  $inner = "New-Item -ItemType Directory -Force -Path '$dst' | Out-Null; icacls '$dst' /grant '$($who):(OI)(CI)F' | Out-Null"
+  $inner = Get-GrantCommand $dst $who
   try {
     # Windows 的"提权"是 UAC 弹窗, 不是终端里输密码。触发它并【等它结束】——
     # 不等的话下面那句可写性检查会在授权发生之前就跑完, 然后报一个假的失败。
     # 安装器本身仍然不是以管理员身份运行的: 被提权的只有这一条命令。
-    Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden `
-      -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner -ErrorAction Stop
+    # -EncodedCommand, 不是把脚本当字符串传。实测: 用户名里带撇号(O'Brien 这类
+    # 常见姓氏)会让生成的命令解析失败 —— UAC 弹了、用户批了、提权的子进程直接
+    # 死在解析错误上什么也没做, 然后我们报"命令报告成功, 但文件夹仍不可写"。
+    # Base64 的 UTF-16LE 没有引号可以写错。macOS 侧一直是对的(值走 argv)。
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+    $proc = Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -PassThru `
+      -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc -ErrorAction Stop
+    # 读子进程的退出码。-Wait 不会因子进程失败而抛错, 原来这里什么都不看,
+    # 于是一个死在解析错误上的提权子进程被报成"命令成功但文件夹仍不可写"。
+    if ($proc -and $proc.ExitCode -ne 0) {
+      Say ''
+      Say ("  The administrator step failed (exit code {0}) - nothing was changed." -f $proc.ExitCode)
+      return $false
+    }
   } catch {
     # 取消 UAC 也走这里 —— 那不是错误, 是一个回答。
     Say ''
@@ -543,10 +697,20 @@ function Invoke-IllustratorGrant([string]$scriptsDir, [string]$label) {
   return $false
 }
 
+function Get-GrantCommand([string]$dst, [string]$who) {
+  # 单引号字面量里的撇号, 按 PowerShell 自己的规则写成两个 (''). 少了这一步,
+  # O'Brien 这类用户名会截断字符串: 子进程解析失败、什么都没做, 而 UAC 已经批了。
+  # -EncodedCommand 只去掉了【外层参数】的引号问题, 对这一层无效 —— 实测。
+  # 同一份文本供两处使用(提权执行的、打印给人手动跑的), 只在这里拼一次。
+  $d = $dst.Replace("'", "''")
+  $w = $who.Replace("'", "''")
+  return "New-Item -ItemType Directory -Force -Path '$d' | Out-Null; icacls '$d' /grant '$($w):(OI)(CI)F' | Out-Null"
+}
+
 function Show-IllustratorSetup([string]$scriptsDir) {
   $dst = Join-Path $scriptsDir $AI_FOLDER
   $who = "$env:USERDOMAIN\$env:USERNAME"
-  $inner = "New-Item -ItemType Directory -Force -Path '$dst' | Out-Null; icacls '$dst' /grant '$($who):(OI)(CI)F' | Out-Null"
+  $inner = Get-GrantCommand $dst $who
   Say ''
   Say '  Illustrator keeps its Scripts folder inside the application itself, so it'
   Say '  needs one administrator step - once. After it, every install and update'
@@ -626,7 +790,11 @@ function Install-Into([string]$panelDir, [string]$payloadDir, [string]$version) 
   }
   # 成功后删掉 .bak: 不在 Scripts Panel 里留副本树 (否则面板显示重复脚本组,
   # 设计师可能误运行旧版)。回滚保护只需覆盖 swap 的瞬间, 换入成功即可清。
-  if (Test-Path $bak) { Remove-Item $bak -Recurse -Force }
+  # 换入已经成功; 这一步失败(杀软/索引器暂时握着旧树里的句柄)不能把成功记成失败 ——
+  # 原来这里在 EAP=Stop 下裸跑, 一抛就跳过下面的 return, 面板被计入 failed, 汇总
+  # 说"什么都没改", 而新版本此刻就在 $dst 里活着。
+  try { if (Test-Path $bak) { Remove-Item $bak -Recurse -Force -ErrorAction Stop } }
+  catch { Log ("post-swap .bak removal failed -> $bak : " + $_.Exception.Message); Say ("  (a leftover copy at {0} could not be removed - InDesign may list the scripts twice until it is)" -f $bak) }
   return 'installed'
 }
 
@@ -641,14 +809,41 @@ try {
 
   $panels = Find-ScriptsPanelDirs
   $aiDirs = @(Find-IllustratorDirs)
+  # 说出来, 因为这正是猜测可能出错的地方: 静默猜错会装进一个 Illustrator
+  # 不读的语言目录, 而用户看到的是"已安装"加一个空菜单, 没有任何线索。
+  # 放在下面那个退出块【之前】—— 原来在它之后, 于是一台只装了 Illustrator 的
+  # 机器在看到解释之前就被 exit 3 打断了。
+  foreach ($__l in ($Script:AiLocaleNote -split "`n")) { if ($__l) { Say ('  ' + $__l) } }
   # 只有两个都没有才收工。原来在"没有 InDesign"就退出, 会让一台只装了
   # Illustrator 的机器看起来像什么都没装。
   if ($panels.Count -eq 0 -and $aiDirs.Count -eq 0) {
+    # 两种不同的状态, 此前共用一句话。"Illustrator 在, 但我认不出它的 Scripts
+    # 目录"不是"Illustrator 没装", 而让一个人去安装他已经装了的应用, 是唯一一条
+    # 哪儿也去不了的回答。
+    # 上面的说明已经讲了为什么现在什么都做不了。那不是故障, 不该按故障报 ——
+    # 原来"请报告 bug"和 exit 3 就跟在一条把一切都解释清楚了的说明后面。
+    if ($Script:AiAppsSeen -gt 0 -and $Script:AiLocaleNote) { exit 0 }
+    if ($Script:AiAppsSeen -gt 0) {
+      Err 'Found Illustrator, but could not identify its Scripts folder inside it.'
+      Say 'That folder is recognised by the scripts already in it; if it is empty,'
+      Say 'there is nothing to go on. Report this with -Log and the Illustrator version.'
+      $exitCode = 3
+      exit 3
+    }
     Warn 'No InDesign or Illustrator installation found. Install and launch one of them, then run this again.'
+    $exitCode = 3
     exit 3
   }
   Log ("panels=" + ($panels -join ' | '))
   Log ("illustrator=" + (($aiDirs | ForEach-Object { $_.Dir }) -join ' | '))
+  # 只要发生就说, 不是只在"什么都没找到"时才说。InDesign 在的时候, 原来的运行
+  # 会一路走到一个欢快的汇总, 而 Illustrator 已经从所有计数里悄悄掉了出去 ——
+  # 没有一行字, 没有原因, 也没有可搜的线索。下面的 exit 3 只覆盖两个都没有的情形。
+  # 只在没有更具体的原因已经打印过时才说。上面的 locale 说明讲的是另一个成因,
+  # 而同一个"缺席"给出两条解释, 读起来像两个问题。
+  if ($Script:AiAppsSeen -gt 0 -and $aiDirs.Count -eq 0 -and $panels.Count -gt 0 -and -not $Script:AiLocaleNote) {
+    Say '  Found Illustrator, but could not identify its Scripts folder - skipping it.'
+  }
 
   # --- 状态 + 菜单 ------------------------------------------------------------
   $action = ''
@@ -679,7 +874,7 @@ try {
       $label = if ($p -match 'InDesign\\([^\\]+)\\([^\\]+)\\Scripts') { "$($Matches[1]) ($($Matches[2]))" } else { $p }
       $dst = Join-Path $p $INSTALL_FOLDER
       if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) {
-        Say ("  {0}: a link is in the way (development bridge) - see DEV-BRIDGE.md" -f $label)
+        Say ("  {0}: a link is in the way (development bridge) - rename or remove it and run again" -f $label)
         continue
       }
       $lv = Get-InstalledVersion $p
@@ -692,7 +887,7 @@ try {
     foreach ($t in $aiDirs) {
       $dst = Join-Path $t.Dir $AI_FOLDER
       if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) {
-        Say ("  {0}: a link is in the way (development bridge) - see DEV-BRIDGE.md" -f $t.Label)
+        Say ("  {0}: a link is in the way (development bridge) - rename or remove it and run again" -f $t.Label)
         continue
       }
       if (-not (Test-IllustratorWritable $t.Dir)) {
@@ -767,36 +962,62 @@ try {
   }
 
   if ($action -eq 'uninstall') {
-    $removed = 0; $blockedU = 0; $failedU = 0
+    $removed = 0; $blockedU = 0; $failedU = 0; $notOursId = 0
+    $removedId = 0; $removedAi = 0   # per application, so the summary can name them
+    $notOurs = 0
     foreach ($p in $panels) {
       switch (Uninstall-From $p) {
-        'removed'      { $removed++;  Log "uninstalled -> $p" }
-        'would-remove' { $removed++;  Log "would-uninstall -> $p" }
+        'removed'      { $removed++; $removedId++; Log "uninstalled -> $p" }
+        'would-remove' { $removed++; $removedId++; Log "would-uninstall -> $p" }
         'blocked'      { $blockedU++; Log "uninstall blocked(bridge) -> $p" }
         'failed'       { $failedU++ }
+        'absent'       { }
+        'not-ours'     { $notOursId++ }
+        # 没有 default 的话, 任何没被列举的返回值会从每一个计数里消失, 而汇总
+        # 就会描述一次它并不存在的运行。
+        default        { $failedU++; Log "unhandled uninstall result '$_' -> $p" }
       }
     }
     $emptied = 0
     foreach ($t in $aiDirs) {
       switch (Uninstall-FromIllustrator $t.Dir) {
-        'removed'      { $removed++;  Log "uninstalled -> $($t.Dir)" }
-        'would-remove' { $removed++ }
-        'emptied'      { $removed++; $emptied++ }
+        'removed'      { $removed++; $removedAi++; Log "uninstalled -> $($t.Dir)" }
+        'would-remove' { $removed++; $removedAi++ }
+        'emptied'      { $removed++; $removedAi++; $emptied++ }
+        # ⚠ 每个值只能有一个 arm。PowerShell 的 switch 没有 break 时会执行
+        # 【所有】匹配的分支 —— 这里曾经有两个 'failed', 于是一处失败被记成两处
+        # (实测 failedU=2)。default 只在无任何 arm 匹配时才跑。
+        'not-ours'     { $notOurs++ }
         'blocked'      { $blockedU++ }
         'failed'       { $failedU++ }
+        # 'absent' 是良性的: Illustrator 在, 我们的文件夹不在。它原来没有自己的
+        # arm, 于是落进下面那个为【未知】返回值准备的 default, 被记成一次失败 ——
+        # 每台装了 Illustrator 却还没装脚本的机器, 卸载都报 "failed 1"。实测。
+        'absent'       { }
+        default        { $failedU++; Log "unhandled uninstall result '$_' -> $($t.Dir)" }
       }
     }
     Say ''
     if ($emptied -gt 0) {
-      Say ("The scripts were removed from {0} Illustrator location(s); the now-empty {1} folder stays, because deleting it needs an administrator." -f $emptied, $AI_FOLDER)
+      # "emptied" 只在文件夹删不掉时返回 —— 在 Windows 上, 我们对它有 F 权限,
+      # 删目录本身不需要管理员(实测: 父目录只读时照样删得掉)。删不掉的原因是
+      # 里面还有别人放的东西。原句断言了"空"和"要管理员"两件事, 两件都不成立。
+      Say ("The scripts were removed from {0} Illustrator location(s). The {1} folder itself was left behind - it still holds something that is not ours." -f $emptied, $AI_FOLDER)
     }
+    if ($notOursId -gt 0) { Say ("Left alone: {0} {1} folder(s) with no version marker - this installer did not create them, so it will not remove them." -f $notOursId, $INSTALL_FOLDER) }
     if ($blockedU -gt 0) { Warn ("Skipped {0} location(s): {1} there is a link, not a folder." -f $blockedU, $INSTALL_FOLDER) }
     if ($DryRun) { Ok ("[dry run] Would remove {0} installation(s). Nothing was written." -f $removed) }
     elseif ($failedU -gt 0) {
-      Err ("Removed {0}, failed {1} - InDesign may have the files open. Close it and try again." -f $removed, $failedU)
+      Err ("Removed {0}, failed {1} - the application may have the files open. Close it and try again." -f $removed, $failedU)
       $exitCode = 1
     }
-    elseif ($removed -gt 0) { Ok ("Removed {0} installation(s). Restart InDesign for the panel to catch up." -f $removed) }
+    elseif ($removed -gt 0) {
+      $uapps = @()
+      if ($removedId -gt 0) { $uapps += 'InDesign' }
+      if ($removedAi -gt 0) { $uapps += 'Illustrator' }
+      $uname = if ($uapps.Count -gt 0) { $uapps -join ' and ' } else { 'the application' }
+      Ok ("Removed {0} installation(s). Restart {1} for the menu to catch up." -f $removed, $uname)
+    }
     else { Ok 'Nothing to remove - no installation was found.' }
     exit $exitCode
   }
@@ -821,6 +1042,8 @@ try {
         if ($pending -gt 0) {
           Ok ("Up to date (v{0}) everywhere it could be installed - but {1} Illustrator location(s) still need the one-time step below." -f $rm.version, $pending)
           [void](Show-PendingIllustratorSetup $aiDirs)
+        } elseif ($Script:AiLocaleNote -and $aiDirs.Count -eq 0) {
+          Ok ("Up to date (v{0}) for InDesign. Illustrator was skipped, see above." -f $rm.version)
         } else {
           Ok ("Already up to date (v{0})." -f $rm.version)
         }
@@ -847,6 +1070,11 @@ try {
   if ($bad.Count -gt 0) {
     Err 'The downloaded files failed verification. Nothing was changed. Try again, or ask IT.'
     $bad | Select-Object -First 5 | ForEach-Object { Log "verify: $_" }
+    # $exitCode, not just `exit`. The finally block decides whether to print
+    # "how to save a diagnostic log" from $exitCode, and these exits used to
+    # jump out with it still 0 - so the one failure whose diagnosis most needs
+    # a log was the one that never mentioned how to produce one.
+    $exitCode = 4
     exit 4
   }
   Log "verify OK: $($manifest.files.Count) files, v$version"
@@ -855,18 +1083,24 @@ try {
   # 占用某文件) 会在 Install-Into 内回滚到旧版, 不应中止其它面板, 也不应让主
   # catch 打印"什么都没改"(对已成功的面板是假话)。
   $installed = 0; $skipped = 0; $wouldInstall = 0; $failed = 0
+  $failedWhere = @()
   $blocked = @()
   foreach ($p in $panels) {
     try {
       $r = Install-Into $p $payloadDir $version
       switch ($r) {
-        'blocked'        { $blocked += $p;  Log "blocked(bridge) -> $p" }
-        'installed'      { $installed++;    Log "installed -> $p"; Remove-LegacyFolder $p }
-        'skip'           { $skipped++;      Log "skip(latest) -> $p" }
+        'blocked'        { $blocked += (Join-Path $p $INSTALL_FOLDER); Log "blocked(bridge) -> $p" }
+        'installed'      { $installed++;    Log "installed -> $p"; try { Remove-LegacyFolder $p } catch { Log ("legacy cleanup failed -> $p : " + $_.Exception.Message) } }
+        # skip 也要清。原来只挂在 installed 上, 于是一台已经是当前版本的机器
+        # 永远不会执行它 —— 而一个从备份恢复回来的旧名字文件夹会永远留在面板里。
+        'skip'           { $skipped++;      Log "skip(latest) -> $p"; try { Remove-LegacyFolder $p } catch { Log ("legacy cleanup failed -> $p : " + $_.Exception.Message) } }
         'would-install'  { $wouldInstall++; Log "would-install -> $p" }
       }
     } catch {
       $failed++
+      # 说出是哪一处。"1 处失败"对一台装了两个 InDesign 版本的机器没有信息量,
+      # 而"关掉那个应用"没有指名任何应用。
+      $failedWhere += $p
       Log "install FAILED -> $p : $($_.Exception.Message)"
     }
   }
@@ -874,13 +1108,48 @@ try {
   # Illustrator: 自己的载荷、自己的 manifest、自己的校验。共用 InDesign 那次
   # 校验会让一个绿勾代表两组不同的字节, 而其中只有一组真被算过哈希。
   $aiInstalled = 0; $aiSkipped = 0; $aiWould = 0; $aiFailed = 0; $aiSetup = 0
+  $aiVerifyFailed = $false
   $aiPayloadDir = Join-Path $root $AI_PAYLOAD_SUBDIR
   $aiManifestPath = Join-Path $root $AI_MANIFEST_NAME
 
-  # 那一次性管理员步骤在这里问 —— 在安装循环【之前】, 只问一次, 且只在确实有
-  # 一份校验过的载荷要装、又确实有人可问的时候。拒绝不算失败: 运行照常继续,
-  # 那条命令仍会在末尾打印出来, 和以前一样。
-  if ($aiDirs.Count -gt 0 -and -not $DryRun -and (Test-Path $aiPayloadDir)) {
+  # 顺序是有意的: 先校验, 再提权, 最后安装。
+  # 原来的顺序是先提权后校验 —— 用户会看到 UAC、批准它、然后校验失败什么也没装,
+  # 而权限已经改了。macOS 侧一直是对的(它的 grant 循环闸在 AI_OK 上), 那条注释
+  # 也写着"只在确实有一份校验过的载荷要装时才问", 只是 Windows 侧没照做。
+  $aiOk = $false
+  if ($aiDirs.Count -gt 0) {
+    if (-not (Test-Path $aiPayloadDir) -or -not (Test-Path $aiManifestPath)) {
+      # 旧分发包没有 Illustrator 那一半。说出来并继续做 InDesign, 而不是让一次
+      # 还能完成大半工作的运行整体失败。
+      Say '  (this package has no Illustrator scripts; skipping Illustrator)'
+    } else {
+      # 解析和校验都可能抛(坏 JSON、缺 sha256 字段)。这里在 InDesign 循环【之后】,
+      # 不接住的话它会落进最外层 catch, 打印 "Your existing scripts are unchanged" ——
+      # 而 InDesign 刚刚被更新过。当作校验失败处理, 和坏哈希同一条路。
+      $aiBad = @()
+      try {
+        $aiManifest = Get-Content $aiManifestPath -Raw | ConvertFrom-Json
+        $aiBad = @(Verify-Payload $aiManifest $aiPayloadDir)
+      } catch {
+        $aiBad = @('manifest unreadable: ' + $_.Exception.Message)
+      }
+      if ($aiBad.Count -gt 0) {
+        Err 'The Illustrator files failed verification; nothing was written to Illustrator.'
+        $aiBad | Select-Object -First 5 | ForEach-Object { Log "verify(ai): $_" }
+        # 单独一个标志, 不并进 $aiFailed。并进去的话汇总会说"应用可能占着文件,
+        # 关掉它再跑一次" —— 而这是一次坏下载, 关应用没有用; 而且"1 处失败"会
+        # 在没有任何位置失败时报出一个位置计数。
+        $aiVerifyFailed = $true
+      } else {
+        Log "verify OK (illustrator): $($aiManifest.files.Count) files"
+        $aiOk = $true
+      }
+    }
+  }
+
+  # 校验过了才问那一次性管理员步骤。拒绝不算失败: 运行照常继续, 那条命令仍会在
+  # 末尾打印出来。
+  if ($aiOk -and -not $DryRun) {
     foreach ($t in $aiDirs) {
       $d = Join-Path $t.Dir $AI_FOLDER
       if ((Test-Path -LiteralPath $d) -and (Get-Item -LiteralPath $d -Force).LinkType) { continue }
@@ -888,34 +1157,22 @@ try {
       [void](Invoke-IllustratorGrant $t.Dir $t.Label)
     }
   }
-  if ($aiDirs.Count -gt 0) {
-    if (-not (Test-Path $aiPayloadDir) -or -not (Test-Path $aiManifestPath)) {
-      # 旧分发包没有 Illustrator 那一半。说出来并继续做 InDesign, 而不是让一次
-      # 还能完成大半工作的运行整体失败。
-      Say '  (this package has no Illustrator scripts; skipping Illustrator)'
-    } else {
-      $aiManifest = Get-Content $aiManifestPath -Raw | ConvertFrom-Json
-      $aiBad = Verify-Payload $aiManifest $aiPayloadDir
-      if ($aiBad.Count -gt 0) {
-        Err 'The Illustrator files failed verification; nothing was written to Illustrator.'
-        $aiBad | Select-Object -First 5 | ForEach-Object { Log "verify(ai): $_" }
-      } else {
-        Log "verify OK (illustrator): $($aiManifest.files.Count) files"
-        foreach ($t in $aiDirs) {
-          try {
-            switch (Install-IntoIllustrator $t.Dir $aiPayloadDir $version) {
-              'blocked'       { $blocked += $t.Dir; Log "blocked(bridge) -> $($t.Dir)" }
-              'installed'     { $aiInstalled++;     Log "installed -> $($t.Dir)" }
-              'skip'          { $aiSkipped++ }
-              'would-install' { $aiWould++ }
-              'needs-setup'   { $aiSetup++ }
-              'failed'        { $aiFailed++ }
-            }
-          } catch {
-            $aiFailed++
-            Log "illustrator install FAILED -> $($t.Dir) : $($_.Exception.Message)"
-          }
+
+  if ($aiOk) {
+    foreach ($t in $aiDirs) {
+      try {
+        switch (Install-IntoIllustrator $t.Dir $aiPayloadDir $version) {
+          'blocked'       { $blocked += (Join-Path $t.Dir $AI_FOLDER); Log "blocked(bridge) -> $($t.Dir)" }
+          'installed'     { $aiInstalled++;     Log "installed -> $($t.Dir)" }
+          'skip'          { $aiSkipped++ }
+          'would-install' { $aiWould++ }
+          'needs-setup'   { $aiSetup++ }
+          'failed'        { $aiFailed++ }
+          default         { $aiFailed++; Log "unhandled illustrator result '$_' -> $($t.Dir)" }
         }
+      } catch {
+        $aiFailed++
+        Log "illustrator install FAILED -> $($t.Dir) : $($_.Exception.Message)"
       }
     }
   }
@@ -930,13 +1187,15 @@ try {
 
   Say ''
   if ($blocked.Count -gt 0) {
-    Warn ("Skipped {0} location(s): {1} there is a link, not a folder." -f $blocked.Count, $INSTALL_FOLDER)
+    # 文件夹名现在按条目走。原来每条都按 $INSTALL_FOLDER 打印, 于是一个被挡下的
+    # Illustrator 目标被报在一个不存在的路径上 —— 而"改名或移除那个链接"是整段
+    # 里唯一一条指令, 却指向了空处。
+    Warn ("Skipped {0} location(s): the toolkit folder there is a link, not a folder." -f $blocked.Count)
     Say  'Nothing was written there, so a link to a working copy cannot be destroyed.'
     Say  ''
-    $blocked | ForEach-Object { Say ("  " + (Join-Path $_ $INSTALL_FOLDER)) }
+    $blocked | ForEach-Object { Say ("  " + $_) }
     Say  ''
     Say  ("Rename or remove that link and run again." -f $INSTALL_FOLDER)
-    Say  'See DEV-BRIDGE.md in the repository.'
     Say  ''
   }
   if ($DryRun) {
@@ -949,9 +1208,11 @@ try {
     }
   } elseif ($failed -gt 0 -and $installed -gt 0) {
     Warn ("Updated to v{0} in some locations, but {1} failed - the application may have the files open. Close it and run again." -f $version, $failed)
+    $failedWhere | ForEach-Object { Say ("  " + $_) }
     $exitCode = 1
   } elseif ($failed -gt 0) {
     Err ("Update failed in {0} location(s); nothing was updated. Your existing scripts are unchanged. Close the application and run again, or ask IT." -f $failed)
+    $failedWhere | ForEach-Object { Say ("  " + $_) }
     $exitCode = 1
   } elseif ($installed -gt 0) {
     # 分应用点名: 对一个同时开着两个应用、只有一个被改动的人来说,
@@ -962,6 +1223,11 @@ try {
     if ($idInstalled -gt 0) { $apps += 'InDesign' }
     if ($aiInstalled -gt 0) { $apps += 'Illustrator' }
     Ok ("Installed v{0} - restart {1} to see the scripts." -f $version, ($apps -join ' and '))
+    if ($Script:AiLocaleNote -and $aiDirs.Count -eq 0) { Say '(Illustrator was skipped, see above)' }
+    if ($aiVerifyFailed) {
+      Warn '(the Illustrator scripts failed verification and were not installed - that is a bad download; run this again)'
+      $exitCode = 1
+    }
     # 由 $Owner/$Repo 推导, 不写死: 写死等于让仓库名多一个存放处, 而那一处正是
     # 改名时永远不会被跟着改的那一处。只在真装了东西的路径上出现 —— 对一台本来
     # 就是最新的机器重跑一次, 那不是一个"接下来做什么"的时刻。
@@ -977,6 +1243,10 @@ try {
     # 写入的情况下打印"已是最新版本" —— 用户会据此认为脚本已经装好了。
     Warn ("Nothing was installed: all {0} location(s) were skipped, see above." -f $blocked.Count)
     $exitCode = 1
+  } elseif ($aiVerifyFailed) {
+    Err 'Nothing was installed: the Illustrator scripts failed verification.'
+    Say 'That is a bad download, not a problem with this machine - run this again.'
+    $exitCode = 1
   } elseif ($aiSetup -gt 0 -and $skipped -eq 0) {
     # 一个字都没写、也没有任何位置本来就是最新的 —— 那么"已是最新版本"是假话。
     # 挡在路上的那一件, 就在下面。
@@ -985,6 +1255,10 @@ try {
     # 光说"已是最新版本"是在替一个没被写入、也写不进去的目标背书; 三行之后又
     # 出现"is not set up yet", 读起来自相矛盾 —— 而人记住的是标题那句。
     Ok ("Up to date (v{0}) everywhere it could be installed - but {1} Illustrator location(s) still need the one-time step below." -f $version, $aiSetup)
+  } elseif ($Script:AiLocaleNote -and $aiDirs.Count -eq 0) {
+    # 上面那条说明讲了 Illustrator 为什么被跳过, 但光秃秃的 "Already up to date"
+    # 是一句关于全部的断言 —— 而人记住的是标题那句。
+    Ok ("Up to date (v{0}) for InDesign. Illustrator was skipped, see above." -f $version)
   } else {
     Ok ("Already up to date (v{0})." -f $version)
   }

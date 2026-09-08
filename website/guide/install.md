@@ -37,9 +37,14 @@ irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/insta
 
 ### Then
 
-The installer prints what it found and what it did, and finishes with a link to
-the next page. **Restart InDesign** (and Illustrator, if you use it) — both build
-their script menus at launch, so nothing appears until they restart.
+The installer prints what it found and what it did and, when it installed
+something, finishes with a link to the next page. **Restart InDesign** (and
+Illustrator, if you use it) — both build their script menus at launch, so
+nothing appears until they restart.
+
+Both applications need to have been **launched at least once** before this:
+their script folders are created on first launch, and that is how the installer
+finds them.
 
 - InDesign: `Window → Utilities → Scripts`, then the
   **indesign-toolkit-stable** folder.
@@ -47,8 +52,26 @@ their script menus at launch, so nothing appears until they restart.
 
 ::: tip Updating is the same command
 Run the same line again whenever you want the latest version. If you are already
-current it says so and changes nothing.
+current it says so and installs nothing.
 :::
+
+## The menu
+
+Run in a terminal, the installer shows what it found and offers only the choices
+that apply — **Install**, **Update**, **Repair** (rewrite the files even if the
+version already matches) or **Uninstall**, plus `q` to leave without changing
+anything. Enter takes the sensible default; when everything is already current
+there is no default, because the remaining choices all change something.
+
+Uninstall lives in that menu. On macOS it can also be run without the menu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash -s -- --uninstall
+```
+
+The Windows one-line form cannot take a flag — `iex` receives text, not a
+command — so use the menu there. Run with no terminal at all (a script, a
+deployment tool) it does not ask: it installs.
 
 ## What it changes on your machine
 
@@ -66,7 +89,9 @@ around it.
 
 **Nothing else.** No entry in System Settings or Windows Settings, no login
 item, no `PATH` change, no registry key, no scheduled task, no `defaults write`,
-no preference in InDesign or Illustrator. Uninstalling removes what it wrote.
+no preference in InDesign or Illustrator. Uninstalling removes what it wrote —
+on Windows outright; on macOS see [Uninstalling](#uninstalling) for the one
+question it asks.
 
 Two things you are often told to change for scripts like this, and do **not**
 have to here:
@@ -96,9 +121,11 @@ password in the same window, on Windows you approve the prompt Windows shows. It
 gives you a single folder of your own inside the application; it does not open
 the rest of it. After that, every install and update runs with no password.
 
-If no password is needed — macOS still remembers a recent `sudo`, or you are
-already an administrator on Windows — it does not explain and does not ask.
-There is nothing to warn you about, so the step passes in silence.
+If no password is needed — macOS still remembers a recent `sudo`, or on Windows
+PowerShell itself is already running as administrator — it does not
+explain and does not ask. There is nothing to warn you about, so the step passes
+in silence. (An administrator *account* in an ordinary PowerShell window is not
+that case; Windows still shows its prompt.)
 
 Saying no is an answer, not a failure: the run carries on with everything else,
 and the exact command is printed at the end for you to run whenever you like.
@@ -110,18 +137,37 @@ Upgrading Illustrator replaces the whole application, and that folder goes with
 it. Run the same one command again afterwards, then run the installer.
 :::
 
-::: tip Uninstalling leaves an empty folder
-Removing the folder itself needs the same administrator permission that creating
-it did, and the installer does not ask for one twice. `Uninstall` removes the
-scripts and leaves the empty folder behind. It does nothing.
-:::
+If Illustrator has **never been launched**, it has recorded no language, and the
+installer cannot tell which of its many language folders it reads. It says so
+and installs nothing for Illustrator: launch Illustrator once and run again. An
+installation the installer made earlier is always found again for updating and
+uninstalling, whatever the recorded language. If Illustrator has recorded more
+than one language, the scripts are installed for each of them and the run says
+which.
+
+## Uninstalling
+
+`Uninstall` removes the scripts from both applications. What happens to the
+Illustrator folder differs by platform, and only there:
+
+- **Windows:** the folder goes with the scripts. The permission it was given
+  includes the right to delete it, so no administrator step is needed and the
+  permission disappears with the folder.
+- **macOS:** removing the folder needs the same permission that creating it did,
+  so the installer asks once — *Remove both? That needs your password once.* —
+  and takes the folder and its permission together. Say no and the empty folder
+  stays, and the run says so.
+
+On either platform, a folder that still holds files the installer did not put
+there is left alone, and the run says that too.
 
 ## Without a terminal
 
 The repository also carries **`install-update.bat`** (Windows) and
 **`install-update.command`** (macOS) for machines where pasting a command is not
 practical, or for installing from a copy on a USB stick. Download the repository,
-then double-click the one for your platform.
+then double-click the one for your platform. It installs **the copy it sits in**
+— that is the point of this route — so to update, download again.
 
 This route does meet the operating system's warnings about unsigned files, which
 the command above does not.
@@ -196,8 +242,8 @@ to go back, install the older version again — keep the distribution you were o
 and point the installer at it with `--source` (macOS) or `-Source` (Windows).
 See [Advanced](/reference/advanced).
 :::
-- **Running it again is safe.** If you are already on the latest version it does
-  nothing.
+- **Running it again is safe.** If you are already on the latest version it
+  installs nothing.
 
 ## If something goes wrong
 

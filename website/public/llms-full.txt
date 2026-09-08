@@ -192,9 +192,14 @@ irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/insta
 
 ### Then
 
-The installer prints what it found and what it did, and finishes with a link to
-the next page. **Restart InDesign** (and Illustrator, if you use it) — both build
-their script menus at launch, so nothing appears until they restart.
+The installer prints what it found and what it did and, when it installed
+something, finishes with a link to the next page. **Restart InDesign** (and
+Illustrator, if you use it) — both build their script menus at launch, so
+nothing appears until they restart.
+
+Both applications need to have been **launched at least once** before this:
+their script folders are created on first launch, and that is how the installer
+finds them.
 
 - InDesign: `Window → Utilities → Scripts`, then the
   **indesign-toolkit-stable** folder.
@@ -202,7 +207,25 @@ their script menus at launch, so nothing appears until they restart.
 
 > **Updating is the same command**
 Run the same line again whenever you want the latest version. If you are already
-current it says so and changes nothing.
+current it says so and installs nothing.
+
+## The menu
+
+Run in a terminal, the installer shows what it found and offers only the choices
+that apply — **Install**, **Update**, **Repair** (rewrite the files even if the
+version already matches) or **Uninstall**, plus `q` to leave without changing
+anything. Enter takes the sensible default; when everything is already current
+there is no default, because the remaining choices all change something.
+
+Uninstall lives in that menu. On macOS it can also be run without the menu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash -s -- --uninstall
+```
+
+The Windows one-line form cannot take a flag — `iex` receives text, not a
+command — so use the menu there. Run with no terminal at all (a script, a
+deployment tool) it does not ask: it installs.
 
 ## What it changes on your machine
 
@@ -220,7 +243,9 @@ around it.
 
 **Nothing else.** No entry in System Settings or Windows Settings, no login
 item, no `PATH` change, no registry key, no scheduled task, no `defaults write`,
-no preference in InDesign or Illustrator. Uninstalling removes what it wrote.
+no preference in InDesign or Illustrator. Uninstalling removes what it wrote —
+on Windows outright; on macOS see [Uninstalling](#uninstalling) for the one
+question it asks.
 
 Two things you are often told to change for scripts like this, and do **not**
 have to here:
@@ -249,9 +274,11 @@ password in the same window, on Windows you approve the prompt Windows shows. It
 gives you a single folder of your own inside the application; it does not open
 the rest of it. After that, every install and update runs with no password.
 
-If no password is needed — macOS still remembers a recent `sudo`, or you are
-already an administrator on Windows — it does not explain and does not ask.
-There is nothing to warn you about, so the step passes in silence.
+If no password is needed — macOS still remembers a recent `sudo`, or on Windows
+PowerShell itself is already running as administrator — it does not
+explain and does not ask. There is nothing to warn you about, so the step passes
+in silence. (An administrator *account* in an ordinary PowerShell window is not
+that case; Windows still shows its prompt.)
 
 Saying no is an answer, not a failure: the run carries on with everything else,
 and the exact command is printed at the end for you to run whenever you like.
@@ -262,17 +289,37 @@ command does.
 Upgrading Illustrator replaces the whole application, and that folder goes with
 it. Run the same one command again afterwards, then run the installer.
 
-> **Uninstalling leaves an empty folder**
-Removing the folder itself needs the same administrator permission that creating
-it did, and the installer does not ask for one twice. `Uninstall` removes the
-scripts and leaves the empty folder behind. It does nothing.
+If Illustrator has **never been launched**, it has recorded no language, and the
+installer cannot tell which of its many language folders it reads. It says so
+and installs nothing for Illustrator: launch Illustrator once and run again. An
+installation the installer made earlier is always found again for updating and
+uninstalling, whatever the recorded language. If Illustrator has recorded more
+than one language, the scripts are installed for each of them and the run says
+which.
+
+## Uninstalling
+
+`Uninstall` removes the scripts from both applications. What happens to the
+Illustrator folder differs by platform, and only there:
+
+- **Windows:** the folder goes with the scripts. The permission it was given
+  includes the right to delete it, so no administrator step is needed and the
+  permission disappears with the folder.
+- **macOS:** removing the folder needs the same permission that creating it did,
+  so the installer asks once — *Remove both? That needs your password once.* —
+  and takes the folder and its permission together. Say no and the empty folder
+  stays, and the run says so.
+
+On either platform, a folder that still holds files the installer did not put
+there is left alone, and the run says that too.
 
 ## Without a terminal
 
 The repository also carries **`install-update.bat`** (Windows) and
 **`install-update.command`** (macOS) for machines where pasting a command is not
 practical, or for installing from a copy on a USB stick. Download the repository,
-then double-click the one for your platform.
+then double-click the one for your platform. It installs **the copy it sits in**
+— that is the point of this route — so to update, download again.
 
 This route does meet the operating system's warnings about unsigned files, which
 the command above does not.
@@ -346,8 +393,8 @@ to go back, install the older version again — keep the distribution you were o
 and point the installer at it with `--source` (macOS) or `-Source` (Windows).
 See [Advanced](/reference/advanced).
 
-- **Running it again is safe.** If you are already on the latest version it does
-  nothing.
+- **Running it again is safe.** If you are already on the latest version it
+  installs nothing.
 
 ## If something goes wrong
 
@@ -1125,7 +1172,10 @@ shell script.
 ## Environment overrides
 
 You can redirect the installer without editing it, by setting environment
-variables:
+variables. They apply when you run `install-update.sh` / `install-update.ps1`
+**directly**. The one-line commands download from GitHub before any of these are
+read and then hand over with an explicit local source, so on that route the
+three `TOOLKIT_*` overrides have no effect.
 
 | Variable | Effect |
 | --- | --- |
@@ -1143,6 +1193,28 @@ variables:
 | `-DryRun` | `--dry-run` | Detect and verify only — write no files. |
 | `-Source <path>` | `--source=<path>` | Install from a local source. |
 | `-Log` | `--log` | Save a diagnostic log to the Desktop. |
+| `-Install` | `--install` | Skip the menu; install or update. |
+| `-Repair` | `--repair` | Skip the menu; rewrite the files even if the version matches. |
+| `-Uninstall` | `--uninstall` | Skip the menu; remove the installed scripts. |
+
+On macOS a flag can ride on the one-line command: `curl … | bash -s -- --uninstall`.
+On Windows it cannot — `irm … | iex` hands the script over as text — so use the
+menu, or run `install-update.ps1` directly with the flag.
+
+## Requirements and exit codes
+
+Windows needs **PowerShell 5 or newer** (Windows 10 and 11 have it; the
+one-line command says so and stops if it is missing). From `cmd.exe`, either
+double-click `install-update.bat` or run
+`powershell -NoProfile -Command "irm … | iex"`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do. A refusal that leaves something for you to do first (Illustrator never launched, the one-time step declined) is also 0. |
+| 1 | Something failed, or nothing could be installed. |
+| 2 | Not one of the menu choices. |
+| 3 | No InDesign or Illustrator installation was found. |
+| 4 | The download failed verification. |
 
 ## Collecting a log when something goes wrong
 
@@ -1184,10 +1256,15 @@ walking the whole tree minus an exclusion list, then self-checking the `require`
 closure so nothing that is reachable at runtime is left out of the bundle. It
 emits:
 
-- `dist/toolkit/` — the payload that gets installed into the Scripts panel
+- `dist/toolkit/` — the InDesign payload that gets installed into the Scripts panel
 - `toolkit.manifest.json` — the version plus a SHA-256 for every file
 - `toolkit.manifest.sha256` — a `shasum -c` sidecar, used for verification on
   macOS
+- `dist/illustrator/`, `illustrator.manifest.json`, `illustrator.manifest.sha256`
+  — the same three for the Illustrator payload
+- `install.sh`, `install.ps1` — the one-line bootstraps
+
+The build refuses to emit a manifest and a sidecar that disagree with each other.
 
 The version number is read from `toolkit_installer/VERSION`.
 
@@ -1198,9 +1275,14 @@ contains — looks like this:
 
 ```text
 <repo root>/
-  toolkit/                  ← the content that gets installed into the Scripts panel
+  toolkit/                  ← the InDesign content that gets installed into the Scripts panel
   toolkit.manifest.json     ← version + per-file sha256
   toolkit.manifest.sha256   ← shasum -c sidecar (macOS verification)
+  illustrator/              ← the Illustrator scripts
+  illustrator.manifest.json
+  illustrator.manifest.sha256
+  install.sh                ← one-line bootstraps
+  install.ps1
   install-update.bat
   install-update.command
   install-update.ps1
@@ -1210,18 +1292,23 @@ contains — looks like this:
 
 ## Update semantics, restated
 
-- The whole folder is replaced **atomically**: download and verify first, swap
-  second.
-- A `.bak` folder exists only *during* the swap, as the transaction's undo, and
-  is removed once the new folder is in place. It is **not** a rollback copy you
-  can use afterwards — a leftover copy would appear in the Scripts panel as a
-  duplicate set of scripts, because InDesign scans it recursively.
+- **InDesign:** the whole folder is replaced **atomically**: download and verify
+  first, swap second. A `.bak` folder exists only *during* the swap, as the
+  transaction's undo, and is removed once the new folder is in place. It is
+  **not** a rollback copy you can use afterwards — a leftover copy would appear
+  in the Scripts panel as a duplicate set of scripts, because InDesign scans it
+  recursively.
+- **Illustrator:** files are replaced **in place**, each one atomically; there is
+  no `.bak` and no whole-folder swap, because that would need write access to
+  the Adobe folder around it, which the installer does not have. See
+  [How updating behaves](/guide/install#how-updating-behaves).
 - To roll back, reinstall the older distribution: `--source=/path/to/old-dist`
   (macOS) or `-Source C:\path\to\old-dist` (Windows). Keeping the distribution
   you are currently on is the only rollback path there is.
-- Any failure at any step leaves the existing installation untouched. There is
-  no half-installed state.
-- Re-running when already current is a no-op.
+- For InDesign, any failure at any step leaves the existing installation
+  untouched. For Illustrator a failure part-way through the in-place replace is
+  reported as a failure and heals on the next run.
+- Re-running when already current installs nothing.
 
 ## The machine-readable copy of this site
 

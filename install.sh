@@ -1,5 +1,10 @@
 #!/bin/sh
-# Creative Script Installer - one-line bootstrap for macOS and Linux.
+# Creative Script Installer - one-line bootstrap for macOS.
+#
+# NOT Linux, despite the shell being portable: install-update.sh looks in
+# ~/Library/Preferences/Adobe InDesign and /Applications, so on Linux it can
+# only ever reach "no installation found". Saying "and Linux" here promised
+# something the thing it hands off to cannot do.
 #
 #   curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
 #

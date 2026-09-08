@@ -18,6 +18,20 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
+# Expand-Archive arrived in PowerShell 5.0 (Windows Management Framework 5).
+# Windows 10 and 11 ship 5.1, so this is about older machines: on Windows 8.1
+# (4.0) or 7 (2.0) without WMF5 the bootstrap would otherwise die on an
+# unrecognised cmdlet and be reported as a generic "Install failed". install.sh
+# checks for curl and unzip up front for the same reason; this side did not.
+if (-not (Get-Command Expand-Archive -ErrorAction SilentlyContinue)) {
+  Write-Host 'This needs PowerShell 5 or newer (Expand-Archive is missing).' -ForegroundColor Red
+  Write-Host 'Windows 10 and 11 have it already. On an older Windows, install'
+  Write-Host 'Windows Management Framework 5.1 from Microsoft, then try again.'
+  $global:LASTEXITCODE = 1
+  if ($MyInvocation.MyCommand.Path) { exit 1 }
+  return
+}
+
 $ZipUrl = 'https://codeload.github.com/zxa24/creative-script-installer/zip/refs/heads/main'
 $tmp = Join-Path $env:TEMP ('csi-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 

@@ -1,10 +1,12 @@
 # Creative Script Installer
 
-Installs and updates a set of Adobe scripts — InDesign to begin with — into the
-places the applications actually read them from, and keeps them up to date from
-the same button afterwards.
+Installs and updates a set of Adobe scripts — for InDesign and Illustrator —
+into the places the applications actually read them from, and keeps them up to
+date from the same command afterwards.
 
-**No GitHub account, no git, no password.**
+**No GitHub account, no git.** No password for InDesign. Illustrator keeps its
+scripts inside the application itself, so its first install asks for yours —
+once.
 
 ## Install
 
@@ -55,17 +57,20 @@ the toolkit directly.
 
 ## What gets installed, and where
 
-Only scripts — no plugin, and no other InDesign setting is touched.
+Only scripts — no plugin, and no application setting is touched. InDesign gets a
+folder in your own Scripts panel; Illustrator gets one folder inside its own
+Scripts folder, made yours to write to with one administrator step.
 
 | | |
 |---|---|
 | Windows | `%APPDATA%\Adobe\InDesign\Version <N>\<language>\Scripts\Scripts Panel\` |
 | macOS | `~/Library/Preferences/Adobe InDesign/Version <N>/<language>/Scripts/Scripts Panel/` |
 
-Every installed InDesign version is detected and updated. Updating replaces the
-whole folder at once: the new version is downloaded and verified first, and if
-any step fails the existing installation is left exactly as it was. Running the
-installer when you are already up to date does nothing.
+Every installed InDesign version is detected and updated. Everything is
+downloaded and verified before anything is written. For InDesign the folder is
+then swapped in whole, so a failure leaves the existing installation exactly as
+it was; for Illustrator the files are replaced in place. Running the installer
+when you are already up to date installs nothing.
 
 **A successful update does not leave the previous version behind.** To go back,
 reinstall an older distribution — see

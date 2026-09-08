@@ -18,7 +18,10 @@ shell script.
 ## Environment overrides
 
 You can redirect the installer without editing it, by setting environment
-variables:
+variables. They apply when you run `install-update.sh` / `install-update.ps1`
+**directly**. The one-line commands download from GitHub before any of these are
+read and then hand over with an explicit local source, so on that route the
+three `TOOLKIT_*` overrides have no effect.
 
 | Variable | Effect |
 | --- | --- |
@@ -36,6 +39,28 @@ variables:
 | `-DryRun` | `--dry-run` | Detect and verify only — write no files. |
 | `-Source <path>` | `--source=<path>` | Install from a local source. |
 | `-Log` | `--log` | Save a diagnostic log to the Desktop. |
+| `-Install` | `--install` | Skip the menu; install or update. |
+| `-Repair` | `--repair` | Skip the menu; rewrite the files even if the version matches. |
+| `-Uninstall` | `--uninstall` | Skip the menu; remove the installed scripts. |
+
+On macOS a flag can ride on the one-line command: `curl … | bash -s -- --uninstall`.
+On Windows it cannot — `irm … | iex` hands the script over as text — so use the
+menu, or run `install-update.ps1` directly with the flag.
+
+## Requirements and exit codes
+
+Windows needs **PowerShell 5 or newer** (Windows 10 and 11 have it; the
+one-line command says so and stops if it is missing). From `cmd.exe`, either
+double-click `install-update.bat` or run
+`powershell -NoProfile -Command "irm … | iex"`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do. A refusal that leaves something for you to do first (Illustrator never launched, the one-time step declined) is also 0. |
+| 1 | Something failed, or nothing could be installed. |
+| 2 | Not one of the menu choices. |
+| 3 | No InDesign or Illustrator installation was found. |
+| 4 | The download failed verification. |
 
 ## Collecting a log when something goes wrong
 
@@ -79,10 +104,15 @@ walking the whole tree minus an exclusion list, then self-checking the `require`
 closure so nothing that is reachable at runtime is left out of the bundle. It
 emits:
 
-- `dist/toolkit/` — the payload that gets installed into the Scripts panel
+- `dist/toolkit/` — the InDesign payload that gets installed into the Scripts panel
 - `toolkit.manifest.json` — the version plus a SHA-256 for every file
 - `toolkit.manifest.sha256` — a `shasum -c` sidecar, used for verification on
   macOS
+- `dist/illustrator/`, `illustrator.manifest.json`, `illustrator.manifest.sha256`
+  — the same three for the Illustrator payload
+- `install.sh`, `install.ps1` — the one-line bootstraps
+
+The build refuses to emit a manifest and a sidecar that disagree with each other.
 
 The version number is read from `toolkit_installer/VERSION`.
 
@@ -93,9 +123,14 @@ contains — looks like this:
 
 ```text
 <repo root>/
-  toolkit/                  ← the content that gets installed into the Scripts panel
+  toolkit/                  ← the InDesign content that gets installed into the Scripts panel
   toolkit.manifest.json     ← version + per-file sha256
   toolkit.manifest.sha256   ← shasum -c sidecar (macOS verification)
+  illustrator/              ← the Illustrator scripts
+  illustrator.manifest.json
+  illustrator.manifest.sha256
+  install.sh                ← one-line bootstraps
+  install.ps1
   install-update.bat
   install-update.command
   install-update.ps1
@@ -105,18 +140,23 @@ contains — looks like this:
 
 ## Update semantics, restated
 
-- The whole folder is replaced **atomically**: download and verify first, swap
-  second.
-- A `.bak` folder exists only *during* the swap, as the transaction's undo, and
-  is removed once the new folder is in place. It is **not** a rollback copy you
-  can use afterwards — a leftover copy would appear in the Scripts panel as a
-  duplicate set of scripts, because InDesign scans it recursively.
+- **InDesign:** the whole folder is replaced **atomically**: download and verify
+  first, swap second. A `.bak` folder exists only *during* the swap, as the
+  transaction's undo, and is removed once the new folder is in place. It is
+  **not** a rollback copy you can use afterwards — a leftover copy would appear
+  in the Scripts panel as a duplicate set of scripts, because InDesign scans it
+  recursively.
+- **Illustrator:** files are replaced **in place**, each one atomically; there is
+  no `.bak` and no whole-folder swap, because that would need write access to
+  the Adobe folder around it, which the installer does not have. See
+  [How updating behaves](/guide/install#how-updating-behaves).
 - To roll back, reinstall the older distribution: `--source=/path/to/old-dist`
   (macOS) or `-Source C:\path\to\old-dist` (Windows). Keeping the distribution
   you are currently on is the only rollback path there is.
-- Any failure at any step leaves the existing installation untouched. There is
-  no half-installed state.
-- Re-running when already current is a no-op.
+- For InDesign, any failure at any step leaves the existing installation
+  untouched. For Illustrator a failure part-way through the in-place replace is
+  reported as a failure and heals on the next run.
+- Re-running when already current installs nothing.
 
 ## The machine-readable copy of this site
 

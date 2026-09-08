@@ -154,9 +154,11 @@ status() {
   else printf '%s\n' "$*"; fi
 }
 status_clear() {
-  # ${:-0} because the EXIT trap is armed a few lines above where STATUS_ON is
-  # first set: an exit in that window would otherwise hit an unbound variable
-  # inside the trap, under `set -u`.
+  # ${:-0} is harmless belt-and-braces. ⚠ The justification that used to be
+  # here was wrong: it claimed an exit between the trap being armed and
+  # STATUS_ON being set would hit an unbound variable, but in that window this
+  # function is not defined yet, so the trap's call is a command-not-found and
+  # the guarded body never runs at all.
   [ "${STATUS_ON:-0}" = "1" ] || return 0
   printf '\r\033[K'; STATUS_ON=0
 }
@@ -213,7 +215,10 @@ acquire_distribution() {
   # bouncing `-=#=- #  #  #` that carries no information. Both read as a fault
   # rather than as progress. Words, before and after, instead.
   status "Loading..."
-  if ! curl -fL -sS ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
+  # Timeouts, deliberately. Without them a firewall that DROPS packets rather
+  # than refusing leaves the run sitting on "Checking for updates..." with
+  # nothing on screen until curl's own default gives up.
+  if ! curl -fL -sS --connect-timeout 20 --max-time 600 ${auth[@]+"${auth[@]}"} -o "$WORK/dist.zip" "$zipUrl"; then return 1; fi
   unzip -q "$WORK/dist.zip" -d "$WORK/extract"
   DIST_ROOT="$(find_dist_root "$WORK/extract")"
 }
@@ -234,7 +239,12 @@ install_into() {  # $1 = panel dir, $2 = payload dir, $3 = version ; echo result
   # working tree.
   if [ -L "$dst" ]; then echo "blocked"; return 0; fi
 
-  rm -rf "$new"   # 清上次崩溃残留 (InDesign 递归扫描面板 → 残树会显示为多余脚本组)
+  # Checked. If a leftover .new survives, `cp -R "$payload" "$new"` copies
+  # INTO it rather than creating it, the swap then succeeds, and the scripts
+  # land one directory deeper than the panel expects - reported as a clean
+  # install, and repeated on every run after. Same shape as the moved=1 bug
+  # described below; reproduced by the reviewer.
+  rm -rf "$new" || return 1   # 清上次崩溃残留 (InDesign 递归扫描面板 → 残树会显示为多余脚本组)
 
   if [ -d "$dst" ] && [ "$FORCE" != "1" ] && [ -f "$dst/$VERSION_MARKER" ]; then
     local cur; cur="$(read_version "$dst/$VERSION_MARKER" 2>/dev/null || true)"
@@ -242,18 +252,41 @@ install_into() {  # $1 = panel dir, $2 = payload dir, $3 = version ; echo result
   fi
   if [ "$DRYRUN" = "1" ]; then echo "would-install"; return 0; fi
 
-  cp -R "$payload" "$new"
+  # Every write below is checked by hand. `set -e` does NOT reach inside this
+  # function: it is called as "$(install_into …)", and a failing command in a
+  # command substitution does not abort it - measured on this machine WITH a
+  # control (a plain call to the same function does abort; `r="$(f)"` does not,
+  # in or out of a test context). So an unchecked failure here would run on to
+  # `echo "installed"` and report success.
+  cp -R "$payload" "$new" || { rm -rf "$new"; return 1; }
   printf '{"version":"%s","installedAt":"%s","source":"%s"}\n' \
-    "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OWNER/$REPO@$REF" > "$new/$VERSION_MARKER"
+    "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OWNER/$REPO@$REF" > "$new/$VERSION_MARKER" \
+    || { rm -rf "$new"; return 1; }
 
-  rm -rf "$bak"
+  # Checked, the way `.new` above is: if this rm fails, the `mv "$dst" "$bak"`
+  # below moves the old tree INSIDE the surviving .bak and returns 0, the new
+  # tree swaps in, and "installed" is reported with the old install one level
+  # down in the panel - the same shape as the .new bug already fixed here.
+  rm -rf "$bak" || { rm -rf "$new"; return 1; }
   local moved=0
-  [ -d "$dst" ] && { mv "$dst" "$bak"; moved=1; }
+  # moved=1 ONLY if the move succeeded. It used to be set unconditionally in a
+  # ;-separated group, and the consequence was measured: a failed `mv` still
+  # armed the rollback guard, $dst was therefore still present, and the next
+  # `mv "$new" "$dst"` moved the new tree INSIDE the old one and returned 0.
+  # The marker then sat one level down, so every later run read "not installed"
+  # and did it again - a false success that repeated forever.
+  if [ -d "$dst" ]; then
+    mv "$dst" "$bak" || { rm -rf "$new"; return 1; }
+    moved=1
+  fi
   if ! mv "$new" "$dst"; then
     [ "$moved" = "1" ] && [ -d "$bak" ] && [ ! -d "$dst" ] && mv "$bak" "$dst"
+    rm -rf "$new"
     return 1
   fi
-  rm -rf "$bak"   # 成功: 不在面板里留 .bak 副本树 (否则面板显示重复脚本组)
+  # 成功: 不在面板里留 .bak 副本树 (否则面板显示重复脚本组)。Unchecked before -
+  # a .bak that survived was never mentioned, and InDesign showed two sets.
+  rm -rf "$bak" || say "  (a leftover copy at ${bak} could not be removed - InDesign may list the scripts twice until it is)"
   echo "installed"
 }
 
@@ -262,11 +295,27 @@ install_into() {  # $1 = panel dir, $2 = payload dir, $3 = version ; echo result
 # bridge, and removing it takes away someone's connection to their working tree.
 # An uninstall that quietly did that would look like it worked.
 uninstall_from() {  # $1 = panel dir ; echoes result
-  local dst="$1/$INSTALL_FOLDER"
+  local dst="$1/$INSTALL_FOLDER" bak="$1/$INSTALL_FOLDER.bak" new="$1/$INSTALL_FOLDER.new"
   if [ -L "$dst" ]; then echo "blocked"; return 0; fi
-  [ -d "$dst" ] || { echo "absent"; return 0; }
+  # No marker, not ours - the same test the legacy cleanup and both Illustrator
+  # paths already apply. This was the one removal that did not check, so a
+  # copied checkout or an unpacked backup under the reserved name was rm -rf'd.
+  if [ -d "$dst" ] && [ ! -f "$dst/$VERSION_MARKER" ]; then echo "not-ours"; return 0; fi
+
+  # .bak and .new are ours, and a run killed mid-swap leaves one or both with
+  # NO $dst at all. Uninstall used to look only at $dst, find nothing, and
+  # report "no installation was found" - while InDesign, which scans this
+  # panel recursively, showed the user two complete copies of the toolkit.
+  if [ ! -d "$dst" ]; then
+    if [ -d "$bak" ] || [ -d "$new" ]; then
+      if [ "$DRYRUN" = "1" ]; then echo "would-remove"; return 0; fi
+      rm -rf "$bak" "$new" && echo "removed" || echo "failed"
+      return 0
+    fi
+    echo "absent"; return 0
+  fi
   if [ "$DRYRUN" = "1" ]; then echo "would-remove"; return 0; fi
-  rm -rf "$dst" && echo "removed" || echo "failed"
+  rm -rf "$dst" "$bak" "$new" && echo "removed" || echo "failed"
 }
 
 installed_version_at() {  # $1 = panel dir
@@ -299,7 +348,21 @@ installed_version_at() {  # $1 = panel dir
 #     rather than by swapping a folder.
 
 ai_scripts_dir_in() {  # $1 = locale dir; echoes the scripts dir, or nothing
+  # Two signals, because the first one is borrowed. Holding .jsx files works
+  # only as long as Adobe's three sample scripts are there - they are what
+  # carries it, not anything of ours: our own install goes one level deeper,
+  # into <scripts dir>/$AI_FOLDER/, so a successful install contributes
+  # nothing to being found again. Remove the samples and Illustrator becomes
+  # permanently invisible, including for updating and uninstalling scripts
+  # that are sitting right there.
+  #
+  # So a folder that holds OUR folder counts as the scripts folder too. That
+  # makes an existing installation detectable on its own evidence.
   local d
+  for d in "$1"/*/; do
+    [ -d "$d" ] || continue
+    if [ -d "$d$AI_FOLDER" ]; then printf '%s' "${d%/}"; return 0; fi
+  done
   for d in "$1"/*/; do
     [ -d "$d" ] || continue
     if ls "$d"*.jsx >/dev/null 2>&1; then printf '%s' "${d%/}"; return 0; fi
@@ -307,22 +370,39 @@ ai_scripts_dir_in() {  # $1 = locale dir; echoes the scripts dir, or nothing
   return 1
 }
 
-ai_preferred_locale() {  # echoes the locale Illustrator itself recorded
-  # Illustrator writes this folder at first launch, so it reflects the language
-  # Illustrator is actually running in. The macOS system locale is a different
-  # question that merely happens to have the same answer on many Macs.
+ai_settings_locales() {  # every locale Illustrator itself recorded, de-duplicated
+  # Illustrator creates this folder at first launch and names it for the
+  # language it runs in. That is a different question from the macOS system
+  # language, which merely happens to have the same answer on many Macs.
+  #
+  # ALL of them, not the first one. An installation the user has switched
+  # languages on, or two Illustrator versions, leaves more than one - and
+  # taking the first was a silent coin-toss between them.
   local s
   for s in "$HOME/Library/Preferences/Adobe Illustrator "*" Settings"/*/; do
-    [ -d "$s" ] || continue
-    basename "${s%/}"; return 0
-  done
-  return 1
+    [ -d "$s" ] && basename "${s%/}"
+  done | sort -u
 }
 
-find_illustrator_dirs() {  # echoes:  <scripts dir>|<label>
-  local app root ver presets p l pref sdir locales
+# Sets AI_DIRS (lines of "<scripts dir>|<label>") and AI_LOCALE_NOTE.
+#
+# NOT called via $(...): it has to report WHY it chose what it chose, and a
+# command substitution would capture that as part of its result. Same reason
+# acquire_distribution sets a global - see the note there.
+AI_DIRS=""
+AI_LOCALE_NOTE=""
+AI_APPS_SEEN=0
+# One note per Illustrator installation, not one for the run. The single
+# variable used to be overwritten per application, so with two versions the
+# last one wrote "(Nothing was written to Illustrator.)" over a first that had
+# just been written to.
+ai_note() { AI_LOCALE_NOTE="${AI_LOCALE_NOTE}${AI_LOCALE_NOTE:+$'\n'}$*"; }
+find_illustrator_dirs() {
+  local app root ver presets p l w sdir want picked __names
   root="${CSI_APP_ROOT:-/Applications}"
-  pref="$(ai_preferred_locale 2>/dev/null || true)"
+  want="$(ai_settings_locales)"
+  AI_DIRS=""; AI_LOCALE_NOTE=""; AI_APPS_SEEN=0
+
   for app in "$root"/Adobe\ Illustrator*; do
     [ -d "$app" ] || continue
     ver="$(basename "$app" | sed 's/^Adobe Illustrator *//')"
@@ -331,21 +411,72 @@ find_illustrator_dirs() {  # echoes:  <scripts dir>|<label>
       [ -d "$p" ] && { presets="$p"; break; }
     done
     [ -n "$presets" ] || continue
-    # Prefer the locale Illustrator recorded; otherwise take every one. Writing
-    # into a locale Illustrator does not read is harmless noise; writing into
-    # none of them is a silent no-op, which is worse.
-    locales=""
-    if [ -n "$pref" ] && [ -d "$presets/$pref" ]; then
-      locales="$presets/$pref"
-    else
-      for l in "$presets"/*/; do [ -d "$l" ] && locales="$locales
-${l%/}"; done
+    AI_APPS_SEEN=$((AI_APPS_SEEN + 1))
+
+    # Every recorded locale that this installation actually has a folder for.
+    picked=""
+    if [ -n "$want" ]; then
+      while IFS= read -r w; do
+        [ -n "$w" ] && [ -d "$presets/$w" ] && picked="${picked}${presets}/${w}
+"
+      done <<< "$want"
     fi
-    printf '%s\n' "$locales" | while IFS= read -r l; do
+
+    # Plus every language folder that ALREADY carries one of our installs,
+    # whatever the recorded locale says. Without this, the refusal below made
+    # an existing install unreachable: a machine that an earlier version had
+    # written into (it used to spray every locale) reported "no installation
+    # was found" on uninstall while the scripts sat right there. "Ours" is the
+    # version marker, the same test uninstall itself uses.
+    existing=""
+    for l in "$presets"/*/; do
+      [ -d "$l" ] || continue
+      sdir="$(ai_scripts_dir_in "${l%/}" 2>/dev/null || true)"
+      [ -n "$sdir" ] && [ -f "$sdir/$AI_FOLDER/$VERSION_MARKER" ] || continue
+      printf '%s\n' "$picked" | grep -qxF "${l%/}" && continue
+      existing="${existing}${l%/}
+"
+    done
+    picked="${picked}${existing}"
+
+    if [ -z "$picked" ]; then
+      # Owner decision (2026-09-07): refuse, do not spray.
+      #
+      # The fallback used to install into EVERY language folder - twenty-five
+      # of them on the test Mac. Twenty-four of those are folders Illustrator
+      # never reads, inside the application bundle, and uninstall can only
+      # empty them: removing the folders needs write access to the Adobe
+      # directory around them, which this installer does not have. So the
+      # cost of guessing wrong is permanent litter in someone's application.
+      #
+      # CSI_ALL_LOCALES=1 keeps the old behaviour, for a machine where
+      # Illustrator genuinely never records a locale. It is deliberately not
+      # advertised outside this file: it is an escape hatch, not an option.
+      if [ "${CSI_ALL_LOCALES:-}" = "1" ]; then
+        for l in "$presets"/*/; do [ -d "$l" ] && picked="${picked}${l%/}
+"; done
+        ai_note "Illustrator ${ver}: could not tell which language it uses; CSI_ALL_LOCALES=1 is set, so every language folder is being used."
+      else
+        ai_note "Illustrator ${ver} has not recorded which language it runs in, so there is no way to tell which of its language folders it reads. Launch it once, then run this again. (Nothing was written to it.)"
+      fi
+    elif [ "$(printf '%s' "$picked" | grep -c . || true)" -gt 1 ]; then
+      # More than one and no way to tell which belongs to which installation -
+      # the application folder is named for a year and the settings folder for
+      # a version number, so they cannot be paired without a lookup table that
+      # would go stale. Use all of them and say so - built from what was
+      # actually PICKED, not from what was recorded.
+      __names="$(while IFS= read -r l; do [ -n "$l" ] && basename "$l"; done <<< "$picked")"
+      ai_note "Illustrator ${ver} is set up for more than one language; the scripts are being installed for each of these: ${__names//$'\n'/ }"
+    fi
+
+    # Here-string, not a pipe: a pipe runs the loop in a subshell and the
+    # AI_DIRS it builds would be discarded at the end of it.
+    while IFS= read -r l; do
       [ -z "$l" ] && continue
       sdir="$(ai_scripts_dir_in "$l" 2>/dev/null || true)"
-      [ -n "$sdir" ] && printf '%s|Illustrator %s (%s)\n' "$sdir" "$ver" "$(basename "$l")"
-    done
+      [ -n "$sdir" ] && AI_DIRS="${AI_DIRS}${sdir}|Illustrator ${ver} ($(basename "$l"))
+"
+    done <<< "$picked"
   done
 }
 
@@ -414,11 +545,21 @@ ai_install_into() {  # $1 = scripts dir, $2 = payload dir, $3 = version; echoes 
   for f in "$dst"/*.jsx; do
     [ -f "$f" ] || continue
     base="$(basename "$f")"
-    [ -f "$payload/$base" ] || rm -f "$f"
+    # NOT `|| return 1`. This is a cosmetic sweep of scripts an older version
+    # installed under names this one no longer ships; failing it does not make
+    # the install wrong, and aborting here would skip the marker write that
+    # makes the install durable. The DESIGN matches Windows (do not abort);
+    # the logging does not - Windows uses -ErrorAction SilentlyContinue and
+    # records nothing.
+    [ -f "$payload/$base" ] || rm -f "$f" || log "could not remove stale script: $f"
   done
 
+  # Checked, for the same reason as install_into: a failed marker write would
+  # otherwise reach `echo "installed"`, and the next run would find no marker,
+  # report "not installed", and reinstall - every time, forever.
   printf '{"version":"%s","installedAt":"%s","source":"%s"}\n' \
-    "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OWNER/$REPO@$REF" > "$dst/$VERSION_MARKER"
+    "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OWNER/$REPO@$REF" > "$dst/$VERSION_MARKER" \
+    || return 1
   echo "installed"
 }
 
@@ -429,7 +570,25 @@ ai_uninstall_from() {  # $1 = scripts dir; echoes result
   # No marker means this folder was not put here by this installer. Leave it.
   [ -f "$dst/$VERSION_MARKER" ] || { echo "not-ours"; return 0; }
   if [ "$DRYRUN" = "1" ]; then echo "would-remove"; return 0; fi
-  rm -f "$dst"/*.jsx "$dst/$VERSION_MARKER" 2>/dev/null || true
+
+  # Order matters, and it used to be one unordered `rm -f` over both. The
+  # marker is the ONLY proof this folder is ours: losing it while a script
+  # survives leaves a target that reports "not-ours" for ever, with the
+  # scripts still in Illustrator's menu and no way to remove them. So the
+  # scripts go first, and the marker only if they all went.
+  rm -f "$dst"/*.jsx 2>/dev/null || true
+  # Staging and probe leftovers are ours too, and one survivor is enough to
+  # keep the folder permanently non-empty - which makes every future uninstall
+  # report the wrong reason for the folder still being there.
+  rm -f "$dst"/*.csi-new "$dst"/.csi_probe 2>/dev/null || true
+
+  # Checked, not assumed. Every deletion above is error-suppressed, so the
+  # only honest answer comes from looking.
+  if ls "$dst"/*.jsx >/dev/null 2>&1; then
+    echo "failed"; return 0
+  fi
+  rm -f "$dst/$VERSION_MARKER" 2>/dev/null || true
+
   # Removing the folder itself needs write access to the Adobe folder around
   # it, which this installer does not have and does not ask for. On a machine
   # where it happens to have it, the folder goes; otherwise an empty folder
@@ -448,6 +607,16 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   # coming, it is five lines standing between the person and their result, about
   # a cost they are not being asked to pay. (It still reaches the diagnostic log,
   # so "what did it do" remains answerable.)
+  # A folder that exists but that we cannot write into is somebody else's -
+  # another account's grant on a shared Mac. Taking it over, silently or with
+  # this person's password, would hand one user's folder to another and put the
+  # first one back at "not set up yet". Refuse here; the command printed at the
+  # end still lets a person do it deliberately.
+  if [ -d "$dst" ]; then
+    log "$dst exists but is not writable by $me; not re-owning it"
+    return 1
+  fi
+
   if sudo -n true 2>/dev/null; then
     if sudo -n sh -c 'mkdir -p "$1" && chown "$2" "$1"' _ "$dst" "$me" 2>/dev/null \
        && ai_writable "$sdir"; then
@@ -477,7 +646,15 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
   say "  else on your Mac is changed, and you will not be asked again."
   say ""
   ans="$(ask '  Continue? [y/n]: ')" || return 1
-  case "$ans" in n|N|no|NO|No) say "  Skipped - the command to do it yourself is below."; return 1 ;; esac
+  # Only an affirmative proceeds. There was no `*)` arm, so `q`, `?`, a stray
+  # keystroke - anything that was not one of the decline words - fell through
+  # to the password prompt. At a permission question the unrecognised answer
+  # has to mean no.
+  case "$ans" in
+    ""|y|Y|yes|YES|Yes) ;;
+    n|N|no|NO|No) say "  Skipped - the command to do it yourself is below."; return 1 ;;
+    *) say "  Not a yes - skipping. The command to do it yourself is below."; return 1 ;;
+  esac
 
   # sudo reads its password from the TERMINAL, not from stdin - which is the
   # whole reason this can work under `curl | bash`, where stdin is the script
@@ -501,6 +678,43 @@ ai_try_grant() {  # $1 = scripts dir ; 0 when the folder ends up ours to write
     return 0
   fi
   say "  The command reported success, but the folder still is not writable."
+  return 1
+}
+
+ai_try_revoke() {  # $1 = scripts dir ; removes the folder AND the grant with it
+  # Owner decision (2026-09-07): uninstall gives the permission back.
+  #
+  # There is no separate "revoke" to run: the grant WAS ownership of this one
+  # folder, so removing the folder removes it. That needs the parent's write
+  # permission, which is exactly what we do not have - hence one elevation, at
+  # the moment the person asked for the thing to be gone.
+  local sdir="$1" dst="$1/$AI_FOLDER"
+  [ -d "$dst" ] || return 0
+  [ -L "$dst" ] && return 1
+  # "emptied" is also returned when the folder is NOT empty - it still holds
+  # files somebody else put there, which uninstall deliberately leaves alone.
+  # rm -rf here would delete exactly those. So: only an empty folder is offered.
+  if [ -n "$(ls -A "$dst" 2>/dev/null)" ]; then
+    say ""
+    say "  The ${AI_FOLDER} folder inside Illustrator still holds files this installer"
+    say "  did not put there, so it is left in place - and so is its permission."
+    return 1
+  fi
+  say ""
+  say "  The ${AI_FOLDER} folder inside Illustrator is still there, and so is the"
+  say "  permission that was granted to create it."
+  say ""
+  ans="$(ask '  Remove both? That needs your password once. [y/n]: ')" || return 1
+  case "$ans" in
+    ""|y|Y|yes|YES|Yes) ;;
+    *) say "  Left in place."; return 1 ;;
+  esac
+  if sudo -p "  Enter your Mac password to finish removing it: " rm -rf "$dst" </dev/tty; then
+    [ -d "$dst" ] && { say "  It is still there - nothing else was changed."; return 1; }
+    say "  Removed."
+    return 0
+  fi
+  say "  That did not go through - the folder is still there."
   return 1
 }
 
@@ -540,6 +754,14 @@ print_illustrator_setup() {  # $1 = scripts dir
 # no business discussing. Only the removal is reported, because only the removal
 # happened.
 migrate_legacy_folder() {  # $1 = panel dir
+  # A dry run must not delete anything. This became reachable under --dry-run
+  # when the caller was widened to also clean up on the `skip` path: `skip`
+  # returns BEFORE install_into's dry-run gate, so on an already-current
+  # machine the run came straight here and removed the folder, then printed
+  # "Nothing was written." The damage lands only on designers - on a
+  # development machine the legacy name is the bridge, which the link check
+  # below correctly refuses.
+  [ "$DRYRUN" = "1" ] && return 0
   local old="$1/$LEGACY_FOLDER"
   [ -e "$old" ] || return 0
   [ -L "$old" ] && return 0                        # a bridge - not ours
@@ -567,7 +789,17 @@ panels_need_update() {  # $1 = version ; covers BOTH applications
     # It is NOT thereby forgotten - report_pending_ai_setup below prints it on
     # the same paths this function can send the run down, including the
     # "already up to date" exit.
-    [ -d "$p/$AI_FOLDER" ] || continue
+    # An absent folder is not "nothing to do". It means that only when the
+    # target ALSO cannot be written to - i.e. it is waiting for the one-time
+    # administrator step, which report_pending_ai_setup prints. A target that
+    # is writable and has no folder is simply NOT INSTALLED, and skipping it
+    # here made the run answer "Already up to date (v…)" and exit 0 on a
+    # machine with nothing installed on it at all. Live on the double-click
+    # path, where no --source is passed and this preflight decides the run.
+    if [ ! -d "$p/$AI_FOLDER" ]; then
+      ai_writable "$p" && return 0
+      continue
+    fi
     mk="$p/$AI_FOLDER/$VERSION_MARKER"
     [ -f "$mk" ] || return 0
     cur="$(read_version "$mk" 2>/dev/null || true)"
@@ -606,10 +838,42 @@ say ""
 status "Checking for updates..."
 
 PANELS="$(find_panels)"
-AI_DIRS="$(find_illustrator_dirs 2>/dev/null || true)"
+# Sets AI_DIRS and AI_LOCALE_NOTE. Not "$(...)" - see the note on the function.
+find_illustrator_dirs 2>/dev/null || true
 # Only give up when NEITHER application is here. Exiting on "no InDesign" would
 # have made an Illustrator-only machine look like a machine with nothing on it.
+# Said out loud, because this is the case where the guess can be wrong: a
+# silent wrong guess installs into a language folder Illustrator does not read,
+# and the person sees "installed" followed by an empty menu with nothing to
+# explain it.
+while IFS= read -r __l; do [ -n "$__l" ] && say "  $__l"; done <<< "$AI_LOCALE_NOTE"
+
+# Said whenever it happens, not only when NOTHING was found. With InDesign
+# present the run used to carry on to a cheerful summary while Illustrator had
+# silently dropped out of every counter - no line, no reason, nothing to search
+# for. The exit-3 branch below only covers the case where both are missing.
+# Only when there is no more specific reason already printed. The locale note
+# above explains a different cause, and two explanations for one absence read
+# as two problems.
+if [ "$AI_APPS_SEEN" -gt 0 ] && [ -z "$AI_DIRS" ] && [ -n "$PANELS" ] && [ -z "$AI_LOCALE_NOTE" ]; then
+  say "  Found Illustrator, but could not identify its Scripts folder - skipping it."
+fi
+
 if [ -z "$PANELS" ] && [ -z "$AI_DIRS" ]; then
+  # The note above already said why nothing can be done yet. That is not a
+  # malfunction and must not be reported as one - the "report this" text and
+  # exit 3 below used to run right after a note that had explained everything.
+  if [ "$AI_APPS_SEEN" -gt 0 ] && [ -n "$AI_LOCALE_NOTE" ]; then exit 0; fi
+  # Two different states, and they used to share one sentence. "Illustrator is
+  # here but I could not identify its Scripts folder" is not "Illustrator is
+  # not installed", and telling someone to install an application they already
+  # have is the one answer that cannot lead anywhere.
+  if [ "$AI_APPS_SEEN" -gt 0 ]; then
+    fail "Found Illustrator, but could not identify its Scripts folder inside it."
+    fail "That folder is recognised by the scripts already in it; if it is empty,"
+    fail "there is nothing to go on. Report this with --log and the Illustrator version."
+    exit 3
+  fi
   say "No InDesign or Illustrator installation found. Install and launch one of them, then run this again."
   exit 3
 fi
@@ -630,12 +894,23 @@ fi
 # things happen to be current looks identical.
 RVER=""
 if [ -n "$SOURCE" ]; then
-  LM="$(find "$SOURCE" -maxdepth 5 -name "$MANIFEST_NAME" -type f 2>/dev/null | head -n1)"
-  [ -n "$LM" ] && RVER="$(read_version "$LM" 2>/dev/null || true)"
+  # A --source can be a DIRECTORY or a .zip - acquire_distribution accepts both
+  # and the header advertises both. `find <regular file> -name …` matches
+  # nothing, so the zip case used to leave RVER empty: every installation then
+  # looked current and the menu could never offer Update. Reading the manifest
+  # out of the zip is the fix; falling back to the REMOTE version would be
+  # worse than nothing, because the run installs the zip and would be comparing
+  # against something else entirely.
+  if [ -d "$SOURCE" ]; then
+    LM="$(find "$SOURCE" -maxdepth 5 -name "$MANIFEST_NAME" -type f 2>/dev/null | head -n1)"
+    [ -n "$LM" ] && RVER="$(read_version "$LM" 2>/dev/null || true)"
+  else
+    RVER="$({ unzip -p "$SOURCE" "*$MANIFEST_NAME" 2>/dev/null | grep -m1 '"version"' || true; } | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+  fi
 else
   MURL0="${TOOLKIT_MANIFEST_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/$REF/$MANIFEST_NAME}"
   pa0=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && pa0=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
-  RM0="$(curl -fsSL ${pa0[@]+"${pa0[@]}"} "$MURL0" 2>/dev/null || true)"
+  RM0="$(curl -fsSL --connect-timeout 10 --max-time 20 ${pa0[@]+"${pa0[@]}"} "$MURL0" 2>/dev/null || true)"
   [ -n "$RM0" ] && RVER="$(printf '%s' "$RM0" | { grep -m1 '"version"' || true; } \
     | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
 fi
@@ -658,7 +933,7 @@ if [ -z "$ACTION" ]; then
     lv="$(installed_version_at "$p")"
     label="$(printf '%s' "$p" | sed -E 's#.*/Adobe InDesign/([^/]*)/([^/]*)/.*#\1 (\2)#')"
     if [ -L "$p/$INSTALL_FOLDER" ]; then
-      say "  ${label}: a link is in the way (development bridge) - see DEV-BRIDGE.md"
+      say "  ${label}: a link is in the way (development bridge) - rename or remove it and run again"
     elif [ -n "$lv" ]; then
       INSTALLED_ANY=1
       if [ -n "$RVER" ] && [ "$lv" != "$RVER" ]; then
@@ -675,7 +950,7 @@ if [ -z "$ACTION" ]; then
     label="${p#*|}"; p="${p%%|*}"
     lv="$(ai_installed_version_at "$p")"
     if [ -L "$p/$AI_FOLDER" ]; then
-      say "  ${label}: a link is in the way (development bridge) - see DEV-BRIDGE.md"
+      say "  ${label}: a link is in the way (development bridge) - rename or remove it and run again"
     elif ! ai_writable "$p"; then
       # Not an error, and not counted as "installed" or as "needs updating".
       # Deliberately does NOT promise what happens next: the run may offer to
@@ -720,7 +995,10 @@ if [ -z "$ACTION" ]; then
     say ""
     CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
     case "$CHOICE" in
-      __NOTTY__|""|1) ACTION="install" ;;
+      # __NOTTY__ here means `read` hit EOF - has_tty already passed, so this is
+      # Ctrl-D, the standard way to leave a prompt. It used to mean install.
+      __NOTTY__)      say ""; say "Nothing was changed."; exit 0 ;;
+      ""|1)           ACTION="install" ;;
       q|Q)            say ""; say "Nothing was changed."; exit 0 ;;
       *)              say ""; say "Not one of the choices: ${CHOICE}"; exit 2 ;;
     esac
@@ -732,7 +1010,8 @@ if [ -z "$ACTION" ]; then
     say ""
     CHOICE="$(ask '  Choose [1]: ')" || CHOICE="__NOTTY__"
     case "$CHOICE" in
-      __NOTTY__|""|1) ACTION="install" ;;       # nobody to ask - behave as before
+      __NOTTY__)      say ""; say "Nothing was changed."; exit 0 ;;   # Ctrl-D
+      ""|1)           ACTION="install" ;;
       2)              ACTION="repair"; FORCE=1 ;;
       3)              ACTION="uninstall" ;;
       q|Q)            say ""; say "Nothing was changed."; exit 0 ;;
@@ -747,7 +1026,7 @@ if [ -z "$ACTION" ]; then
     # should be what Enter does - and hinting "[q]" reads as advice to leave.
     CHOICE="$(ask '  Choose: ')" || CHOICE="__NOTTY__"
     case "$CHOICE" in
-      __NOTTY__)  ACTION="install" ;;
+      __NOTTY__)  say ""; say "Nothing was changed."; exit 0 ;;   # Ctrl-D: the other two menus already do this
       1)          ACTION="repair"; FORCE=1 ;;
       2)          ACTION="uninstall" ;;
       ""|q|Q)     say ""; say "Nothing was changed."; exit 0 ;;
@@ -758,26 +1037,31 @@ if [ -z "$ACTION" ]; then
 fi
 
 if [ "$ACTION" = "uninstall" ]; then
-  REMOVED=0; BLOCKED_U=0; ABSENT=0; UFAILED=0
+  REMOVED=0; BLOCKED_U=0; ABSENT=0; UFAILED=0; NOT_OURS_ID=0
+  REMOVED_ID=0; REMOVED_AI=0   # per application, so the summary can name them
   while IFS= read -r p; do
     [ -z "$p" ] && continue
     case "$(uninstall_from "$p")" in
-      removed)      REMOVED=$((REMOVED+1)) ;;
-      would-remove) REMOVED=$((REMOVED+1)) ;;
+      removed)      REMOVED=$((REMOVED+1)); REMOVED_ID=$((REMOVED_ID+1)) ;;
+      would-remove) REMOVED=$((REMOVED+1)); REMOVED_ID=$((REMOVED_ID+1)) ;;
       blocked)      BLOCKED_U=$((BLOCKED_U+1)) ;;
       absent)       ABSENT=$((ABSENT+1)) ;;
+      not-ours)     NOT_OURS_ID=$((NOT_OURS_ID+1)) ;;
       *)            UFAILED=$((UFAILED+1)) ;;
     esac
   done <<< "$PANELS"
-  EMPTIED=0
+  EMPTIED=0; EMPTIED_DIRS=""
+  NOT_OURS=0
   while IFS= read -r p; do
     [ -z "$p" ] && continue
     case "$(ai_uninstall_from "${p%%|*}")" in
-      removed)      REMOVED=$((REMOVED+1)) ;;
-      would-remove) REMOVED=$((REMOVED+1)) ;;
-      emptied)      REMOVED=$((REMOVED+1)); EMPTIED=$((EMPTIED+1)) ;;
+      removed)      REMOVED=$((REMOVED+1)); REMOVED_AI=$((REMOVED_AI+1)) ;;
+      would-remove) REMOVED=$((REMOVED+1)); REMOVED_AI=$((REMOVED_AI+1)) ;;
+      emptied)      REMOVED=$((REMOVED+1)); REMOVED_AI=$((REMOVED_AI+1)); EMPTIED=$((EMPTIED+1)); EMPTIED_DIRS="${EMPTIED_DIRS}${p%%|*}
+" ;;
       blocked)      BLOCKED_U=$((BLOCKED_U+1)) ;;
-      absent|not-ours) ABSENT=$((ABSENT+1)) ;;
+      absent)       ABSENT=$((ABSENT+1)) ;;
+      not-ours)     NOT_OURS=$((NOT_OURS+1)) ;;
       *)            UFAILED=$((UFAILED+1)) ;;
     esac
   done <<< "$AI_DIRS"
@@ -785,15 +1069,40 @@ if [ "$ACTION" = "uninstall" ]; then
   # Say that the folder is still there. It is empty and inert, but a person who
   # is told "removed" and then finds it will reasonably think the uninstall
   # failed - and the reason it stays is not something they can guess.
-  [ "$EMPTIED" -gt 0 ] && say "The scripts were removed from ${EMPTIED} Illustrator location(s); the now-empty ${AI_FOLDER} folder stays, because deleting it needs an administrator."
+  # Two different states used to share one sentence, and it asserted both an
+  # emptiness and a cause that the code never established: `emptied` is also
+  # returned when the folder is NOT empty (somebody else's files are in it, the
+  # ones the uninstall deliberately leaves alone). Say what is actually known.
+  if [ "$EMPTIED" -gt 0 ]; then
+    say "The scripts were removed from ${EMPTIED} Illustrator location(s)."
+    # Offered here, in the main flow: ai_uninstall_from is called as "$(...)",
+    # so anything it printed would be captured as its return value instead of
+    # reaching the person.
+    # Only the targets THIS run emptied - not every Illustrator target. The loop
+    # used to walk all of them, so a folder the uninstall had just refused as
+    # "not ours" (no marker) or "blocked" (a link) was offered to sudo rm -rf one
+    # line after the refusal was printed.
+    REVOKED=0
+    while IFS= read -r d; do
+      [ -z "$d" ] && continue
+      ai_try_revoke "$d" && REVOKED=$((REVOKED+1)) || true
+    done <<< "$EMPTIED_DIRS"
+    [ "$REVOKED" -eq 0 ] && say "The ${AI_FOLDER} folder itself was left behind - either it still holds something that is not ours, or removing it needs an administrator."
+  fi
+  # The one state the tool refused to act in was the one it never mentioned.
+  [ "$NOT_OURS" -gt 0 ] && say "Left alone: ${NOT_OURS} ${AI_FOLDER} folder(s) with no version marker - this installer did not create them, so it will not remove them."
+  [ "$NOT_OURS_ID" -gt 0 ] && say "Left alone: ${NOT_OURS_ID} ${INSTALL_FOLDER} folder(s) with no version marker - this installer did not create them, so it will not remove them."
   [ "$BLOCKED_U" -gt 0 ] && say "Skipped ${BLOCKED_U} location(s): ${INSTALL_FOLDER} there is a link, not a folder."
   if [ "$DRYRUN" = "1" ]; then
     say "[dry run] Would remove ${REMOVED} installation(s). Nothing was written."
   elif [ "$UFAILED" -gt 0 ]; then
-    say "Removed ${REMOVED}, failed ${UFAILED} - InDesign may have the files open. Close it and try again."
+    say "Removed ${REMOVED}, failed ${UFAILED} - the application may have the files open. Close it and try again."
     exit 1
   elif [ "$REMOVED" -gt 0 ]; then
-    say "Removed ${REMOVED} installation(s). Restart InDesign for the panel to catch up."
+    UAPPS=""
+    [ "$REMOVED_ID" -gt 0 ] && UAPPS="InDesign"
+    [ "$REMOVED_AI" -gt 0 ] && UAPPS="${UAPPS:+$UAPPS and }Illustrator"
+    say "Removed ${REMOVED} installation(s). Restart ${UAPPS:-the application} for the menu to catch up."
   else
     say "Nothing to remove - no installation was found."
   fi
@@ -806,7 +1115,7 @@ if [ -z "$SOURCE" ] && [ "$DRYRUN" != "1" ]; then
   MURL="${TOOLKIT_MANIFEST_URL:-https://raw.githubusercontent.com/$OWNER/$REPO/$REF/$MANIFEST_NAME}"
   pauth=(); [ -n "${TOOLKIT_AUTH_TOKEN:-}" ] && pauth=(-H "Authorization: token $TOOLKIT_AUTH_TOKEN")
   # Same bash 3.2 empty-array trap as in acquire_distribution — see the note there.
-  RMANI="$(curl -fsSL ${pauth[@]+"${pauth[@]}"} "$MURL" 2>/dev/null || true)"
+  RMANI="$(curl -fsSL --connect-timeout 10 --max-time 20 ${pauth[@]+"${pauth[@]}"} "$MURL" 2>/dev/null || true)"
   if [ -n "$RMANI" ]; then
     RVER="$(printf '%s' "$RMANI" | { grep -m1 '"version"' || true; } | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
     if [ -n "$RVER" ] && ! panels_need_update "$RVER"; then
@@ -819,6 +1128,8 @@ if [ -z "$SOURCE" ] && [ "$DRYRUN" != "1" ]; then
       if [ "$AI_PENDING" -gt 0 ]; then
         say "Up to date (v${RVER}) everywhere it could be installed - but ${AI_PENDING} Illustrator location(s) still need the one-time step below."
         report_pending_ai_setup
+      elif [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ]; then
+        say "Up to date (v${RVER}) for InDesign. Illustrator was skipped, see above."
       else
         say "Already up to date (v${RVER})."
       fi
@@ -858,6 +1169,11 @@ fi
 # for two different sets of bytes, only one of which was actually hashed.
 AI_PAYLOAD="$ROOT/$AI_PAYLOAD_SUBDIR"
 AI_OK=0
+# Carried into AI_FAILED once the counters exist, a few lines below. Without
+# it, a payload that failed its checksum incremented nothing, the summary fell
+# through to the green "Already up to date" branch, and the run exited 0 - with
+# the error line scrolled above a headline that contradicted it.
+AI_VERIFY_BAD=0
 if [ -n "$AI_DIRS" ]; then
   if [ ! -d "$AI_PAYLOAD" ] || [ ! -f "$ROOT/$AI_SHA_SIDECAR" ]; then
     # An older distribution has no Illustrator half. Say so and carry on with
@@ -867,6 +1183,7 @@ if [ -n "$AI_DIRS" ]; then
     AI_OK=1
   else
     fail "The Illustrator files failed verification; nothing was written to Illustrator."
+    AI_VERIFY_BAD=1
   fi
 fi
 
@@ -889,21 +1206,37 @@ if [ "$AI_OK" = "1" ] && [ "$DRYRUN" != "1" ] && [ "$ACTION" != "uninstall" ]; t
 fi
 
 INSTALLED=0; SKIPPED=0; WOULD=0; FAILED=0; BLOCKED=0; BLOCKED_PANELS=""
+FAILED_WHERE=""
+# AI_VERIFY_BAD is deliberately NOT folded into AI_FAILED. It used to be, and
+# the summary then told the user "the application may have the files open,
+# close it and run again" for what is actually a bad download - a remedy that
+# cannot work, attached to a count of locations when no location failed.
 AI_INSTALLED=0; AI_SKIPPED=0; AI_WOULD=0; AI_FAILED=0; AI_SETUP=0
+FINAL_RC=0
 while IFS= read -r panel; do
   [ -z "$panel" ] && continue
   # 用 if 测 install_into 返回码: 单面板换入失败 (InDesign 占用文件) 不因 set -e
   # 中止整个脚本、也不误报"全部未改"。失败面板已在 install_into 里回滚到旧版。
   if r="$(install_into "$panel" "$PAYLOAD" "$VERSION")"; then
     case "$r" in
-      installed)     INSTALLED=$((INSTALLED+1)); migrate_legacy_folder "$panel" ;;
-      skip)          SKIPPED=$((SKIPPED+1)) ;;
+      installed)     INSTALLED=$((INSTALLED+1)); migrate_legacy_folder "$panel" || true ;;
+      # Also on skip. The cleanup used to hang off "installed" only, so a
+      # machine already on the current version never ran it - and a legacy
+      # folder restored from a backup, or from the Syncthing shares that
+      # TARGETS.md records pointing straight into the Adobe directories, would
+      # sit in the panel for ever. Nothing else on the machine removes it.
+      skip)          SKIPPED=$((SKIPPED+1)); migrate_legacy_folder "$panel" || true ;;
       would-install) WOULD=$((WOULD+1)) ;;
-      blocked)       BLOCKED=$((BLOCKED+1)); BLOCKED_PANELS="${BLOCKED_PANELS}${panel}
+      blocked)       BLOCKED=$((BLOCKED+1)); BLOCKED_PANELS="${BLOCKED_PANELS}${panel}/${INSTALL_FOLDER}
 " ;;
     esac
   else
     FAILED=$((FAILED+1))
+    # Name it. "Update failed in 1 location(s)" told a designer with two
+    # InDesign versions nothing about which one, and "close the application"
+    # named no application.
+    FAILED_WHERE="${FAILED_WHERE}  ${panel}
+"
   fi
 done <<< "$PANELS"
 
@@ -916,7 +1249,7 @@ if [ "$AI_OK" = "1" ]; then
         skip)          AI_SKIPPED=$((AI_SKIPPED+1)) ;;
         would-install) AI_WOULD=$((AI_WOULD+1)) ;;
         needs-setup)   AI_SETUP=$((AI_SETUP+1)) ;;
-        blocked)       BLOCKED=$((BLOCKED+1)); BLOCKED_PANELS="${BLOCKED_PANELS}${t%%|*}
+        blocked)       BLOCKED=$((BLOCKED+1)); BLOCKED_PANELS="${BLOCKED_PANELS}${t%%|*}/${AI_FOLDER}
 " ;;
       esac
     else
@@ -927,15 +1260,18 @@ fi
 
 say ""
 if [ "$BLOCKED" -gt 0 ]; then
-  say "Skipped ${BLOCKED} location(s): ${INSTALL_FOLDER} there is a link, not a folder."
+  # The folder name is per entry now. It used to be printed as $INSTALL_FOLDER
+  # for every entry, so a blocked Illustrator target was reported at a path
+  # that does not exist - and "rename or remove that link" was the only
+  # instruction in the whole block, pointed at nothing.
+  say "Skipped ${BLOCKED} location(s): the toolkit folder there is a link, not a folder."
   say "Nothing was written there, so a link to a working copy cannot be destroyed."
   say ""
   printf '%s' "$BLOCKED_PANELS" | while IFS= read -r bp; do
-    [ -n "$bp" ] && say "  ${bp}/${INSTALL_FOLDER}"
+    [ -n "$bp" ] && say "  ${bp}"
   done
   say ""
   say "Rename or remove that link and run again."
-  say "See DEV-BRIDGE.md in the repository."
   say ""
 fi
 # Totals across both applications. Reporting only the InDesign numbers here
@@ -956,11 +1292,19 @@ if [ "$DRYRUN" = "1" ]; then
     say "[dry run] Would install into ${TOT_WOULD} location(s) (v${VERSION}); ${TOT_SKIPPED} already current. Nothing was written."
   fi
 elif [ "$TOT_FAILED" -gt 0 ] && [ "$TOT_INSTALLED" -gt 0 ]; then
+  # FINAL_RC, not `exit 1`. The pending-Illustrator-setup report is the last
+  # statement of the file, and these branches used to jump over it - so the
+  # runs where the user most needs to know what is still outstanding were
+  # exactly the runs that did not tell them. The comment on panels_need_update
+  # claims the report fires "on the same paths this function can send the run
+  # down"; on macOS that was only true of the paths that did not fail.
   say "Updated to v${VERSION} in some locations, but ${TOT_FAILED} failed - the application may have the files open. Close it and run again."
-  exit 1
+  [ -n "$FAILED_WHERE" ] && printf '%s' "$FAILED_WHERE"
+  FINAL_RC=1
 elif [ "$TOT_FAILED" -gt 0 ]; then
   say "Update failed in ${TOT_FAILED} location(s); nothing was updated. Your existing scripts are unchanged. Close the application and run again, or ask IT."
-  exit 1
+  [ -n "$FAILED_WHERE" ] && printf '%s' "$FAILED_WHERE"
+  FINAL_RC=1
 elif [ "$TOT_INSTALLED" -gt 0 ]; then
   # One sentence. The applications are still named - "restart the application"
   # is no use to someone with both open when only one changed - but naming them
@@ -970,6 +1314,11 @@ elif [ "$TOT_INSTALLED" -gt 0 ]; then
   [ "$INSTALLED" -gt 0 ] && APPS="InDesign"
   [ "$AI_INSTALLED" -gt 0 ] && APPS="${APPS:+$APPS and }Illustrator"
   say "Installed v${VERSION} - restart ${APPS} to see the scripts."
+  [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ] && say "(Illustrator was skipped, see above)"
+  if [ "$AI_VERIFY_BAD" = "1" ]; then
+    say "(the Illustrator scripts failed verification and were not installed - that is a bad download; run this again)"
+    FINAL_RC=1
+  fi
   # Derived from OWNER/REPO rather than written out: a hard-coded URL here would
   # be a second place the repository name lives, and the one that never gets
   # updated when it changes. Only on the path where something was installed -
@@ -985,7 +1334,11 @@ elif [ "$BLOCKED" -gt 0 ]; then
   # 说发生了什么, 不说打算发生什么。这里原先落进下面那个 else, 于是在一个字都
   # 没写入的情况下打印"已是最新版本" —— 用户会据此认为脚本已经装好了。
   say "Nothing was installed: all ${BLOCKED} location(s) were skipped, see above."
-  exit 1
+  FINAL_RC=1
+elif [ "$AI_VERIFY_BAD" = "1" ]; then
+  say "Nothing was installed: the Illustrator scripts failed verification."
+  say "That is a bad download, not a problem with this machine - run this again."
+  FINAL_RC=1
 elif [ "$AI_SETUP" -gt 0 ] && [ "$TOT_SKIPPED" -eq 0 ]; then
   # Nothing was written and nothing was already current - so "up to date" would
   # be false. The one thing standing in the way is printed just below.
@@ -996,6 +1349,11 @@ elif [ "$AI_SETUP" -gt 0 ]; then
   # printing "is not set up yet" three lines later reads as a contradiction -
   # and the headline is the part people keep.
   say "Up to date (v${VERSION}) everywhere it could be installed - but ${AI_SETUP} Illustrator location(s) still need the one-time step below."
+elif [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ]; then
+  # The note above explains why Illustrator was skipped, but a bare "Already up
+  # to date" is a claim about everything - and the headline is the part people
+  # keep. Same shape as the AI_SETUP branch further up.
+  say "Up to date (v${VERSION}) for InDesign. Illustrator was skipped, see above."
 else
   say "Already up to date (v${VERSION})."
 fi
@@ -1004,6 +1362,7 @@ fi
 # person to act on, so it should not be scrolled off by a summary above it.
 [ "$AI_SETUP" -gt 0 ] && report_pending_ai_setup
 
-# 显式成功退出: 否则 set -e 下末条命令 (上面 && 短路的 [ -gt 0 ]) 会让脚本
-# 以 1 退出, 即便安装成功 —— 运行时自测 SH1/SH3 捕获。
-exit 0
+# 显式退出: 否则 set -e 下末条命令 (上面 && 短路的 [ -gt 0 ]) 会让脚本以 1
+# 退出, 即便安装成功 —— 运行时自测 SH1/SH3 捕获。FINAL_RC 让"装了 InDesign 但
+# Illustrator 校验失败"这种半成功也能被包装脚本看见。
+exit "$FINAL_RC"
