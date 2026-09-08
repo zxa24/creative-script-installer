@@ -53,6 +53,26 @@ Tools. → [Details](/scripts/brand-presets)
 | `4.1` | [Export Brand Preset](/scripts/brand-presets#export-brand-preset) | Captures the tuned geometry of this document's generated paragraph styles into a brand preset file. Reads the document, never writes to it. |
 | `4.2` | [Apply Brand Preset](/scripts/brand-presets#apply-brand-preset) | Applies a brand preset's geometry onto a sibling document's matching paragraph styles. Never touches fonts. |
 
+## Illustrator
+
+Five tools for Illustrator, installed only if Illustrator is on the machine.
+They appear under **File → Scripts → illustrator-toolkit-stable** and are not
+numbered: they are independent of each other and of the InDesign path, and a
+number would assert an order that does not exist.
+
+| Script | One line |
+| --- | --- |
+| Unembed All Images | Exports every embedded image to a folder and relinks it as an external file; can also remove broken placed items, including locked or hidden ones. |
+| Export Artboard PDFs | Exports each artboard as its own PDF, by duplicating it into a new document first. |
+| Export Small PDF | Exports the current document as a compact PDF, then saves or packages it. |
+| Replace Fonts | A dialog of *from → to* font pairs, applied across the whole document. |
+| CJK Composer and Mojikumi | Switches text to the CJK every-line or single-line composer and, if wanted, applies a Mojikumi and Kinsoku set — on the selection or the whole document. |
+
+::: tip They are ExtendScript, not UXP
+These are `.jsx` files that Illustrator runs directly. Nothing here talks to
+the InDesign scripts, and none of the InDesign scripts talk to these.
+:::
+
 ## A note on undo
 
 Most of these scripts wrap their whole run in a single InDesign undo step, so

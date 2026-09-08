@@ -52,7 +52,10 @@ is not part of the routine either. Reach for them on purpose.
 
 - Adobe InDesign, any recently installed version. The installer detects every
   installed version and language on the machine and installs into each one.
-- Nothing else. No GitHub account, no git, no command line, no password.
+- Adobe Illustrator, optionally. The installer carries a small set of scripts
+  for it too, and says nothing about them if it is not installed.
+- Nothing else. No GitHub account, no git. One pasted command to install, and
+  no password — except Illustrator's first install, which asks once.
 
 ## Where things end up
 

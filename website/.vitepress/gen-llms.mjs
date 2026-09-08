@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import {
   SITE_TITLE,
   SITE_DESCRIPTION,
+  REPO_URL,
   SECTIONS,
   ALL_PAGES,
   absoluteUrl
@@ -182,6 +183,8 @@ function main() {
   index.push(`# ${SITE_TITLE}`);
   index.push("");
   index.push(`> ${SITE_DESCRIPTION}`);
+  index.push("");
+  index.push(`Source repository: ${REPO_URL}`);
   index.push("");
   index.push(
     "Adobe InDesign scripts installed into the InDesign Scripts panel. Group 1 " +

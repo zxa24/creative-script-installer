@@ -121,6 +121,17 @@ export const SECTIONS = [
 export const ALL_PAGES = SECTIONS.flatMap((s) => s.items);
 
 /** Turn a VitePress route into an absolute, publishable URL. */
+// The source repository. Derived from the Pages origin and base rather than
+// written out, so it cannot drift from them: <owner>.github.io/<repo>/ is what
+// github.com/<owner>/<repo> publishes. That derivation assumes the github.io
+// pattern; a custom domain needs REPO_URL set explicitly at build time.
+export const REPO_URL = (() => {
+  if (process.env.REPO_URL) return process.env.REPO_URL.replace(/\/+$/, "");
+  const owner = new URL(SITE_ORIGIN).hostname.split(".")[0];
+  const repo = SITE_BASE.replace(/^\/+|\/+$/g, "");
+  return `https://github.com/${owner}/${repo}`;
+})();
+
 export function absoluteUrl(link) {
   const path = link === "/" ? "" : link.replace(/^\//, "");
   return SITE_ORIGIN + SITE_BASE + path;

@@ -2,6 +2,8 @@
 
 > Adobe InDesign scripts for a translation and localization workflow: export a translation package, import the translated text back into the layout, and repair typography afterwards.
 
+Source repository: https://github.com/zxa24/creative-script-installer
+
 Adobe InDesign scripts installed into the InDesign Scripts panel. Group 1 (1.1, 1.2) is the normal translation path a designer runs; groups 2, 3 and 4 are tools reached for when a specific problem appears.
 
 The complete text of every page below is available as a single file: [llms-full.txt](https://zxa24.github.io/creative-script-installer/llms-full.txt)

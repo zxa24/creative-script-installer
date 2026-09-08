@@ -165,7 +165,8 @@ there is left alone, and the run says that too.
 
 The repository also carries **`install-update.bat`** (Windows) and
 **`install-update.command`** (macOS) for machines where pasting a command is not
-practical, or for installing from a copy on a USB stick. Download the repository,
+practical, or for installing from a copy on a USB stick. Download
+[the repository](https://github.com/zxa24/creative-script-installer) as a ZIP,
 then double-click the one for your platform. It installs **the copy it sits in**
 — that is the point of this route — so to update, download again.
 

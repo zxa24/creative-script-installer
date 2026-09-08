@@ -1,5 +1,5 @@
 import { defineConfig } from "vitepress";
-import { SITE_TITLE, SITE_DESCRIPTION, SITE_BASE, SECTIONS, absoluteUrl } from "./site.mjs";
+import { SITE_TITLE, SITE_DESCRIPTION, SITE_BASE, SECTIONS, absoluteUrl, REPO_URL } from "./site.mjs";
 
 const sidebar = SECTIONS.map((section) => ({
   text: section.title,
@@ -62,13 +62,19 @@ export default defineConfig({
       "/scripts/": sidebar,
       "/reference/": sidebar
     },
+    // Three ways in to the repository, for three different readers: the nav
+    // icon for someone looking for the source, the per-page edit link for
+    // someone who found a wrong sentence, the footer for someone at the end of a
+    // page. The public repository carries website/ as-is, so :path resolves.
+    socialLinks: [{ icon: "github", link: REPO_URL }],
+    editLink: { pattern: `${REPO_URL}/edit/main/website/:path`, text: "Edit this page on GitHub" },
     search: { provider: "local" },
     docFooter: { prev: "Previous", next: "Next" },
     darkModeSwitchLabel: "Appearance",
     returnToTopLabel: "Back to top",
     footer: {
       message:
-        `Machine-readable full text: <a href="${absoluteUrl("/llms.txt")}">llms.txt</a> &middot; <a href="${absoluteUrl("/llms-full.txt")}">llms-full.txt</a>`,
+        `<a href="${REPO_URL}">Source on GitHub</a> &middot; Machine-readable full text: <a href="${absoluteUrl("/llms.txt")}">llms.txt</a> &middot; <a href="${absoluteUrl("/llms-full.txt")}">llms-full.txt</a>`,
       copyright: "InDesign scripts for translation and localization work."
     }
   }

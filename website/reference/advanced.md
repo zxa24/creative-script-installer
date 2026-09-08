@@ -10,8 +10,9 @@ installing it normally want [Install and update](/guide/install) instead.
 
 ## Where the installer fetches from
 
-The download source is configurable. The public distribution repository's
-coordinates live at the top of the install scripts — `$Owner` / `$Repo` /
+The download source is configurable. The public distribution repository is
+[github.com/zxa24/creative-script-installer](https://github.com/zxa24/creative-script-installer);
+its coordinates live at the top of the install scripts — `$Owner` / `$Repo` /
 `$Ref` in the Windows PowerShell script, `OWNER` / `REPO` / `REF` in the macOS
 shell script.
 
