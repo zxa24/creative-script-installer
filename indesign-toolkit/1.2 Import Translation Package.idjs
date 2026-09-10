@@ -2093,9 +2093,26 @@ async function main() {
                 plog("host env: autoActivateFont " + __prevAutoFont + " -> false (scoped to app.open)");
             }
         } catch (eAF0) { plog("WARN: could not scope autoActivateFont (non-fatal): " + (eAF0 && eAF0.message)); }
+        var __operatorPage = null;   // #FAST-PAGE 还原点，见下方 app.open 后的捕获
         plog("await app.open(saveTargetPath, true)");
         workDoc = await app.open(saveTargetPath, true);
         plog("app.open DONE — workDoc visible + active, font/link dialogs handled");
+        // 🔴 #FAST-PAGE 还原点必须在【这里】取，不能在 park 的时候取。
+        // owner 2026-09-09:「最后没有回到首页」。日志写着
+        //   `#FAST-PAGE: parked window from page 22 to 22`
+        // —— park 时捕获的「原来那页」已经是 22（末页）了。因为 park 发生在
+        // preflight snapshot（走 70 个 story）+ preclean 之后，那些遍历自己把视图
+        // 推到了最后一个碰过的页面。⇒ 「还原」还原到的是【管线自己造成的位置】，
+        // 不是 operator 离开时的位置，而 22 到 22 的 park 同时意味着停页也没起作用。
+        // 这里是文档刚打开、还没有任何管线动作碰过它的时刻 —— 唯一真代表
+        // 「operator 会回到哪」的一刻。
+        try {
+            var __ow = (workDoc.layoutWindows && workDoc.layoutWindows.length)
+                ? getCollectionItem(workDoc.layoutWindows, 0) : null;
+            if (__ow) __operatorPage = __ow.activePage;
+            plog("#FAST-PAGE: operator page captured at open = "
+                + ((__operatorPage && __operatorPage.name) || "?"));
+        } catch (eOP0) { plog("#FAST-PAGE: could not capture operator page at open"); }
     } catch (eOpen) {
         report.errors.push("workCopy setup failed: " + (eOpen && eOpen.message ? eOpen.message : eOpen));
         plog("workCopy setup FAIL: " + (eOpen && eOpen.message ? eOpen.message : eOpen));
@@ -2361,7 +2378,10 @@ async function main() {
                             }
                         } catch (eLW) { __fastPageWin = null; }
                         if (__fastPageWin) {
-                            try { __fastPageOrigPage = __fastPageWin.activePage; } catch (eOP) {}
+                            // 用 app.open 那一刻捕获的页面，不是 park 这一刻的 ——
+                            // 后者已被 preflight/preclean 的遍历推走（owner 2026-09-09 实证）。
+                            // 取不到时退回旧行为，宁可还原到某处也好过不还原。
+                            try { __fastPageOrigPage = __operatorPage || __fastPageWin.activePage; } catch (eOP) {}
                             try {
                                 var __pages = workDoc.pages;
                                 var __lastPg = __pages.item(__pages.length - 1);

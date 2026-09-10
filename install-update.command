@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # Sitting next to a distribution (the manifest is here) = this IS the source.
 # This is the documented route for a machine with no terminal or a copy on a
 # USB stick; without this line it still downloaded from GitHub.
-[ -f ./toolkit.manifest.json ] && export TOOLKIT_SOURCE="$PWD"
+[ -f ./indesign-toolkit.manifest.json ] && export TOOLKIT_SOURCE="$PWD"
 bash ./install-update.sh "$@"
 echo ""
 echo "Press Enter to close this window."

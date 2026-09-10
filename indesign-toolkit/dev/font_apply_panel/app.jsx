@@ -161,6 +161,24 @@ function App() {
   // reveal/hide the strip. 🪦 It listed "un-merge controls" until owner's 姿态甲
   // (2026-08-20) made the strip read-only; the tooltip said so on screen too.
   const [showRecomb, setShowRecomb] = useState(false);
+  // ── Advanced options (owner 2026-09-09) ────────────────────────────────────
+  // Why this exists: F1 (9206764) lifted every leaf above the `.node-hit` overlay,
+  // which turned a large set of native `title=` attributes into things the OPERATOR
+  // now sees. owner: 「很多地方，之前是用来开发时用来更准确描述组件名称的」 —— i.e.
+  // they were DEV aids naming components, never operator copy. §13's rule for a
+  // thing that folds into what the operator already knows is 闭嘴, so they must not
+  // be on by default; but they are still useful when working on the panel, so they
+  // are kept behind a switch rather than deleted.
+  // Defaults are owner's: LABEL off, popups on.
+  const [showAdv, setShowAdv] = useState(false);
+  const [devLabels, setDevLabels] = useState(false);   // component-name titles (dev aid)
+  const [hoverPops, setHoverPops] = useState(true);    // the panel's own .chip-pop explanations
+  // ⚠ SCOPE OF THIS ROUND: the switch gates the 12 pure-LABEL titles in
+  // components.jsx (via ctx.devLabels → its own devTitle helper). app.jsx has
+  // ~12 title sites of its own that have NOT been classified into
+  // LABEL / ACTION / CONSEQUENCE yet, so they are untouched and still always on.
+  // No local helper is defined here on purpose — an uncalled one would later read
+  // as "this file was done".
   // 8D-ext-MM step 5 (on-reject surface 2) — concise inline action error. Set
   // when Done/Export hit an INVALID config (validateBrandConfig fail); the panel
   // stays open + shows the reason so the mapping is never silently dropped.
@@ -194,6 +212,7 @@ function App() {
   // OUTSIDE the panel — so it MUST get a CTA. That is exactly tofu's shape.
   const [missWarn, setMissWarn] = useState(null);
   const [missFlagActive, setMissFlagActive] = useState(false);
+
   useEffect(() => { setActionError(null); setTofuWarn(null); setTofuFlagActive(false); setMissWarn(null); setMissFlagActive(false); }, [data]);
 
   // ② The React-rendered Done/tofu popup raises the same flag the hand-built
@@ -572,7 +591,36 @@ function App() {
     return !!e.target.closest(PAN_SKIP_SEL);
   }, []);
 
-  const mutate = (fn) => setData(prev => {
+  /* 🔴 #96 真因（读数逼出来的，不是推测）：日志 20:45:09 里
+       DATA:set = **恰好一次调用**（createItalicVariant <- onClick），
+       而它的 updater 被执行了 50+ 次（inv3…inv50），**每次都返回新对象**；
+       同一段时间里 DATA:effect 报了 51 次 `changed`。
+       ⇒ **一次 setData 调用产生了 51 个不同的 data 身份。**
+
+     React 每轮 render 会【重放】队列里的 updater。对纯函数这是幂等的 ——
+     而本 updater 每次执行都 `clone(prev)`，于是**重放一次就换一个身份**：
+       data 换身份 → 所有 [data] effect 重跑 → 其中 setPortPos /
+       setUnresolvedByLang 无守卫、每次写新对象 → 逼出下一轮 render →
+       再一次重放 → 永动 → 撞满嵌套上限 → React 抛 #185 → 整棵树卸载 → 面板全黑。
+
+     ⚠ 上一版我加的守卫比的是 `d` vs `prev`，只拦"什么都没改"。
+       而这一次 createItalicVariant **确实改了东西**，守卫放行是对的 ——
+       所以那次修法被证伪，**病不在空操作，在【重放不稳定】**。
+     修法 = 让 updater 对同一个 prev 幂等：重放时返回**同一个结果对象**。 */
+  const mutate = (fn) => {
+  /* ⚠ 记忆必须是【每次调用各自一份】(闭包内)，⛔ 不能是组件级共享的一份。
+     实测代价(2026-09-09 离线): 首版用了共享的 useRef ⇒ 同一批次里
+     mutate(fnA) 之后 mutate(fnB) 拿到同一个 prev ⇒ 命中缓存、返回 fnA 的结果,
+     **fnB 的编辑被静默丢掉**。harness 立刻从「重排 4 · 合并 6」掉到「0 · 0」——
+     比原 bug 更糟, 而且不报错。
+     🔴 抓到它的是【覆盖计数器】("真发生了几次重排/合并"), 不是性质检查 ——
+     性质检查那一行当时是绿的(1 次调用 -> 0 个身份, 比值 0.0, 判为"满足")。
+     一个只看比值的检查, 分不开「不再乱变」和「根本没做事」。 */
+  let memoPrev = null, memoOut = null, memoHas = false;
+  return setData(prev => {
+    // 同一个 prev 再次进来 = React 在重放【这一次】更新, 不是一次新的编辑
+    // ⇒ 交回同一个对象, 否则身份每重放一次就变一次(= #96 的真因)。
+    if (memoHas && memoPrev === prev) return memoOut;
     const d = clone(prev);
     fn(d);
     // TODO #32(a): a parked member (see parkedOf below) belongs to ONE pairing. If
@@ -585,8 +633,27 @@ function App() {
       const live = new Set((d.pairings || []).map(p => p.id));
       d.unplaceableMembers = d.unplaceableMembers.filter(u => u && live.has(u.pairingId));
     }
-    return d;
+    /* 🔴 #96 —— 这里原本是无条件 `return d;`。
+       `d` 是 `clone(prev)`，所以**哪怕 `fn(d)` 一个字节都没改，它也是个新对象** ⇒
+       React 的 `Object.is` 永远判"变了" ⇒ 无法 bail out ⇒ 每次调用必然重渲染。
+       后果不是慢一点：任何依赖 `data`（或依赖由 data 派生的 useMemo）的 effect
+       只要调 `mutate`，就是一个**无条件自触发**的循环 —— 撞满 50 层嵌套更新后
+       React 抛 #185，整棵树卸载，owner 看到的就是「面板整片变黑」。
+       🔴 这不是推测，是读数：2026-09-09 20:04 那份日志里逐字写着
+         `CHANGED mutate@728 < createItalicVariant < onClick   eg=0 rep=2:[] -> eg=0 rep=2:[]`
+       —— **前后完全一样，却被记为 CHANGED**，因为身份变了。
+       修法 = 让「没改动」在 React 眼里也是「没改动」。
+       ⚠ 代价是一次序列化比较；本函数上面已经做了一次 JSON 克隆，同一数量级。
+       ⚠ 它只认 JSON 可见的差异 —— 本模型本来就靠 JSON 克隆做不可变更新，
+         口径一致；若将来引入非 JSON 值（Map/Set/undefined），这条要跟着改。 */
+    let same = false;
+    try { same = JSON.stringify(d) === JSON.stringify(prev); } catch (e) { same = false; }
+    const out = same ? prev : d;
+    // 记下 (prev -> out)，供 React 重放【本次】更新时原样交回（见上方长注释）。
+    memoPrev = prev; memoOut = out; memoHas = true;
+    return out;
   });
+  };
 
   // ---------- port registry & geometry ----------
   const registerPort = useCallback((id, el) => {
@@ -606,7 +673,23 @@ function App() {
       const r = el.getBoundingClientRect();
       next[id] = { x: r.left - c.left + r.width / 2, y: r.top - c.top + r.height / 2 };
     }
-    setPortPos(next);
+    /* 🔴 #96：这里原本无条件 `setPortPos(next)`，而 `next` 每次都是新对象
+       ⇒ 每跑一次就必然重渲染一次。它自己不成环（portPos 不在任何 effect 依赖里，
+       全仓 grep 过），**但它是循环的"泵"**：只要别处让 data 换了身份，
+       本 effect 就跟着跑、跟着逼出下一轮 render，让重放继续。
+       量到的位置写不动就别写 —— 位置没变时返回 prev。 */
+    setPortPos(prev => {
+      const a = Object.keys(prev), b = Object.keys(next);
+      if (a.length === b.length) {
+        let same = true;
+        for (let i = 0; i < b.length; i++) {
+          const k = b[i], p = prev[k], q = next[k];
+          if (!p || p.x !== q.x || p.y !== q.y) { same = false; break; }
+        }
+        if (same) return prev;
+      }
+      return next;
+    });
   }, []);
 
   useLayoutEffect(() => { recomputePorts(); }, [data, visibleRange, recomputePorts]);
@@ -766,19 +849,56 @@ function App() {
     const move = (e) => {
       const d = dragRef.current; if (!d) return;
       if (d.type === 'node') {
-        const nodeEl = hitTestBySelector('[data-node]', e.clientX, e.clientY);
+        moveGhost(e.clientX, e.clientY);   // 纯 DOM 写入，不进 state（见 makeGhost 上方注释）
+        /* owner 2026-09-09:「两个节点之间有一部分 gap 被认为是 node 区之外」——
+           属实, 而且原因已有记录: #83 为【hover】把 gap 覆盖掉了(.node-hit 覆盖层
+           上下各外扩 5.5px), 可【拖动的落点判定】用的是节点自身的 rect, 不含那层
+           ⇒ 光标跨过 gap 时落点指示会断一下, 那 9px 不属于任何落点区。
+           改为命中同一块 .node-hit: 它的几何是量过的 —— 2×(5.5−1)=9=gap,
+           两块正好衔接、不重叠(panel.css:193 段, 另有算术测试守着) ⇒
+           gap 上半归上面那个节点的"after"带, 下半归下面那个的"before"带,
+           而这两者本来就是【同一个插入点】。没有死区, 也没有二义。
+           ⚠ 落点档位(rel)也随之改用命中区的 rect ——
+             若仍拿节点 rect 算, 命中来自扩展区时 rel 会落在 [0,1] 之外。
+           ⚠ 保留对 [data-node] 的回退: 不是每个节点都保证有 .node-hit
+             (幽灵那份就被我特意剥掉了), 缺了就退回原行为, 不是静默失效。 */
+        let hitEl = hitTestBySelector('.node-hit', e.clientX, e.clientY);
+        let nodeEl = hitEl && hitEl.closest ? hitEl.closest('[data-node]') : null;
+        if (!nodeEl) { nodeEl = hitTestBySelector('[data-node]', e.clientX, e.clientY); hitEl = nodeEl; }
         let overNode = null, dropMode = null;
         if (nodeEl) {
           const overId = nodeEl.dataset.node;
           const font = findFont(data, d.font);
           const sameFont = font && (font.weights.some(w => w.id === overId) || (font.merges || []).some(m => m.id === overId));
           if (sameFont && overId !== d.node) {
-            overNode = overId;
-            const r = nodeEl.getBoundingClientRect();
+            const r = (hitEl || nodeEl).getBoundingClientRect();
             const rel = (e.clientY - r.top) / r.height;
-            dropMode = rel < 0.3 ? 'before' : rel > 0.7 ? 'after' : 'merge';
+            let mode = rel < 0.3 ? 'before' : rel > 0.7 ? 'after' : 'merge';
+            /* owner 2026-09-09:「拖一个字重时它上下相邻的不作为可改变排序的位置,
+               因为无意义」。确实是空操作: 把 X 插到【它的下一个】之前 = X 没动;
+               插到【它的上一个】之后 = 同理。
+               🔴 这也解释了早先量到的"重排大片无效带"(探针: 165 次拖动里 155 次
+                  是空操作) —— 那些位置一直显示成可落点, 落下去却什么都不发生。
+                  现在它们干脆不再显示为落点, 提示退回中性那句。
+               ⚠ 次序取自【同一张 font-card 内】的 DOM 顺序, 不是全局 [data-node]:
+                 全局列表跨语言列, 相邻在视觉上并不相邻。 */
+            if (mode !== 'merge') {
+              try {
+                const card = nodeEl.closest('.font-card');
+                const seq = card
+                  ? Array.prototype.map.call(card.querySelectorAll('[data-node]'), (el) => el.dataset.node)
+                  : [];
+                const iD = seq.indexOf(d.node), iO = seq.indexOf(overId);
+                if (iD >= 0 && iO >= 0 &&
+                    ((mode === 'before' && iO === iD + 1) || (mode === 'after' && iO === iD - 1))) {
+                  mode = null;   // 无意义的落点：不给指示、不给提示、落下去也不做事
+                }
+              } catch (eSeq) {}
+            }
+            if (mode) { overNode = overId; dropMode = mode; }
           }
         }
+        setGhostHint(dropMode);
         updateDrag({ ...d, overNode, dropMode });
       } else if (d.type === 'wire') {
         const portEl = hitTestBySelector('[data-port]', e.clientX, e.clientY);
@@ -828,6 +948,7 @@ function App() {
         }
       }
       document.body.classList.remove('grabbing');
+      killGhost();
       updateDrag(null);
     };
     window.addEventListener('pointermove', move);
@@ -836,9 +957,126 @@ function App() {
   }, [data]);
 
   // ---------- drag starters ----------
+  /* 拖动幽灵（owner 2026-09-09:「拖动时节点能否跟随鼠标」）。
+     🔴 完全走 React 之外 —— 建一次 DOM、之后每次 pointermove 只改 transform。
+        理由不是性能洁癖: 把光标坐标放进 state 就等于【每帧再触发一次渲染】,
+        而 #96 刚刚证明这条路上一次多余的渲染循环会把整个面板打黑。
+        幽灵不进 state, 拖动期间 React 一次都不必重渲染。
+     🔴 克隆体必须剥掉 data-node(连同所有后代): 落点判定走
+        hitTestBySelector('[data-node]', x, y) —— 一个跟着鼠标跑、永远盖在
+        指针底下的 [data-node] 会把每一次落点都判成它自己。
+        再加 pointer-events:none 双保险。
+     ⚠ opacity 写在【创建时的内联样式】里, 不在运行时改 —— 本仓已记:
+        UXP webview 里运行时改 opacity 是"只写不显"(初次挂载的值才会画出来)。 */
+  const ghostRef = useRef(null);
+  const killGhost = () => {
+    const g = ghostRef.current;
+    ghostRef.current = null;
+    /* 🔴 这一行原本是 `if (g && g.parentNode) … removeChild(g)` —— 而 `g` 是
+       `{el, offX, …}` 这个【对象】，不是 DOM 节点 ⇒ `g.parentNode` 恒为
+       undefined ⇒ **主清理路径从一开始就是死的**，幽灵全靠 window 捕获阶段
+       那道兜底擦掉。
+       ⚠ 更值得记的是：探针的「⑧ 松手后清除 ✅」当时是【绿的】——
+         因为兜底把它擦了。两道机制里坏了一道，而读数完全看不出来。
+         ⇒ 有兜底的地方，"结果对"证明不了"主路径对"。
+       另：提示现在不是幽灵的子节点了，必须单独收，否则删了幽灵、提示还挂着。 */
+    if (g) {
+      for (const el of [g.el, g.hint]) {
+        if (el && el.parentNode) { try { el.parentNode.removeChild(el); } catch (e) {} }
+      }
+    }
+  };
+  const makeGhost = (srcEl, x, y) => {
+    killGhost();
+    if (!srcEl) return;
+    let clone;
+    try { clone = srcEl.cloneNode(true); } catch (e) { return; }
+    try {
+      clone.removeAttribute('data-node');
+      const inner = clone.querySelectorAll('[data-node]');
+      for (let i = 0; i < inner.length; i++) inner[i].removeAttribute('data-node');
+      // 命中覆盖层在幽灵上没有意义, 去掉免得它参与任何测量
+      const hits = clone.querySelectorAll('.node-hit');
+      for (let i = 0; i < hits.length; i++) hits[i].remove();
+      /* 斜体按钮也要剥掉。起手那一刻源节点正被 hover(指针就在它的手柄上),
+         所以它的 .ital-add 是显示着的, 会被一起克隆进来 ——
+         那与 owner 要的「拖动时不出现斜体按钮」自相矛盾: 真节点上藏了,
+         却有一个跟着鼠标飞。留下同尺寸的 .ital-slot 顶位, 幽灵不变形。 */
+      const adds = clone.querySelectorAll('.ital-add');
+      for (let i = 0; i < adds.length; i++) {
+        const ph = document.createElement('span');
+        ph.className = 'ital-slot ital-slot-drag';
+        try { adds[i].parentNode.replaceChild(ph, adds[i]); } catch (e) { adds[i].remove(); }
+      }
+    } catch (e) {}
+    const r = srcEl.getBoundingClientRect();
+    /* owner 2026-09-09:「拖的时候光标在点击前的 port 的上方」——
+       首版把节点【居中到光标】(x - w/2, y - h/2), 于是一按下去整个节点就跳一下,
+       光标落到了节点里【另一个】位置(常常正好压在 port 上)。
+       正确做法是留住抓取偏移: 光标始终停在它按下时抓住的那一点上,
+       节点看起来是被"拈起来", 而不是被吸到光标中心。 */
+    const offX = x - r.left, offY = y - r.top;
+    clone.classList.add('drag-ghost');
+    clone.style.cssText = 'position:fixed;left:0;top:0;margin:0;'
+      + 'width:' + Math.round(r.width) + 'px;height:' + Math.round(r.height) + 'px;'
+      + 'pointer-events:none;z-index:9999;opacity:0.85;'
+      + 'transform:translate(' + Math.round(x - offX) + 'px,'
+      + Math.round(y - offY) + 'px);';
+    /* owner 选 1A + 2C：提示跟着幽灵走，且文案带上"为什么"。
+       挂成幽灵的子元素 ⇒ 自动跟随，不必单独维护第二个坐标。
+       position:absolute + top:100% ⇒ 贴在幽灵下沿；nowrap + 固定定位祖先
+       ⇒ 它再长也不参与任何布局，不会把谁挤走。 */
+    /* 🔴 提示【不能】做成幽灵的子元素。owner 实测「文本超过背景」：
+       绝对定位 + left:0 + right:auto 的收缩宽度会被【容器宽度】封顶，
+       而幽灵只有一个节点那么宽 ⇒ 背景框被截到节点宽，nowrap 的文字照样溢出去。
+       本表里 .chip-pop 是靠写死 width:230px + 允许换行绕过去的；对拖动提示
+       更干净的办法是把它挪出幽灵：自己 position:fixed，容器就是视口
+       ⇒ 收缩宽度按内容走，不需要 max-content 这类在本 webview 里没有先例的
+       关键字（全表只有一处 min-content 先例）。
+       代价 = 每帧多写一次 transform（可忽略），清理选择器要一并覆盖它。 */
+    const hint = document.createElement('div');
+    hint.className = 'drag-hint';
+    hint.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;z-index:10000;';
+    ghostRef.current = { el: clone, offX: offX, offY: offY, hint: hint, h: r.height };
+    try { (document.querySelector('dialog') || document.body).appendChild(hint); } catch (e) {}
+    const host = document.querySelector('dialog') || document.body;
+    try { host.appendChild(clone); } catch (e) { ghostRef.current = null; }
+  };
+  /* 3A：⛔ 不做机器判断（不去比 postscriptName 判定"是否真的一样"）——
+     判错了会把人误导去合并两个其实不同的字重，代价不对称。
+     文案只说明合并【是用来做什么的】，让 operator 自己看。 */
+  const GHOST_HINT = {
+    before: 'Release to reorder',
+    after: 'Release to reorder',
+    merge: 'Release to merge — these look like the same weight',
+    none: "Drop at a node's edge to reorder · on a node to merge",
+  };
+  const setGhostHint = (mode) => {
+    const g = ghostRef.current;
+    if (!g || !g.hint) return;
+    const t = GHOST_HINT[mode || 'none'] || GHOST_HINT.none;
+    if (g.hint.textContent !== t) g.hint.textContent = t;   // 只在真变了时写 DOM
+    g.hint.className = 'drag-hint' + (mode === 'merge' ? ' is-merge' : '');
+  };
+  const moveGhost = (x, y) => {
+    const g = ghostRef.current;
+    if (!g || !g.el) return;
+    g.el.style.transform = 'translate(' + Math.round(x - g.offX) + 'px,'
+      + Math.round(y - g.offY) + 'px)';
+    if (g.hint) {
+      g.hint.style.transform = 'translate(' + Math.round(x - g.offX) + 'px,'
+        + Math.round(y - g.offY + g.h + 6) + 'px)';
+    }
+  };
+
   const onStartNode = (e, lang, font, node) => {
     e.preventDefault();
     document.body.classList.add('grabbing');
+    try {
+      const host = e.currentTarget && e.currentTarget.closest
+        ? e.currentTarget.closest('[data-node]') : null;
+      makeGhost(host, e.clientX, e.clientY);
+    } catch (eG) {}
     updateDrag({ type: 'node', lang, font, node, overNode: null, dropMode: null });
   };
   const onStartWire = (e, addr, side) => {
@@ -893,7 +1131,18 @@ function App() {
     mutate(d => {
       const f = findFont(d, fontId);
       const dragW = weightIdsOfNode(f, dragId);
-      const moving = dragW.map(id => f.weights.find(w => w.id === id));
+      // 🔴 2026-09-09: `.filter(Boolean)` was missing here while `applyMerge` (:903)
+      // has it on the identical line. A stale merge-member id makes `.find` return
+      // undefined, which then goes INTO `f.weights` — and the next render
+      // dereferences it. There is no error boundary anywhere in this panel
+      // (grep: 0 hits for componentDidCatch / getDerivedStateFromError), so a throw
+      // during render unmounts the WHOLE tree and `#root` goes empty, exposing the
+      // dialog's own near-black gradient at full size. That is a candidate mechanism
+      // for owner's 2026-09-09「拖动时整个面板会变成黑色」.
+      // ⚠ INFERENCE, not reproduced: I have not shown that a stale id occurs. The
+      // guard is justified on its own (the sibling line has it, asymmetry unexplained)
+      // and is not offered as a confirmed fix for the black panel.
+      const moving = dragW.map(id => f.weights.find(w => w.id === id)).filter(Boolean);
       let rest = f.weights.filter(w => !dragW.includes(w.id));
       const tgtFirst = weightIdsOfNode(f, targetId)[0];
       let idx = rest.findIndex(w => w.id === tgtFirst);
@@ -1194,12 +1443,34 @@ function App() {
   // italicInfo(langCode, fontName, weight) → { key, winner, entry|null }
   // `key` is what every mutation below addresses; `winner.viaPair` tells the UI
   // this weight's runs land on ANOTHER font, so it can say so.
+  // 🔴 2026-09-09 —— 这里原本是【渲染路径上的裸解引用】：resolveWinner 可能返回 null /
+  // 缺字段，而 winner.font 直接取用，既无 null 检查也无 try/catch。
+  // 它紧邻的 italicOrphans（下方）调用【同一个库】却是包了 try/catch 的 —— 这个不对称
+  // 一直没有解释。
+  // 为什么它要紧：本面板【没有任何 error boundary】（grep componentDidCatch /
+  // getDerivedStateFromError = 0 命中），React 18 createRoot 一旦在渲染中抛出就
+  // 卸载整棵树，#root 变空 ⇒ 露出 dialog 自己那层近黑渐变。
+  // owner 2026-09-09 的现场描述与此吻合：「除了系统窗口本身，里面全黑，
+  // 光标在整个窗口范围内是抓手抓住的状态」——【内容没了但光标状态还在】，
+  // 正是「React 树死了、而拖动的 CSS 光标仍挂在非 React 的外层」这一形状。
+  // 而他撞见它的位置是【拖到斜体按钮上】，正是本函数被求值的地方。
+  // ⚠ 仍标推断：我没有复现，也没有证明 resolveWinner 会返回 null。守卫凭它自己站得住
+  //   （兄弟行有、不对称无解释），失败时返回 null 与 `if (!IVK) return null` 同语义 ——
+  //   调用方本来就要处理 null。
   const italicInfo = (langCode, fontName, weight) => {
     if (!IVK) return null;
-    const winner = IVK.resolveWinner(libConfigForItalic, langCode, fontName, weight, primaryLang, italicWinnerOpts);
-    const key = IVK.variantKey(winner.font, winner.weight);
-    const entry = (data.italic_by_winner || {})[key] || null;
-    return { key: key, winner: winner, entry: entry };
+    try {
+      const winner = IVK.resolveWinner(libConfigForItalic, langCode, fontName, weight, primaryLang, italicWinnerOpts);
+      if (!winner || !winner.font) return null;
+      const key = IVK.variantKey(winner.font, winner.weight);
+      const entry = (data.italic_by_winner || {})[key] || null;
+      return { key: key, winner: winner, entry: entry };
+    } catch (e) {
+      // 不静默：写进面板自己的 trace 环形缓冲，owner 关掉面板后
+      // window.fapTraceLatest() 还看得到 —— 否则这就成了「守住了但没人知道守过」。
+      try { window.fapTrace && window.fapTrace('italicInfo:threw', String(e && e.message || e)); } catch (e2) {}
+      return null;
+    }
   };
 
   // (The shared exact-italic probe that fed the D2b hint and the Done gate is gone
@@ -1604,7 +1875,14 @@ function App() {
         return;
       }
       const u = fap.libDocScan.buildUnresolvedByLang(fap.scanTsrMap, cv.config);
-      setUnresolvedByLang(u);
+      /* 🔴 #96：原本无条件 `setUnresolvedByLang(u)`，而 `u` 每次都是新构造
+         ⇒ 内容一样也照样换身份、照样重渲染。与 setPortPos 同为循环的"泵"。
+         紧邻下面的 setIdentityBuild 早就用了内容比较（`JSON.stringify` 相等则
+         返回 prev）——**正确范式就在旁边三行**，这里只是漏了。 */
+      setUnresolvedByLang(prevU => {
+        try { if (JSON.stringify(prevU) === JSON.stringify(u)) return prevU; } catch (eU) {}
+        return u;
+      });
 
       // TODO#58 — recompute the identity groups against the current config.
       // 🪦 replaces `detectRecombinationCandidates` (normalize() +
@@ -2031,12 +2309,27 @@ function App() {
   const hoverRel = useMemo(() => (hoverHl && window.computeHoverRelationSet)
     ? window.computeHoverRelationSet(hoverHl, data.pairings) : null, [hoverHl, data]);
   // Renderer applies these; it never re-derives membership (SoT discipline).
+  /* owner 2026-09-09 选 B′：#45 的 dim 只在【关系集里真有别人】时才压暗。
+     Why：dim 的用途是"把这个字重连到谁"从一堆交叉连线里择出来(#45)。
+     若这个字重根本没配对, 关系集只有它自己 —— 压暗其余五个什么都没告诉你,
+     只是让面板变黑。owner 报的「hover 时某个节点变深」就是这个场景。
+     ⚠ 判据用关系集大小, 不用"pairings 是否为空": 一个字重可能在别处有配对
+       而本身没有, 那时它的关系集仍是 {self}, 同样不该 dim。 */
+  const hoverRelActive = useMemo(() => {
+    if (!hoverRel || !hoverRel.nodes) return false;
+    let n = 0;
+    for (const k in hoverRel.nodes) { n++; if (n > 1) return true; }
+    return false;
+  }, [hoverRel]);
   const hlDimNode = useCallback((addr) =>
-    !!(hoverRel && !hoverRel.nodes[`${addr.lang}:${addr.font}:${addr.node}`]), [hoverRel]);
-  const hlDimPid = useCallback((pid) => !!(hoverRel && !hoverRel.pids[pid]), [hoverRel]);
+    !!(hoverRelActive && hoverRel && !hoverRel.nodes[`${addr.lang}:${addr.font}:${addr.node}`]),
+    [hoverRel, hoverRelActive]);
+  const hlDimPid = useCallback((pid) =>
+    !!(hoverRelActive && hoverRel && !hoverRel.pids[pid]), [hoverRel, hoverRelActive]);
 
   const ctx = {
     data, drag, registerPort, nodeHue, openMenu, profile, wireConnectable,
+    devLabels,                // Advanced options — component-name titles (dev aid, default off)
     portLit,                  // #28e-port — per-side lighting (logical wire endpoints)
     onNodeHover, hlDimNode, hlDimPid,   // #45 — hover relation-set highlight
     onStartNode, onStartWire,
@@ -2115,8 +2408,12 @@ function App() {
     return { p, y: lp ? lp.y : (70 + i * 70) };
   });
 
+  // `no-pops` is a ROOT class, not a per-element edit: the .chip-pop reveal is
+  // pure-CSS `:hover` on ~8 carriers, so one ancestor class switches them all.
+  // ⚠ display, not opacity — opacity is write-only at runtime in this dialog
+  // (pixel-probed 2026-08-14, panel.css:258-271).
   return (
-    <div className="app" data-profile={profile}>
+    <div className={`app ${hoverPops ? '' : 'no-pops'}`} data-profile={profile}>
       {/* 8D-ext-bypair-tofu-ux Phase 2: top-right Done-confirm for source-present
           unpaired doc fonts. Designer-friendly wording (no "tofu"). [取消] is the
           emphasis/primary button; [忽略并继续] secondary; clicking the overlay
@@ -2254,6 +2551,14 @@ function App() {
               {autoMerged.length} auto-merged <window.Icon name="chevron" size={13} />
             </div>
           )}
+          {/* Advanced options — same shape as the auto-merged strip above:
+              a ghost button that toggles a strip below, default collapsed so it
+              does not eat the top of the panel. */}
+          <div role="button" tabindex="0" className={`ghost ${showAdv ? 'is-on' : ''}`}
+            onClick={() => setShowAdv(v => !v)}
+            title="Advanced options">
+            Advanced <window.Icon name="chevron" size={13} />
+          </div>
           <div role="button" tabindex="0" className="ghost" onClick={handleImport}
             title="Import panel state from JSON file">
             Import
@@ -2423,6 +2728,22 @@ function App() {
       {/* TODO#58 — review strip for every group the machine made without asking,
           scan batch and panel batch alike, derived from data.equivalence_groups.
           Empty list → component returns null. */}
+      {showAdv && (
+        <div className="adv-panel">
+          <label className="adv-row">
+            <input type="checkbox" checked={hoverPops}
+              onChange={(e) => setHoverPops(e.target.checked)} />
+            <span className="adv-label">Hover explanations</span>
+            <span className="adv-note">the panel's own dark popups on chips and buttons</span>
+          </label>
+          <label className="adv-row">
+            <input type="checkbox" checked={devLabels}
+              onChange={(e) => setDevLabels(e.target.checked)} />
+            <span className="adv-label">Component name labels</span>
+            <span className="adv-note">development aid — names each control on hover, using the OS tooltip</span>
+          </label>
+        </div>
+      )}
       {showRecomb && (
         <window.RecombinationReviewStrip
           merged={autoMerged}
@@ -2648,4 +2969,91 @@ function Menu({ menu, onClose }) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+/* 🔴 2026-09-09 —— owner 报「拖动时整个面板变黑、光标在整个窗口内是抓手抓住的状态」，
+   两轮之后仍无变化。前两次我各猜了一个抛出点（applyReorder 的 .filter(Boolean)、
+   italicInfo 的裸解引用），都按预注册被证伪 —— 但被证伪的是那两个【猜测】，
+   不是【机制】：机制那半有判别性证据 —— owner 明确说「除了系统窗口本身，里面全黑」，
+   即那张圆角卡片本身没了。这只有「React 树整个卸载、#root 变空、露出 body 那层近黑
+   渐变（panel.css:28-35）」解释得通；任何 CSS 改色的理论都会把卡片边框留在原地。
+   而 body.grabbing 是在 React handler 里加的（:859,864）、也只在 React handler 里删
+   （:848）⇒ 树一死就没人删了，抓手因此卡住 —— 两个症状同一个根。
+
+   所以这次不再猜第三个抛出点。装一个 error boundary，把【任何】抛出变成一条读数：
+     · 屏幕上给出错误本身，而不是一片黑 —— owner 一眼就能把它念给我；
+     · 同时写进 fapTrace 环形缓冲 ⇒ 面板关掉后仍会被 12b_panel_trace 转存进 JSON 日志。
+   ⚠ 它【不修】那个抛出，它让抛出报出自己的名字。这是仪器 + 降级，不是修复。 */
+class PanelErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null, stack: null }; }
+  static getDerivedStateFromError(err) {
+    return { err: String((err && err.message) || err) };
+  }
+  componentDidCatch(err, info) {
+    const stack = (info && info.componentStack) ? String(info.componentStack) : '';
+    // 先落 trace（面板关掉后还读得到），再落控制台。两条都包 try —— 一个报错的
+    // 报错处理器会把唯一的线索也吃掉。
+    try {
+      window.fapTrace && window.fapTrace('BOUNDARY:caught', {
+        message: String((err && err.message) || err),
+        stack: stack.split('\n').slice(0, 12).join(' | ')
+      });
+    } catch (e2) {}
+    try { console.error('[fap] boundary caught', err, stack); } catch (e3) {}
+    // 树死了就没人清 body.grabbing 了（:848 在 React handler 里）。这里补一刀，
+    // 否则光标会一直卡在抓手上、看起来像「整个窗口都被拖住了」。
+    try { document.body.classList.remove('grabbing'); } catch (e4) {}
+    this.setState({ stack: stack });
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    // ⚠ 用显式四边、不用 inset:0 —— UXP webview 的 CSS 支持面是逐条踩出来的
+    // （panel.css 里 flex gap 就是死的）。若 inset 不被支持，这个盒子会是 0 尺寸
+    // ⇒ 又是一片黑 ⇒ 我会把「仪器没显示」误读成「机制被证伪」。
+    // 这是本次唯一一个能把【我自己的仪器故障】伪装成【结论】的地方，所以不省这一行。
+    const box = { position:'fixed', top:'0', right:'0', bottom:'0', left:'0',
+                  display:'flex', alignItems:'center',
+                  justifyContent:'center', padding:'24px', zIndex:9999 };
+    const card = { maxWidth:'760px', width:'100%', background:'#1b1113',
+                   border:'1px solid #e5484d', borderRadius:'12px', padding:'20px 22px',
+                   color:'#f3d6d8', font:'13px/1.55 ui-sans-serif, system-ui, sans-serif' };
+    return (
+      <div style={box}>
+        <div style={card}>
+          <div style={{fontSize:'15px', fontWeight:600, marginBottom:'8px', color:'#ff9ea2'}}>
+            面板出错了（不是黑屏 —— 这就是那个错误本身）
+          </div>
+          <div style={{marginBottom:'10px'}}>
+            这条信息已同时写进日志的 <code>12b_panel_trace</code>，关掉面板也不会丢。
+            把下面这行念给我就够了：
+          </div>
+          <div style={{background:'#120c0d', border:'1px solid #3a2224', borderRadius:'8px',
+                       padding:'10px 12px', font:'12px/1.5 ui-monospace, Consolas, monospace',
+                       whiteSpace:'pre-wrap', wordBreak:'break-word'}}>
+            {this.state.err}
+            {this.state.stack ? '\n\n' + this.state.stack.split('\n').slice(0, 8).join('\n') : ''}
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
+/* 同一根的另一半：body.grabbing 的清理不该只归 React handler 所有。
+   指针一抬（或被系统取消）就无条件清掉 —— 这条在【捕获阶段】挂在 window 上，
+   任何组件的 handler 抛出都影响不到它。 */
+try {
+  const _clearGrab = function () {
+    try { document.body.classList.remove('grabbing'); } catch (e) {}
+    // 幽灵是 React 之外的 DOM ⇒ 树一旦被卸载就没人删它，会永远挂在屏幕上。
+    // 这条兜底与清 grabbing 同理，挂在捕获阶段，不依赖组件还活着。
+    try {
+      const gs = document.querySelectorAll('.drag-ghost, .drag-hint');
+      for (let i = 0; i < gs.length; i++) gs[i].remove();
+    } catch (e) {}
+  };
+  window.addEventListener('pointerup', _clearGrab, true);
+  window.addEventListener('pointercancel', _clearGrab, true);
+} catch (eG) {}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <PanelErrorBoundary><App /></PanelErrorBoundary>
+);

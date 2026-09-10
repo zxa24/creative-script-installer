@@ -9,6 +9,40 @@ The version is the payload version — the number the installer prints, and the
 one it writes into every installed folder. One number covers both the InDesign
 and the Illustrator sets; they are released together.
 
+## 1.0.3 — 2026-09-10
+
+**Fixed: dragging a weight onto the italic button turned the whole panel black.**
+
+Letting go of a dragged weight on top of the small italic button did two things at
+once — it committed the reorder *and* pressed the button, creating an italic copy
+nobody asked for. That second act sent the panel into a loop it could not leave,
+and the window went black; the only way out was to close and reopen it. The panel
+now leaves that button out of the way for the length of a drag, and the loop
+itself is gone.
+
+**Dragging a weight is easier to aim.**
+
+The weight you are dragging now follows the pointer instead of staying put, and it
+stays under the exact spot you grabbed it by. The place it came from is left as an
+empty outline, so you can see where it will fall back to. A short line under the
+pointer says what letting go will do — reorder, or merge with the weight underneath.
+Dropping just above or just below where the weight already sits is no longer offered,
+because it would not move anything. The narrow gap between two weights now counts as
+a drop position rather than a dead strip.
+
+**Fixed: one weight went dark whenever you hovered another.**
+
+It was always the same kind of weight — one present in the font but not used in the
+document — and it looked arbitrary because it was: the panel meant to dim everything
+*unrelated* to what you hover, but that dimming had never worked on ordinary weights.
+It now dims only when the weight you hover is actually paired with something, which
+is the only time the dimming tells you anything.
+
+**Renamed: the two folders inside the download.**
+
+`toolkit/` and `illustrator/` are now `indesign-toolkit/` and `illustrator-toolkit/`,
+so each says which application it is for. Nothing about installing changes.
+
 ## 1.0.2 — 2026-09-08
 
 **Fixed: an import could take hours when a font was missing.**

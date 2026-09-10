@@ -208,6 +208,26 @@ async function main() {
         // (Font.postscriptName), not by spelling. Same field, different criterion.
         panelData.equivalence_groups = (scanResult.equivalence_groups_auto || []).slice();
         panelData._confirmable_merges = (scanResult.confirmable_merges || []).slice();
+        // #28(f) / owner 2026-09-08 — 🔴 the `not installed` chip could not appear on
+        // this path at all. Its input `_missingFaceKeys` was only ever attached inside
+        // PanelAdapter.configToPanelData (:329/:341 here), i.e. ONLY after the operator
+        // imports a config from inside the panel. The normal open goes
+        // scanActiveDoc → panelData → initialData and never touches that function, so
+        // nodeMissingFaces got an absent list and rendered silence — correctly, per its
+        // own "unknown must render as silence" rule, which is exactly why it looked fine.
+        // Measured on a live panel: EJ Sans Text/Italic, absent from this machine and
+        // used 1581 times in the document, showed `unpaired` and `In doc × 1581` and no
+        // not-installed chip.
+        // Scope is doc-used faces only (owner: option A) — see collectPanelFaces for why
+        // the union with config-declared faces was rejected.
+        // Same contract as the adapter's: null ⇒ attach nothing ⇒ panel shows nothing.
+        try {
+            var __docMiss = FaceMissing.computeMissingFaceKeysFromPanelData(panelData, {
+                installedFamilies: installedFamilies,
+                probeFace: FaceMissing.gateProbeFace
+            });
+            if (__docMiss) panelData._missingFaceKeys = __docMiss;
+        } catch (eDocMiss) { /* never block the open on a marking */ }
     }
     // TODO#58 (5): the five counters, on their own log line so they are findable
     // without reading the whole scan dump. 🔴 They are never summed — the one owner
@@ -582,6 +602,103 @@ async function main() {
     if (typeof globalThis !== "undefined") globalThis.__fap = fap;
     if (typeof window !== "undefined") window.__fap = fap;
 
+    /* 🔴 2026-09-09 #96 —— 把面板的【完整输入】落进日志，让离线 harness 能逐字重放。
+       Why：Chromium harness 一直复现不出黑屏，根因不是 UXP 差异，而是它拿不到宿主
+       喂给面板的这些字段 —— 门槛最高的那个 effect 第一行就是
+       `if (!fapItalicDemand …) return`，`italicDemandFaces` 一空，那条路离线永远走不到。
+       ⇒ 每查一轮就要烧掉 owner 一次实机复现。这一步是为了把那个成本降到零。
+       只落**数据**字段；函数/模块只记名字与类型（它们在 harness 里由真实 lib 提供）。
+       ⚠ 这份快照含文档字体名等客户信息 —— 与 panelData 同级，**日志本来就只在本机、
+         不进仓、不外发**（log/ 已被 .gitignore）。 */
+    step("1d_fap_snapshot", function () {
+        var out = { data: {}, callable: {}, skipped: {} };
+        var keys = [];
+        for (var k in fap) keys.push(k);
+        keys.sort();
+        for (var i = 0; i < keys.length; i++) {
+            var name = keys[i], v = null;
+            try { v = fap[name]; } catch (eV) { out.skipped[name] = "read threw"; continue; }
+            var t = typeof v;
+            if (t === "function") { out.callable[name] = "function"; continue; }
+            if (v && t === "object" && (v.constructor === Object || v.constructor === Array || !v.constructor)) {
+                // 只收 JSON 可序列化的；模块对象(带方法)归 callable，别把整个 lib 灌进日志
+                var hasFn = false;
+                try { for (var p in v) { if (typeof v[p] === "function") { hasFn = true; break; } } } catch (eP) {}
+                if (hasFn) { out.callable[name] = "module-like"; continue; }
+                try { JSON.stringify(v); out.data[name] = v; }
+                catch (eJ) { out.skipped[name] = "not JSON-serialisable"; }
+            } else if (v === null || t === "string" || t === "number" || t === "boolean") {
+                out.data[name] = v;
+            } else {
+                out.skipped[name] = t;
+            }
+        }
+        /* 🔴 fontIdentity 是【函数】，落不了盘 —— 而 app.jsx:1768 写着
+           `if (typeof fap.fontIdentity === 'function')`，它一缺，
+           `setIdentityBuild` 整段跳过，而那正是循环里的十个站点之一。
+           ⇒ 离线重放会【结构性地】少跑一个站点，且输出看不出少了什么。
+           所以这里不落函数，落它的【结果表】：对本文档实际出现的每个字体名各调一次，
+           harness 端用查表函数还原。⚠ 只覆盖这些名字 —— 重放时若查到表外的名字，
+           harness 必须报出来，不许静默当作"查不到"。 */
+        try {
+            var idOf = fap.fontIdentity;
+            if (typeof idOf === "function") {
+                /* ⚠ 首版这里【猜】了字段名与参数个数，结果表是空的（0 条）——
+                   实际 documentFonts 的元素是 {font, weight, used}，而
+                   makeIdentityLookup(font_mapping_doc_scan.js:92) 返回的是
+                   **双参数** (family, style) 的函数。两处都猜错了。
+                   幸好当时把条目数打了出来，空表当场可见；只报「已采集」就会
+                   带着一张空表往下走。—— 同「DOM 属性名不确定时别猜，去读」。 */
+                var tbl = {}, pairs = [], n = 0, seen = {};
+                function want(fam, sty) {
+                    if (!fam || !sty) return;
+                    var k = String(fam) + "\t" + String(sty);
+                    if (seen[k]) return;
+                    seen[k] = true;
+                    pairs.push([String(fam), String(sty), k]);
+                }
+                var dfs = fap.documentFonts || [];
+                for (var a = 0; a < dfs.length; a++) {
+                    if (dfs[a]) want(dfs[a].font, dfs[a].weight);
+                }
+                // 面板模型里的每个 (字体名, 字重) 也要覆盖 —— 循环发生在面板编辑之后，
+                // 那时查的名字来自 panelData，而不只是扫描出的文档字体。
+                try {
+                    var langs = (fap.initialData && fap.initialData.languages) || [];
+                    for (var li = 0; li < langs.length; li++) {
+                        var fonts = langs[li].fonts || [];
+                        for (var fi = 0; fi < fonts.length; fi++) {
+                            var ws = fonts[fi].weights || [];
+                            for (var wi = 0; wi < ws.length; wi++) {
+                                want(fonts[fi].name, ws[wi].actual || ws[wi].semantic);
+                            }
+                        }
+                    }
+                } catch (eL) {}
+                for (var pi = 0; pi < pairs.length; pi++) {
+                    try { tbl[pairs[pi][2]] = idOf(pairs[pi][0], pairs[pi][1]); }
+                    catch (eI) { tbl[pairs[pi][2]] = null; }
+                    n++;
+                }
+                out.identityTable = tbl;
+                out.identityTableCount = n;
+                out.identityTableNonNull = (function () {
+                    var c = 0; for (var k in tbl) if (tbl[k]) c++; return c;
+                })();
+            } else {
+                out.identityTable = null;
+                out.identityTableNote = "fap.fontIdentity 不是函数(宿主未绑定) —— 面板本身也走的是缺省分支";
+            }
+        } catch (eT) { out.identityTableNote = "identity 表采集抛错: " + (eT && eT.message || eT); }
+        // 读数要能自证覆盖面：数出三类各几个，别只报“已落盘”。
+        out.counts = {
+            data: Object.keys(out.data).length,
+            callable: Object.keys(out.callable).length,
+            skipped: Object.keys(out.skipped).length
+        };
+        return out;
+    });
+
     // -------- Step 5: build <dialog> + inject CSS / JSX ---------------------
     // Close any stale dialog from previous run before creating new.
     var dlg = null;
@@ -706,6 +823,46 @@ async function main() {
             dlg.addEventListener("close", resolve, { once: true });
         });
     } catch (eW) {}
+
+    // 🔴 2026-09-09 —— 把面板自己的 trace 落进这份日志。
+    // 起因：owner 报「拖动到斜体按钮时整个面板变黑」。面板【没有 error boundary】，
+    // 一次渲染期抛错就卸载整棵树、#root 变空 —— 而 React 抛的那个错只存在于
+    // window.__fapTrace（内存环形缓冲，components.jsx:156），要看它得开控制台。
+    // 于是排查完全依赖 owner 手动执行 window.fapTraceLatest()，而他关掉面板就没了入口。
+    // entry 与面板共用同一个 global（本文件 :602-603 就是这么注入 window.__fap 的），
+    // 所以 dialog 关闭之后这里读得到它 ⇒ 直接写进 JSON 日志，我自己就能读。
+    // ⚠ 只取本次会话那一段（fapTraceLatest 的语义），并截断，避免日志被历史刷爆。
+    step("12b_panel_trace", function () {
+        var lines = null;
+        try {
+            if (typeof window !== "undefined" && typeof window.fapTraceLatest === "function") {
+                lines = window.fapTraceLatest();
+            } else if (typeof window !== "undefined" && window.__fapTrace) {
+                lines = window.__fapTrace;
+            }
+        } catch (eT) { return { pass: false, error: String(eT && eT.message || eT) }; }
+        if (!lines) return { available: false, note: "panel trace not on window (panel may never have mounted)" };
+        // ⚠ fapTraceLatest() 返回 { session, truncated, lines }，不是数组
+        // （components.jsx:197-208）。首版这里当数组用 → "arr.slice is not a function"
+        // ⇒ 挂掉的是仪器本身，而日志上它看起来只像"没有 trace"。所以这里把形状
+        // 认出来；认不出时报【实际形状】，不许再退化成一个安静的空读数。
+        var arr = null, session = null, truncated = false;
+        if (Object.prototype.toString.call(lines) === "[object Array]") {
+            arr = lines;
+        } else if (typeof lines === "string") {
+            arr = lines.split("\n");
+        } else if (lines && Object.prototype.toString.call(lines.lines) === "[object Array]") {
+            arr = lines.lines; session = lines.session; truncated = !!lines.truncated;
+        } else {
+            var keys = []; try { for (var k in lines) keys.push(k); } catch (eK) {}
+            return { pass: false, available: false,
+                     note: "unrecognised trace shape - the instrument failed, not the panel",
+                     shape: Object.prototype.toString.call(lines), keys: keys };
+        }
+        var tail = arr.slice(-120);
+        return { available: true, session: session, truncated: truncated,
+                 total: arr.length, kept: tail.length, trace: tail };
+    });
 
     // -------- Step 9: report result ----------------------------------------
     step("13_apply_summary", function () {

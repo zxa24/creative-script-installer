@@ -1,8 +1,8 @@
 {
   "name": "indesign-toolkit",
-  "version": "1.0.2",
-  "generatedAt": "2026-09-08T19:38:22.294Z",
-  "payloadDir": "toolkit",
+  "version": "1.0.3",
+  "generatedAt": "2026-09-10T14:12:05.833Z",
+  "payloadDir": "indesign-toolkit",
   "fileCount": 126,
   "files": [
     {
@@ -22,13 +22,13 @@
     },
     {
       "path": "dev/font_apply_panel/app.jsx",
-      "sha256": "9feb2c030849cca0166b6d06a321b067c2f84b0745546e9f8f3f71137aadb88b",
-      "bytes": 144458
+      "sha256": "4236291230461760d8b5d32de9a22f3d8f4319ef64070557e9b3594824717ebc",
+      "bytes": 171561
     },
     {
       "path": "dev/font_apply_panel/components.jsx",
-      "sha256": "c361c7b3dc2a2a3e484268901ddb239d07e24be7b9299022a1ed28cfa01c655f",
-      "bytes": 90730
+      "sha256": "3951b67d7c3812715aaa6178ddaabc4eb916a2d82afe7fff15f832dcd796856a",
+      "bytes": 97656
     },
     {
       "path": "dev/font_apply_panel/data.jsx",
@@ -37,8 +37,8 @@
     },
     {
       "path": "dev/font_apply_panel/panel.css",
-      "sha256": "8f99d7f2d2240d10d57e4bfb236f77176c88948f821bfaa17ad2d103a57f91a8",
-      "bytes": 62918
+      "sha256": "d804250e927a6858d47b1abafe15703088969b09f69188fc582ea9ee8a4639e1",
+      "bytes": 81618
     },
     {
       "path": "4.1 Export Brand Preset.idjs",
@@ -52,13 +52,13 @@
     },
     {
       "path": "2.1 Apply Font Pairing.idjs",
-      "sha256": "edf2dcb134ca74ed675c32a40e8dce23deaf6c30b2a0efdff0e29559f834f383",
-      "bytes": 43960
+      "sha256": "0afd4c8448225e7f846c4b7627f85fc9cbcd8bdfc6bc4e3814be2fd5273ba641",
+      "bytes": 54132
     },
     {
       "path": "1.2 Import Translation Package.idjs",
-      "sha256": "1fe4784ab375060b4d30b84d6ae9fac9cd23b2faa7d71e23015fd3b5066a038f",
-      "bytes": 291121
+      "sha256": "99c2b7f85e7c7df9a2e3ef4b9a57004d443f7465a6ef150c9c7a2830c2e3ee48",
+      "bytes": 292812
     },
     {
       "path": "lib/annot_italic_demand.js",
@@ -187,8 +187,8 @@
     },
     {
       "path": "lib/font_face_missing.js",
-      "sha256": "f34359440d8938f6fd41e01355b5c02ec9414d5f8ec2228a1198ec6bccf4bc27",
-      "bytes": 13260
+      "sha256": "e8c8b83743f7f93693ce6539ef3c52bf1ac08f9f2771e1fc4437990b33dc2a48",
+      "bytes": 16706
     },
     {
       "path": "lib/font_identity_groups.js",

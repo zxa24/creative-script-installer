@@ -66,6 +66,15 @@ function Editable({ value, onCommit, className, mono, placeholder, title }) {
 }
 
 // ---- port (pairing endpoint) ----------------------------------------------
+// Advanced options (owner 2026-09-09):「LABEL 的默认不开」。
+// 这些 title 是【开发期用来准确描述组件名】的（owner 原话），不是给操作员的文案 ——
+// §13 对「折得进 operator 已有概念」的处置是闭嘴，所以默认不挂。返回 undefined 时
+// React 整个省略该属性 ⇒ tooltip 引擎找不到任何东西，这点要紧：容器的 title 会遮住
+// 子元素的（2026-09-08/09 实测），留一个空字符串反而会继续遮。
+// ⚠ 只用于 LABEL 类（命名）。ACTION（说出看不见的手势）与 CONSEQUENCE（说出会发生什么）
+//   两类【不】走这里 —— 它们是操作员需要而界面上看不出来的东西。
+function devTitle(ctx, s) { return (ctx && ctx.devLabels) ? s : undefined; }
+
 function Port({ ctx, side, addr, hue, title }) {
   const { drag } = ctx;
   const id = `${addr.lang}:${addr.font}:${addr.node}:${side}`;
@@ -376,7 +385,29 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
   // not live while the operator is mapping (user direction 2026-06-20). state==='todo'
   // = used-in-doc + unpaired; !cjkLangs = source side.
   const _cjkLangs = (window.__fap && window.__fap.cjkLangs) || {};
-  const tofuWarn = !!ctx.tofuFlagActive && (state === 'todo') && !_cjkLangs[lang.code];
+  const _unpaired = (state === 'todo') && !_cjkLangs[lang.code];
+  const tofuWarn = !!ctx.tofuFlagActive && _unpaired;
+
+  // owner 2026-09-08: 「未配对的标签在配对后不显示」+「每个字重节点都直接显示出了什么错」.
+  // Same split the not-installed chip already uses, and for the same reason: the RED
+  // OUTLINE is Done-gated and loud (user direction 2026-06-20, unchanged), while a
+  // chip is a quiet always-on statement of fact that is useful WHILE pairing. Before
+  // this, the unpaired class had the outline and NO label — so a node could be red
+  // with nothing on it saying what was wrong, and the two red classes (unpaired /
+  // not-installed) were indistinguishable at a glance.
+  // It disappears on pairing for free: `state` leaves 'todo' the moment the node is
+  // wired, so the chip is live — no extra clearing logic, and nothing to keep in sync.
+  // ⚠ The hover text is NOT newly invented. It restates the mechanism recorded 20 lines
+  // above (…carry CJK on an unmapped font → some text won't display), per this file's
+  // own standing rule: every clause in these tooltips is a measured behaviour, do not
+  // add one without a measurement. Two false tooltips have already been fixed here.
+  const _unpairedPop = 'Used in the document, but this weight is not paired yet. After translation its CJK text lands on a font with no mapping, so some text will not display. Pair it, or ignore at Done.';
+  const UnpairedChip = _unpaired ? (
+    <span className="unpaired-chip">
+      unpaired
+      <span className="chip-pop">{_unpairedPop}</span>
+    </span>
+  ) : null;
 
   // W3 — the config declares this face but this machine does not have it (the
   // family picker only ever lists installed families, so an absent one is
@@ -454,10 +485,19 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
   // status. That residual belongs to TODO#34, not to this panel. The
   // capability (does this face have another installed spelling?) survives in
   // lib/font_face_missing.js, deliberately unwired.
+  // 🔴 owner 2026-09-08:「hover 标签时没有小弹窗用于解释」. The explanation was a
+  // native `title=`, and this sheet already records why that cannot work here:
+  // the panel's working reveals are pure-CSS :hover on a display-switched CHILD
+  // (.chip-pop / .merged-pop), because "React synthetic hover does not dispatch
+  // inside a UXP <dialog>". So this chip has carried an explanation nobody could
+  // ever see — same shape as the three other "correct mechanism, never on the
+  // real path" defects found today. `title` is kept as a harmless fallback for
+  // any host that does honour it; .chip-pop is the one that actually shows.
+  const _missPop = _missWhat + ' is not installed on this machine. This mapping is skipped when applied — the text keeps the font it already has; it is not swapped for another one.';
   const MissChip = _missFaces.length > 0 ? (
-    <span className="miss-chip"
-      title={_missWhat + ' is not installed on this machine. This mapping is skipped when applied — the text keeps the font it already has; it is not swapped for another one.'}>
+    <span className="miss-chip">
       not installed
+      <span className="chip-pop">{_missPop}</span>
     </span>
   ) : null;
 
@@ -492,15 +532,32 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
   // takes the angle with it — angle/mode live INSIDE the entry object, so there
   // is no second store to sweep.
   const hasCopy = !!(italicInfo && italicInfo.entry);
-  const ItalicAdd = (italicInfo && italicBase) ? (
+  // owner 2026-09-08:「斜体按钮也加上小弹窗，有小弹窗的都去掉原生注释」. Same wording as
+  // the dead `title=` it replaces — this moves the sentence onto a carrier that
+  // renders, it does not rewrite it.
+  const _italPop = hasCopy
+    ? ('Delete the italic copy — asks first, then removes the derived node just below. The slant angle goes with it. This base weight is never changed either way; click again afterwards to re-create the copy.')
+    : ('Add an italic copy — a DERIVED node appears below declaring how this weight slants when text is marked italic (synthetic slant, starts at 15°). The base weight itself is never touched: a slanted base would slant every ordinary run of this weight.'
+      + (node.kind === 'group'
+        ? ' NOTE: this merge group is covered through its representative (' + italicBase + ') only. The other merged weights keep their own spelling in the config, so a run in one of them is NOT covered by this copy.'
+        : ''));
+  /* 🔴 owner 2026-09-09：「拖上去后等于点击，改成拖时不出现斜体按钮」。
+     两件事一起解决：拖动中不该冒出这个按钮（视觉），而且**在它上面松手会
+     触发它的 onClick** —— #96 的点火栈逐帧记着：
+       up -> applyReorder（提交重排） … 紧接着 onClick -> createItalicVariant
+     一个手势里既重排又建了个 operator 从没想建的斜体副本。
+
+     ⚠ 为什么不用 CSS 藏（`body.grabbing .ital-add{display:none}`）：
+       `grabbing` 是在 pointerup 的【捕获阶段】被清掉的，而 `click` 在那之后
+       才派发 ⇒ 到 click 时按钮已经"回来了"，CSS 挡不住那一下。
+     ⇒ 拖动中【根本不渲染】它：不在 DOM 里就没有 handler 可被触发，这条是硬的。
+     ⚠ 但要留住它占的位置，否则拖动一开始整行就变窄、落点跟着位移
+       —— 拖动过程中改变命中几何是另一类 bug。所以下面的 .ital-slot
+       在拖动时【无条件】占位（含 has-copy 那种常驻按钮的情形）。 */
+  const _dragging = !!(ctx && ctx.drag);
+  const ItalicAdd = (italicInfo && italicBase && !_dragging) ? (
     <div role="button" tabindex="0"
       className={'ital-add' + (hasCopy ? ' has-copy' : '')}
-      title={hasCopy
-        ? ('Delete the italic copy — asks first, then removes the derived node just below. The slant angle goes with it. This base weight is never changed either way; click again afterwards to re-create the copy.')
-        : ('Add an italic copy — a DERIVED node appears below declaring how this weight slants when text is marked italic (synthetic slant, starts at 15°). The base weight itself is never touched: a slanted base would slant every ordinary run of this weight.'
-          + (node.kind === 'group'
-            ? ' NOTE: this merge group is covered through its representative (' + italicBase + ') only. The other merged weights keep their own spelling in the config, so a run in one of them is NOT covered by this copy.'
-            : ''))}
       onClick={async () => {
         // owner 2026-08-20 REVERSED his 08-19 "no confirm": deletion now asks.
         // The has-copy fill/hover cues stay, but they no longer carry the
@@ -531,6 +588,7 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
       {/* owner ⑧-2: hover outline = display-switched ring child (this round's
           mechanism: :hover restyle applies display, not opacity). */}
       <span className="ital-add-ring" />
+      <span className="chip-pop">{_italPop}</span>
     </div>
   ) : null;
 
@@ -590,11 +648,21 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
     </span>
   ) : null;
 
+  // 🔴 owner 2026-09-08 实测：hover `In doc × N` 弹出来的是 `Weight node`，而不是那个
+  // chip 自己的 `In document · used in N places`（就在下面几十行）。两件事：
+  //   ① 原生 title 在这个 webview 里【是活的】—— 我上一轮那条推断「面板里 45 个 title
+  //      大概率也不显示」被这个读数直接推翻，作废。它当时就标着「推断不是实测」，
+  //      而推翻它的正是 owner 一次 hover。
+  //   ② 真正的问题是【节点级 title 盖住了它所有子元素的】。而它自己说的是 `Weight node`
+  //      —— 对着一个明显就是字重节点的方框，信息量为零，却在压掉几十句有内容的解释。
+  // ⇒ 去掉它。子元素的解释才浮得上来；同时也满足 owner「有小弹窗的都去掉原生注释」——
+  //   这个节点里已经有三个 .chip-pop 子元素，而它的原生 tooltip 正好覆在它们上面。
+  // ⚠ 判别性后果，一次 hover 即可验：去掉之后 hover `In doc × N` 应当显示
+  //   `In document · used in N places`。若仍显示别的，说明还有第二层在盖。
   return (
     <div className={`node is-${state} ${used ? 'is-used' : 'is-unused'} ${dragging ? 'is-dragging' : ''} ${mode ? 'drop-' + mode : ''} ${node.kind === 'group' ? 'is-group' : ''} ${wireDim ? 'wire-dim' : ''} ${(ctx.hlDimNode && ctx.hlDimNode(addr)) ? 'hl-dim' : ''} ${tofuWarn ? 'is-tofu-warn' : ''} ${missWarn ? 'is-miss-warn' : ''}`}
       ref={hlRootRef}
       data-node={node.id}
-      title={node.kind === 'group' ? 'Merge group' : 'Weight node'}
       style={{ gap: "4px" }}>
       {/* TODO#83 — transparent hit area spanning the gap to each neighbour.
           It sits INSIDE the hover root, so pointerenter/leave on that root now
@@ -630,10 +698,14 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
               {/* owner ⑦ (2026-08-13): the add-italic button sits LEFT of the
                   not-installed chip. */}
               {ItalicAdd}
+              {((italicInfo && italicBase) && (_dragging || !hasCopy))
+                ? <span className={"ital-slot" + (_dragging ? " ital-slot-drag" : "")} /> : null}
               {MissChip}
+              {UnpairedChip}
               {used && (
-                <span className="use-chip" title={`In document · used in ${usedCount} place${usedCount > 1 ? 's' : ''}`}>
+                <span className="use-chip">
                   In doc{usedCount > 1 ? ` × ${usedCount}` : ''}
+                  <span className="chip-pop">{`In document · used in ${usedCount} place${usedCount > 1 ? 's' : ''}`}</span>
                 </span>
               )}
               {RepAutoTag}
@@ -647,12 +719,16 @@ function WeightNode({ ctx, lang, font, node, italicInfo, italicBase }) {
                 <span className="merged-pop">Acts as one weight</span>
               </span>
               {ItalicAdd}
+              {((italicInfo && italicBase) && (_dragging || !hasCopy))
+                ? <span className={"ital-slot" + (_dragging ? " ital-slot-drag" : "")} /> : null}
               {MissChip}
+              {UnpairedChip}
               {RepAutoTag}
               {RepStar}
               {used && (
-                <span className="use-chip" title={`In document · used in ${usedCount} place${usedCount > 1 ? 's' : ''}`}>
+                <span className="use-chip">
                   In doc{usedCount > 1 ? ` × ${usedCount}` : ''}
+                  <span className="chip-pop">{`In document · used in ${usedCount} place${usedCount > 1 ? 's' : ''}`}</span>
                 </span>
               )}
               <div role="button" tabindex="0" className="unbind" onClick={() => ctx.unmergeAll(font.id, node.merge.id)}
@@ -1115,11 +1191,11 @@ function LangPickerColumn({ ctx, lang }) {
   // double-frame). Provides the 300px column slot for canvas-inner layout.
   return (
     <div className="column column-picker">
-      <div className="font-card font-card-picker" title="Pick a language">
+      <div className="font-card font-card-picker" title={devTitle(ctx,"Pick a language")}>
         <div className="font-head">
           <span className="font-name picker-title">Pick a language</span>
           <div role="button" tabindex="0" className="icon-btn"
-            title="Cancel" onClick={() => ctx.removeLang(lang.id)}>
+            title={devTitle(ctx,"Cancel")} onClick={() => ctx.removeLang(lang.id)}>
             <Icon name="x" size={15} />
           </div>
         </div>
@@ -1133,7 +1209,7 @@ function LangPickerColumn({ ctx, lang }) {
             onChange={(e) => setQuery(e.target.value)} />
           {query && (
             <div role="button" tabindex="0" className="picker-search-clear"
-              title="Clear"
+              title={devTitle(ctx,"Clear")}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => setQuery('')}>
               <Icon name="x" size={11} stroke={1.9} />
@@ -1209,11 +1285,11 @@ function FamilyPickerCard({ ctx, lang, font }) {
     ctx.finalizePendingFont(lang.id, font.id, name);
   };
   return (
-    <div className="font-card font-card-picker" title="Pick a font family">
+    <div className="font-card font-card-picker" title={devTitle(ctx,"Pick a font family")}>
       <div className="font-head">
         <span className="font-name picker-title">Pick a font family</span>
         <div role="button" tabindex="0" className="icon-btn"
-          title="Cancel" onClick={() => ctx.removeFont(lang.id, font.id)}>
+          title={devTitle(ctx,"Cancel")} onClick={() => ctx.removeFont(lang.id, font.id)}>
           <Icon name="x" size={15} />
         </div>
       </div>
@@ -1227,7 +1303,7 @@ function FamilyPickerCard({ ctx, lang, font }) {
           onChange={(e) => setQuery(e.target.value)} />
         {query && (
           <div role="button" tabindex="0" className="picker-search-clear"
-            title="Clear"
+            title={devTitle(ctx,"Clear")}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setQuery('')}>
             <Icon name="x" size={11} stroke={1.9} />
@@ -1277,12 +1353,17 @@ function FontCard({ ctx, lang, font }) {
     { head: 'Font' },
     { label: 'Remove font', danger: true, onClick: () => ctx.removeFont(lang.id, font.id) },
   ]);
+  // owner 2026-09-08：这里原有一个卡片级的原生 tooltip，内容是卡片名本身（同义反复）。
+  // 祖先的 title 会盖住它全部子元素的，所以它在用一句零信息量的话压掉下面每个节点上的
+  // 具体解释。去掉 .node 那一层之后浮上来的正是它（owner 实测：先看到节点级那句，
+  // 去掉后看到卡片级这句）。⇒ column / font-card / node 是同一条遮挡链，一次拆完，
+  // 否则每去一层就露出下一层，owner 要反复回报。
   return (
-    <div className="font-card" title="Font card">
+    <div className="font-card">
       <div className="font-head">
         <Editable value={font.name} onCommit={(v) => ctx.setFontName(font.id, v)}
           className="font-name" title="Font name — double-click to edit" />
-        <div role="button" tabindex="0" className="icon-btn" title="More" onClick={moreMenu}><Icon name="more" size={15} /></div>
+        <div role="button" tabindex="0" className="icon-btn" title={devTitle(ctx,"More")} onClick={moreMenu}><Icon name="more" size={15} /></div>
       </div>
       <div className="nodes">
         {nodes.map((n) => {
@@ -1314,16 +1395,18 @@ function LanguageColumn({ ctx, lang }) {
   if (lang.pendingLang) {
     return <LangPickerColumn ctx={ctx} lang={lang} />;
   }
+  // 同上，再上一层：这里原有一个列级的原生 tooltip，内容同样是元素名本身。见 font-card
+  // 那处的说明；三层一次拆完。
   return (
-    <div className="column" style={{ fontFamily: 'var(--ui)' }} title="Language column">
+    <div className="column" style={{ fontFamily: 'var(--ui)' }}>
       <div className="col-head">
-        <span className="specimen" style={{ fontFamily: lang.family }} title="Script specimen">{lang.script}</span>
+        <span className="specimen" style={{ fontFamily: lang.family }} title={devTitle(ctx,"Script specimen")}>{lang.script}</span>
         <div className="col-titles">
           <Editable value={lang.name} onCommit={(v) => ctx.setLangName(lang.id, v)}
             className="col-name" title="Language name — double-click to edit" />
-          <span className="col-code mono" title="Language code">{lang.code}</span>
+          <span className="col-code mono" title={devTitle(ctx,"Language code")}>{lang.code}</span>
         </div>
-        <div role="button" tabindex="0" className="icon-btn" title="Language menu"
+        <div role="button" tabindex="0" className="icon-btn" title={devTitle(ctx,"Language menu")}
           onClick={(e) => ctx.openMenu(e.currentTarget, [
             { label: 'Remove language', danger: true, onClick: () => ctx.removeLang(lang.id) },
           ])}>
@@ -1332,7 +1415,7 @@ function LanguageColumn({ ctx, lang }) {
       </div>
       <div className="col-body">
         {lang.fonts.map((f) => <FontCard key={f.id} ctx={ctx} lang={lang} font={f} />)}
-        <div role="button" tabindex="0" className="add-font" onClick={(e) => ctx.addFont(lang.id, e.currentTarget)} title="Add font">
+        <div role="button" tabindex="0" className="add-font" onClick={(e) => ctx.addFont(lang.id, e.currentTarget)} title={devTitle(ctx,"Add font")}>
           <Icon name="plus" size={14} /> Add font
         </div>
       </div>
@@ -1577,7 +1660,7 @@ function UnresolvedLangSection({ ctx }) {
                         {row.tsrCount} TSR{row.tsrCount !== 1 ? 's' : ''}
                       </span>
                       {row.sampleParaIds && row.sampleParaIds.length > 0 ? (
-                        <span className="ul-sample-paras" title="Sample paragraph ids">
+                        <span className="ul-sample-paras" title={devTitle(ctx,"Sample paragraph ids")}>
                           paras: {row.sampleParaIds.slice(0, 3).join(', ')}
                         </span>
                       ) : null}

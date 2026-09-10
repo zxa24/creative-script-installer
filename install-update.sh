@@ -41,17 +41,17 @@ INSTALL_FOLDER="indesign-toolkit-stable"
 # install. See migrate_legacy_folder: the same name serving both purposes is
 # exactly why that check has to be careful rather than convenient.
 LEGACY_FOLDER="indesign-toolkit"
-MANIFEST_NAME="toolkit.manifest.json"
-SHA_SIDECAR="toolkit.manifest.sha256"
-PAYLOAD_SUBDIR="toolkit"
+MANIFEST_NAME="indesign-toolkit.manifest.json"
+SHA_SIDECAR="indesign-toolkit.manifest.sha256"
+PAYLOAD_SUBDIR="indesign-toolkit"
 VERSION_MARKER=".installed_version.json"
 
 # Illustrator: a separate payload with its own manifest, because it is a
 # different set of scripts going to a different place under different rules.
 AI_FOLDER="illustrator-toolkit-stable"
-AI_PAYLOAD_SUBDIR="illustrator"
-AI_MANIFEST_NAME="illustrator.manifest.json"
-AI_SHA_SIDECAR="illustrator.manifest.sha256"
+AI_PAYLOAD_SUBDIR="illustrator-toolkit"
+AI_MANIFEST_NAME="illustrator-toolkit.manifest.json"
+AI_SHA_SIDECAR="illustrator-toolkit.manifest.sha256"
 
 SOURCE="${TOOLKIT_SOURCE:-}"
 FORCE=0

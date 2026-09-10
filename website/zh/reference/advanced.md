@@ -81,10 +81,10 @@ node toolkit_installer/make_dist.mjs
 
 它拿 `translation_mvp_uxp/`，遍历整棵树减去一份排除列表，产出可分发的载荷，然后自检 `require` 闭包，确保运行时能到达的东西没有被漏在包外。它产出：
 
-- `dist/toolkit/` —— 装进脚本面板的 InDesign 载荷
-- `toolkit.manifest.json` —— 版本加每个文件的 SHA-256
-- `toolkit.manifest.sha256` —— `shasum -c` 侧车，macOS 上用来校验
-- `dist/illustrator/`、`illustrator.manifest.json`、`illustrator.manifest.sha256` —— Illustrator 载荷的同样三样
+- `dist/indesign-toolkit/` —— 装进脚本面板的 InDesign 载荷
+- `indesign-toolkit.manifest.json` —— 版本加每个文件的 SHA-256
+- `indesign-toolkit.manifest.sha256` —— `shasum -c` 侧车，macOS 上用来校验
+- `dist/illustrator-toolkit/`、`illustrator-toolkit.manifest.json`、`illustrator-toolkit.manifest.sha256` —— Illustrator 载荷的同样三样
 - `install.sh`、`install.ps1` —— 一行命令的引导脚本
 
 构建拒绝产出彼此不一致的 manifest 与侧车。
@@ -98,11 +98,11 @@ node toolkit_installer/make_dist.mjs
 ```text
 <仓库根>/
   toolkit/                  ← 装进脚本面板的 InDesign 内容
-  toolkit.manifest.json     ← 版本 + 每文件 sha256
-  toolkit.manifest.sha256   ← shasum -c 侧车（macOS 校验）
+  indesign-toolkit.manifest.json     ← 版本 + 每文件 sha256
+  indesign-toolkit.manifest.sha256   ← shasum -c 侧车（macOS 校验）
   illustrator/              ← Illustrator 脚本
-  illustrator.manifest.json
-  illustrator.manifest.sha256
+  illustrator-toolkit.manifest.json
+  illustrator-toolkit.manifest.sha256
   install.sh                ← 一行命令引导脚本
   install.ps1
   install-update.bat

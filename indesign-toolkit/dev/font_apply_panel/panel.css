@@ -241,7 +241,33 @@ body.grabbing{cursor:grabbing;user-select:none;}
 .node.drop-before::after{top:-5px;}
 .node.drop-after::after{bottom:-5px;}
 .node.drop-merge{background:var(--merge-soft);box-shadow:inset 0 0 0 1px var(--merge);border-radius:8px;}
-.node.is-dragging{opacity:.35;}
+/* 🔴 owner 2026-09-09 要「拖动合并时目标节点变色表达准备合并」——
+   目标那一半【本来就有】：`.node.drop-merge`（下方 :243 附近）用 background +
+   inset box-shadow，两者都是本表实测【会重绘】的属性，所以它是好的。它两周没出现过，
+   只是因为拖动本身是死的（.node-grip 在 .node-hit 覆盖层之下，见 F1）。
+   ⚠ 但【被拖动的那一半】是死的：原文是 `opacity:.35`，而本表 :258-271 的像素级探针
+   （2026-08-14）已经定论：**opacity 在这个 dialog 里运行时只写不绘** ——
+   computed 读得到 .22，画出来的像素一个都没变。同一条已经埋掉过两个规则
+   （.hl-dim / .wire-dim 的 opacity 版），此处是第三个，只是没人立过碑。
+   ⇒ 于是拖动时你能看见「会落到哪」，却看不见「正在拖的是哪个」——
+     而这两半合起来才是 owner 要的那个语义。
+   改法沿用本表家法：调色板替换（background / border-color / color 都实测会重绘）。
+   刻意比 .hl-dim/.wire-dim 的 #101317/#1e2229 浅一档 —— 那一档的含义是
+   「不在当前活动集合里」，而「我正在拖的这个」不是同一件事，不该长得一样。
+   ⛔ 不用 border-style:dashed：本表只实测过 color/background/display 会重绘，
+     border-style 没人测过，不拿未测属性换已测机制。 */
+/* owner 2026-09-09:「拖动后原来的位置不再显示节点」——
+   节点被"拈起来"跟着鼠标走了，原位应该只剩一个空槽。
+   🔴 但必须【留住高度】：原位一塌，下面的节点全体上移，
+      落点几何在拖动中途改变 —— 那正是刚修完的抽搐那一类 bug。
+      所以用 visibility 而不是 display：前者不占位、后者会。
+   ⚠ 未验：本仓对 UXP webview 里【运行时切换 visibility】没有记录
+      （已知 display 可以、opacity 不行，见 .ital-add 那段账）。
+      若 UXP 不重绘 visibility，这里会退化成"内容还在、只是框变虚线"——
+      是降级不是崩坏，但那时这条需求就没真正满足，要另想办法。 */
+.node.is-dragging{background:transparent;border-color:#2a3039;border-style:dashed;}
+.node.is-dragging > *{visibility:hidden;}
+.node.is-dragging .member-name{color:#565c66;}
 /* during a wire drag, fade ports/nodes that aren't valid drop targets */
 /* ⚠ DEAD RULE (kept as tombstone, #46 sweep 2026-08-14): runtime opacity is
    write-only (CLAUDE.md #13) — this line has NEVER painted. The wire-dim
@@ -277,14 +303,56 @@ body.grabbing{cursor:grabbing;user-select:none;}
 .label-card.hl-dim,.label-card.wire-dim{background:#101317;border-color:#1e2229;}
 .label-card.hl-dim .lc-txt,.label-card.wire-dim .lc-txt{color:#40454e;}
 .node.wire-dim .port{pointer-events:none;}
+/* 🔴 F1（2026-09-09，机制已由 owner 三次读数确认）—— 两行修两件事。
+   机制：`.node-hit`（#83 的透明命中区，.node 的第一个子元素）是 position:absolute、
+   覆盖整个节点、**没有 pointer-events:none**。它是第一个已定位子元素 ⇒
+   静态兄弟画在它下面、已定位的兄弟画在它上面。于是节点里所有【静态】后代
+   都收不到指针 —— 指针落在覆盖层上。
+   owner 实测三连（2026-09-09）：
+     · .use-chip 加了 position:relative 之后，它自己的 tooltip 立刻浮出来了（此前「没有」）
+     · .node-grip 仍静态 ⇒ hover 无反应
+     · 🔴 而且【拖不动】—— 这是本机制预测出来的、两周没人报过的缺陷：
+       PAN_SKIP_SEL（app.jsx:569）里没有 .node-hit，它的祖先也都不在，
+       所以在抓手上按下时 e.target 是 .node-hit ⇒ isInteractiveTarget 判 false
+       ⇒ 画布开始平移，而 onStartNode（components.jsx:666，全仓唯一的拖动入口）
+       根本不会被调用。从 1f484bc（2026-08-23）起如此。
+   修法不是给 40 个叶子逐个加 position，而是抬两个【子树根】：
+   已定位但 z-index:auto 的元素**不开新的层叠上下文**，它的静态后代跟它一起进入
+   「已定位后代」那一层 ⇒ 节点内每个叶子一次性全部浮到覆盖层之上。
+   ⚠ 布局零变化：两者都是 flex item、不给偏移，position:relative 本身是布局惰性的。
+   ⚠ #83 不受影响：.node-hit 保留全部几何，仍是那条 ±5.5px 缝隙带的命中目标 ——
+     而缝隙带正是 #83 唯一需要它的地方；节点内部本来就该由内容自己接指针。 */
 .node-grip{
+  position:relative;
   width:20px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;
   color:var(--txt-3);cursor:grab;border-radius:5px;touch-action:none;
 }
 .node-grip:hover{color:var(--txt-2);background:var(--surface-2);}
-.node-main{flex:1;min-width:0;}
-.map-row{display:flex;align-items:center;gap:7px;height:26px;}
-.map-right{display:flex;align-items:center;gap:6px;margin-left:auto;}
+.node-main{position:relative;flex:1;min-width:0;}   /* position: F1，见 .node-grip 上方那段 */
+/* owner 2026-09-08:「要保证组件不会溢出文本完整显示，空间不够了挪到第二行」.
+   截图现场：`Italic` 被省略成 `It`，`In doc × 15…` 在节点右缘被切掉 —— 因为这一行是
+   单行、定高、不换行的 flex，而名字是 flex:1 + overflow:hidden：名字先把空余吸干、
+   再被压缩省略，而 chip 在第三个出现之后（2026-09-08 `unpaired` 加入 `not installed`
+   与 `In doc`）依然溢出。
+   三处改动，各做一件事：
+     · height → min-height ：定高的行不可能显示出第二行。
+     · 两处 flex-wrap      ：chip 块整体掉到名字下面，而不是被切掉；chip 之间也能换行。
+     · 名字 flex:none      ：名字永不被压缩 ⇒ 永不被省略，这是「文本完整显示」那一半。
+                             名字不再是 flex:1 之后，`.map-right` 的 `margin-left:auto`
+                             才真正起作用（此前它靠名字吸空余而顺带右对齐，是巧合）。
+   ⚠ 行距**不用 gap**：flex gap 在这个 webview 里是死的（实测，probes/20260823_14，
+     见下方 `.map-right` 那段）。纵向呼吸由 chip 自己的 margin 提供，
+     既有的 `> * + *` 横向载体原样不动。
+   ⚠ 已知代价，故意不修：`> * + *{margin-left:6px}` 也会让换到第二行的**首个** chip
+     左缩 6px。要去掉它得有一个能选中「换行后首项」的选择器，CSS 没有；在一个有这么多
+     记录在案的布局怪癖的 webview 里，拿 6px 缩进去换一个脆弱的 workaround 不划算。 */
+.map-row{display:flex;align-items:center;gap:7px;min-height:26px;flex-wrap:wrap;}
+/* owner 2026-09-08「改成多行时标签右侧对齐」：margin-left:auto 只把整个 chip 块推到
+   右边，管不到块内部换行后各行的对齐 —— 第二行会靠左起排。justify-content 才是
+   管行内主轴分布的那个，flex-end 让每一行都贴右。 */
+.map-right{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-left:auto;flex-wrap:wrap;}
+/* 纵向呼吸（gap 死，所以走 margin）。单行时不撑高：chip 18px + 4px = 22px < 26px。 */
+.map-right > *{margin-top:2px;margin-bottom:2px;}
 /* TODO#80 (owner 2026-08-23:「I 和 in doc 之间加间隔」).
    MEASURED before changing anything (probes/20260823_14): the gap between
    `.ital-add` and `.use-chip` reads 0px on 4/4 rows — the `gap:6px` declared
@@ -320,7 +388,9 @@ body.grabbing{cursor:grabbing;user-select:none;}
 .node.is-group{background:var(--surface-2);border-radius:9px;box-shadow:none;border-color:var(--line);margin-left:10px;margin-right:10px;padding:7px 11px 7px 6px;}
 .node.is-group.drop-merge{box-shadow:inset 0 0 0 1px var(--merge);}
 .group-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
-.group-tag{display:flex;align-items:center;gap:8px;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);margin:0 0 3px 26px;font-weight:600;}
+/* 同 owner 2026-09-08 那条：合并组的头部挂着同一批 chip（not installed / unpaired /
+   In doc / 代表星 / unbind），所以同样要能换行，否则组节点上会重演被切掉的现象。 */
+.group-tag{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);margin:0 0 3px 26px;font-weight:600;}
 .merged-label{position:relative;cursor:help;border-bottom:1px dotted var(--txt-3);padding-bottom:1px;}
 /* Hidden state = display:none, same reason as .chip-pop below (2026-08-13):
    the old opacity:0 box stayed in layout floating over the content above the
@@ -346,7 +416,10 @@ body.grabbing{cursor:grabbing;user-select:none;}
 }
 .node.is-group:hover .unbind{display:block;}
 .unbind:hover{background:var(--surface-2);color:var(--txt);border-color:#414a58;}
-.map-row.member{height:36px;margin:3px 0;padding:0 4px 0 2px;border-radius:7px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.04);}
+/* height → min-height：这条比 `.map-row` 特异度高，定高会把上面那条的 flex-wrap
+   变成摆设（能换行、但第二行看不见）。组内成员行的 chip 少，但 `.member-name`
+   现在是 flex:none，长成员名 + 代表星同样可能挤爆一行。 */
+.map-row.member{min-height:36px;margin:3px 0;padding:0 4px 0 2px;border-radius:7px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.04);}
 .actual-flat{
   display:flex;align-items:center;font:inherit;cursor:pointer;
   background:transparent;border:none;border-radius:5px;padding:2px 5px;color:var(--txt-2);transition:.12s;
@@ -354,10 +427,14 @@ body.grabbing{cursor:grabbing;user-select:none;}
 .actual-flat .mono{font-size:11px;font-weight:500;}
 .actual-flat:hover{color:var(--txt);background:rgba(255,255,255,.05);}
 .member-name{
-  flex:1;min-width:0;display:flex;align-items:center;height:26px;
+  /* owner 2026-09-08 「文本完整显示」：原为 flex:1 + overflow:hidden + ellipsis，
+     于是 `Italic` 在三个 chip 的行里被压成 `It`。改为不参与伸缩、不裁剪 —— 空间
+     不够时由 .map-row 的 flex-wrap 把 chip 掉到第二行，而不是把名字吃掉。
+     min-width:0 一并去掉：它存在的唯一作用就是允许收缩到内容宽度以下。 */
+  flex:none;display:flex;align-items:center;height:26px;
   font:inherit;font-size:13px;font-weight:600;letter-spacing:-.005em;color:var(--txt);
   background:transparent;border:none;border-radius:6px;padding:0 8px;margin-left:-2px;
-  text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:.12s;
+  text-align:left;white-space:nowrap;overflow:visible;text-overflow:clip;cursor:pointer;transition:.12s;
 }
 .member-name:hover{background:rgba(255,255,255,.06);}
 .member-name.is-static{cursor:default;}
@@ -397,7 +474,23 @@ body.grabbing{cursor:grabbing;user-select:none;}
 
 /* ---------- weight state system (used / matched / todo / available) ---------- */
 /* “in document” chip: presence = used; colour = whether it still needs matching */
+/* 🔴 2026-09-08 预注册实验（写在看到读数之前）—— 只加 position:relative 这一件事。
+   机制（codex 提出 .node-hit 那一半，arch 核出 position 这一半，两半合起来才解释得通全部五步）：
+     · `.node-hit`（components.jsx 里 .node 的【第一个子元素】）是 position:absolute、
+       left/right:0、top/bottom:-5.5px 的透明覆盖层，**没有 pointer-events:none** ——
+       它盖住整个节点。
+     · 但它是【第一个】子元素且**未定位的兄弟画在它下面、已定位的兄弟画在它上面**。
+     · 于是：.miss-chip / .unpaired-chip / .ital-add 都有 position:relative ⇒ 在覆盖层之上
+       ⇒ 它们的 :hover 触发得到 ⇒ .chip-pop 能工作（owner 已确认）。
+       而 .use-chip **没有 position** ⇒ 在覆盖层之下 ⇒ 指针永远落在 .node-hit 上
+       ⇒ 原生 title 的查找从覆盖层向上走：先 .node（Weight node）、再 .font-card（Font card），
+       三层都去掉之后就什么都没有了 —— **这正是 owner 依次报的那三个读数。**
+   ⇒ 预测：只给 .use-chip 加 position:relative，它自己那句
+     `In document · used in N places` 就应当能浮出来。
+   ⚠ 这一行同时排除「面板加载的是旧代码」那个对立假设：若读数变了，说明它读的是新代码。
+   ⚠ 若读数没变，本机制被证伪 —— 那就别再加 position，改走 .chip-pop（已被证明可用）。 */
 .use-chip{
+  position:relative;
   display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;flex:none;
   font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
   background:var(--surface-2);color:var(--txt-3);border:1px solid var(--line);
@@ -415,6 +508,114 @@ body.grabbing{cursor:grabbing;user-select:none;}
   font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
   background:transparent;color:#c98b8b;border:1px dashed #7a4a4a;
 }
+
+/* owner 2026-09-08 — "each weight node should say what is wrong with it". The
+   unpaired class had the red outline and NO label, so a red node could not be
+   told apart from a not-installed one at a glance.
+   Colour is deliberately NOT .miss-chip's muted dashed red: that one is muted
+   because an absent font is INFORMATION (the mapping is skipped, the text keeps
+   what it has). Unpaired is an ACTION ITEM — it is the same fact `.node.is-todo
+   .use-chip` already repaints amber, so this chip joins that colour rather than
+   inventing a third meaning for red. Solid, not dashed, for the same reason. */
+.unpaired-chip{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;flex:none;
+  font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
+  background:transparent;color:var(--todo);border:1px solid var(--todo);
+}
+
+/* owner 2026-09-08「hover 标签时没有小弹窗用于解释」—— 两个 chip 的解释此前挂在原生
+   `title=` 上，而本表早已记着那在这里不成立（工作正常的揭示全是 ancestor-hover +
+   display 切换的子元素：.chip-pop / .merged-pop；「React synthetic hover does not
+   dispatch inside a UXP <dialog>」）。所以 `not installed` 的那句解释一直没人看得见。
+   改挂已被 user 验证过的 .chip-pop 机制：position:relative 供定位，display 切换供显隐
+   —— ⛔ 不用 opacity（本表实测：这个 dialog 的 :hover restyle 只作用于 display）。 */
+.miss-chip,.unpaired-chip{position:relative;cursor:help;}
+.miss-chip:hover .chip-pop,
+.unpaired-chip:hover .chip-pop{display:block;}
+/* owner 2026-09-09 实测：.use-chip 加了 position 之后它的原生 tooltip 确实浮出来了，
+   但「还是系统默认弹窗，不是其他标签一样的弹窗」⇒ 换成同一套深色载体，风格统一。
+   position:relative 已在上面那条预注册实验里加过，这里只补 cursor 与 hover 规则。 */
+.use-chip{cursor:help;}
+.use-chip:hover .chip-pop{display:block;}
+
+/* ── Advanced options (owner 2026-09-09) ──────────────────────────────────
+   「Hover explanations」off ⇒ one ROOT class kills all ~8 .chip-pop carriers at
+   once. ⚠ display, not opacity: opacity is write-only at runtime in this dialog
+   (pixel probe 2026-08-14, see :258-271). `!important` because each carrier's own
+   `:hover .chip-pop{display:block}` rule is (0,2,0) and this is (0,2,0) too —
+   without it the later-declared per-carrier rules would win. */
+.app.no-pops .chip-pop{display:none !important;}
+
+/* owner 2026-09-09:「改成类似弹窗的、不占用其他组件空间的」——
+   原来是一条内联条带（照搬 auto-merged strip），它会把下面的画布整体推下去。
+   改成绝对定位的浮层：从顶栏下沿挂下来、右对齐，脱离文档流 ⇒ 零占位。
+   ⚠ z-index 取 60：要压过 .chip-pop 的 40（否则弹窗会盖住这个面板）、
+     压过 .port 的 7 与 .wires-over 的 8，但低于 .menu 的 1000（菜单仍要在最上）。
+   ⚠ 位置用 px 常量而非 calc()：本表 gate-4(d) 记着 calc()/min() 在这个 dialog 里
+     不可靠；顶栏高度是固定的，直接写数比嵌套函数稳。 */
+.adv-panel{
+  position:absolute;top:46px;right:14px;z-index:60;
+  min-width:300px;padding:10px 12px;border-radius:9px;
+  background:#0b0d11;border:1px solid var(--line-2);
+  box-shadow:0 10px 24px rgba(0,0,0,.55);
+}
+.adv-row{display:flex;align-items:center;font-size:11px;color:var(--txt-2);cursor:pointer;}
+.adv-row + .adv-row{margin-top:6px;}   /* gap is dead in this webview — see .map-right */
+.adv-row input{margin:0 7px 0 0;}
+.adv-label{font-weight:600;color:var(--txt);}
+.adv-note{margin-left:8px;color:var(--txt-3);}
+/* owner 2026-09-08「斜体按钮也加上小弹窗」。.ital-add 早就是 position:relative
+   （它已经用同一套 display 开关挂着 .ital-add-ring），所以这里只多一条 hover 规则，
+   两个子元素互不干扰：ring 画描边，chip-pop 出解释。 */
+.ital-add:hover .chip-pop{display:block;}
+
+/* owner 2026-09-08「在没有 hover 斜体按钮时该按钮也占位防止 hover 后组件大小变化」。
+   🔴 这正是 .ital-add 那段注释里写下的那笔账：「Known cost: display:none gives up the
+   layout slot, so the row shifts when it appears (arch accepted; report if ugly)」——
+   owner 现在报了。
+   ⚠ 修法不能改成 visibility/opacity：本表实测结论是这个 dialog 的 :hover restyle
+   **只对 display 生效**（opacity 那批全是坏的），而 visibility 从没人测过 ——
+   拿一个未测属性去修一个已测机制，是把已知换成未知。
+   所以用两个 display 开关互补：静止时占位的是这个空 slot，node hover 时 slot 收起、
+   按钮出现，两者同尺寸 ⇒ 行宽恒定。⛔ 不是把按钮本身留在布局里 —— 那会在静止时留下一个
+   18px 的隐形点击靶，误点会直接建/删斜体副本。slot 没有任何 handler。 */
+/* 🔴 owner 2026-09-09 报「一个字重创建斜体后，斜体按钮 hover 前后位置不一致」——
+   是我上一轮引入的回归。`.ital-add.has-copy{display:flex}`（:1317，特异度 0,2,0 压过
+   base 的 display:none）让按钮在【已有副本】时常驻显示；而我的 slot 当时是无条件渲染的
+   ⇒ 静止 = 按钮 18px + slot 18px = 36px，hover = 按钮 18px + slot 收起 = 18px
+   ⇒ 正好差 18px，一 hover 就跳。
+   ⇒ slot 只在【按钮尚未常驻】时才需要占位：渲染条件改成 ItalicAdd && !hasCopy。
+   两种状态下的行宽因此都恒定：无副本时 slot⇄按钮 互换（同尺寸），有副本时按钮一直在、无 slot。 */
+.ital-slot{width:18px;height:18px;flex:none;display:block;}
+.node:hover .ital-slot{display:none;}
+/* 🔴 2026-09-09 owner 报「拖动一个节点时节点高度不停抽搐」。
+   成因是上一行与「拖动中不渲染 .ital-add」这条新行为的交互：
+   拖动中按钮不在了，本该由槽位占住那 18px；可指针一扫到某个节点，
+   上一行的 `.node:hover` 就把【槽位也藏了】⇒ 没人占位 ⇒ `.map-right`
+   （flex-wrap:wrap）换行 ⇒ 行高变。拖动中指针不停扫过节点 ⇒ 高度不停抽搐。
+   ⇒ 拖动中槽位必须【无视 hover】继续占位。
+   ⚠ 用 JS 挂的显式类，不用 `body.grabbing`：后者在 pointerup 的捕获阶段
+     就被清掉，靠它做样式开关会在手势收尾处出现一帧空窗。 */
+.ital-slot-drag{display:block !important;}
+
+/* 拖动提示（owner 2026-09-09 选 1A+2C：跟着幽灵走、文案带上"为什么"）。
+   它是 .drag-ghost 的子元素 ⇒ 自动跟随；祖先是 position:fixed，
+   所以这条再长也不参与任何布局，不会把谁挤走（故可放心 nowrap）。
+   ⚠ 不用 transition/opacity 做出现动画：本仓已记 UXP webview 里
+     CSS transitions 不支持、运行时改 opacity 只写不显。这里靠换文本，
+     是 textContent 直写，不依赖任何需要重绘的属性开关。 */
+/* ⚠ 定位由 JS 内联给（position:fixed + transform），这里不再写 absolute/top ——
+   owner 实测「文本超过背景」：作为幽灵的绝对定位子元素时，收缩宽度被容器
+   （只有一个节点宽）封顶，而 nowrap 的文字照样溢出去。挪成 fixed 之后
+   容器是视口，宽度按内容走。 */
+.drag-hint{
+  white-space:nowrap;pointer-events:none;
+  font:11px/1.5 var(--ui);letter-spacing:.01em;
+  color:var(--txt-2);background:#0e1116;
+  border:1px solid var(--line);border-radius:6px;
+  padding:3px 8px;
+}
+.drag-hint.is-merge{color:var(--merge);border-color:var(--merge);}
 /* available (in font, neither used nor matched) = dim background */
 /* ⚠ #46 sweep note: if is-available is ever toggled AT RUNTIME these two
    lines will not repaint (CLAUDE.md #13 — runtime opacity is write-only);
@@ -434,6 +635,30 @@ body.grabbing{cursor:grabbing;user-select:none;}
    keeps the Bold amber. */
 [data-profile="focus"] .node.is-matched{background:var(--ok-soft);border-color:color-mix(in oklab,var(--ok) 45%,transparent);}
 [data-profile="focus"] .node.is-todo{background:var(--surface-2);border-color:var(--line);}
+
+/* 🔴 2026-09-09：`.node.drop-merge`（:243）是 (0,2,0)，而上面两条 profile 规则是 (0,3,0)
+   且声明在后 ⇒ 每一个 matched / todo 节点（正是操作员会拖上去的那些）的合并高亮背景
+   都被覆盖掉，只剩一圈 1px 内描边。owner 报「拖动无变化」的那一半就是它。
+   ⚠ 我先前 grep 到 [data-profile="bold"] 那两条、见 profile 硬编码为 focus 就判「此假设已死」——
+     少读了紧接着的 focus 版两条。**同一个模式的规则要读完一族，不是读到第一条反例就收。**
+   修法：给它同样的 (0,3,0) 并声明在后。用 [data-profile] 无值形式，两种 profile 都盖得住。 */
+[data-profile] .node.drop-merge{background:var(--merge-soft);border-color:var(--merge);}
+
+/* 🔴 2026-09-09 —— **同一个坑的第三次**（前两次：`.node.drop-merge` 见上、
+   `#51 处 2` 的 margin 简写见 :227）。`.node.hl-dim`（:298）是 (0,2,0)，
+   而 `[data-profile="focus"] .node.is-todo`（:634）是 (0,3,0) 且声明在后
+   ⇒ **每一个正常字重都压不暗**，只有 `is-available`（未使用、没有 profile 覆盖）
+   漏了出来 —— owner 看到的「hover 时某个节点变深」就是它，看着像随机，
+   其实是 #45 这个 hover-dim 从来没在正常节点上画出来过。
+   实测（harness 逐节点读 computed background，2026-09-09）：
+     hover Italic ⇒ Light/Semibold/Medium/Regular 都挂了 hl-dim 但 bg 不变，
+     只有 Bold(is-available) 从 rgb(25,29,35) 变成 rgb(16,19,23)。
+   修法同上一条：给它同样的 (0,3,0)、用无值 [data-profile] 形式、声明在后。
+   ⚠ 这里【只修 hl-dim】。`.wire-dim` 有一个同源的洞（:276 的 opacity:.22 从未画过），
+     但那是拖动期的另一条通道、另一段历史，不在本次 owner 的决定范围内 ——
+     不顺手一起改，免得把一个未经决定的视觉变化混进来。 */
+[data-profile] .node.hl-dim{background:#101317;border-color:#1e2229;}
+[data-profile] .node.hl-dim .member-name{color:#40454e;}
 
 /* 8D-ext-bypair-tofu-ux Phase 2: source-present-unpaired (tofu-risk) RED outline.
    The flagged node is state==='todo' so it also matches the rule ABOVE

@@ -120,11 +120,11 @@ walking the whole tree minus an exclusion list, then self-checking the `require`
 closure so nothing that is reachable at runtime is left out of the bundle. It
 emits:
 
-- `dist/toolkit/` — the InDesign payload that gets installed into the Scripts panel
-- `toolkit.manifest.json` — the version plus a SHA-256 for every file
-- `toolkit.manifest.sha256` — a `shasum -c` sidecar, used for verification on
+- `dist/indesign-toolkit/` — the InDesign payload that gets installed into the Scripts panel
+- `indesign-toolkit.manifest.json` — the version plus a SHA-256 for every file
+- `indesign-toolkit.manifest.sha256` — a `shasum -c` sidecar, used for verification on
   macOS
-- `dist/illustrator/`, `illustrator.manifest.json`, `illustrator.manifest.sha256`
+- `dist/illustrator-toolkit/`, `illustrator-toolkit.manifest.json`, `illustrator-toolkit.manifest.sha256`
   — the same three for the Illustrator payload
 - `install.sh`, `install.ps1` — the one-line bootstraps
 
@@ -140,11 +140,11 @@ contains — looks like this:
 ```text
 <repo root>/
   toolkit/                  ← the InDesign content that gets installed into the Scripts panel
-  toolkit.manifest.json     ← version + per-file sha256
-  toolkit.manifest.sha256   ← shasum -c sidecar (macOS verification)
+  indesign-toolkit.manifest.json     ← version + per-file sha256
+  indesign-toolkit.manifest.sha256   ← shasum -c sidecar (macOS verification)
   illustrator/              ← the Illustrator scripts
-  illustrator.manifest.json
-  illustrator.manifest.sha256
+  illustrator-toolkit.manifest.json
+  illustrator-toolkit.manifest.sha256
   install.sh                ← one-line bootstraps
   install.ps1
   install-update.bat

@@ -93,7 +93,10 @@ function collectConfigFaces(config) {
 //                       EXPLICIT false marks a face missing; null/undefined
 //                       (unknown) marks nothing — never report what you did
 //                       not measure.
-function computeMissingFaceKeys(config, opts) {
+// The guard + probe loop, extracted 2026-09-08 so the config-driven and the
+// doc-driven collectors cannot drift on the part that decides what counts as
+// missing. Only an EXPLICIT false marks a face; null/unknown marks nothing.
+function _probeFaces(faces, opts) {
     opts = opts || {};
     var inst = opts.installedFamilies;
     var known = false;
@@ -104,7 +107,6 @@ function computeMissingFaceKeys(config, opts) {
     }
     if (!known) return null;
     if (typeof opts.probeFace !== "function") return null;
-    var faces = collectConfigFaces(config);
     var missing = [];
     for (var i = 0; i < faces.length; i++) {
         var verdict = null;
@@ -113,6 +115,68 @@ function computeMissingFaceKeys(config, opts) {
         if (verdict === false) missing.push(faceKey(faces[i].font, faces[i].weight));
     }
     return missing;
+}
+
+// #28(f) / owner 2026-09-08 — the faces THIS DOCUMENT ACTUALLY USES.
+//
+// Why a second collector rather than reusing collectConfigFaces: on the panel's
+// NORMAL open there is no config yet. `font_apply_panel.idjs` builds panelData
+// straight from DocScan.scanActiveDoc and hands it to React (:193→:203→:407),
+// never passing through configToPanelData — which is the only place the config
+// precompute runs. So the `not installed` chip could not appear on the path the
+// operator actually takes; it needed an in-panel config import first. Measured
+// 2026-09-08 against a live panel: EJ Sans Text/Italic, genuinely absent from
+// the machine and used 1581 times in the document, carried no chip.
+//
+// Scope is owner-chosen (2026-09-08, option A): **only faces the document uses**,
+// NOT the union with config-declared faces. A real brand config on this machine
+// declares 14 faces across three families while a zh-CN job touches one of them,
+// so the union would fire on every job forever for a family that job never
+// mentions. The consult reached the same place independently: the safe predicate
+// is declared ∩ actually-used, and doc-used is the half that is knowable here.
+//
+// ⚠ `used > 0` is load-bearing, not a tidy-up: panelData's weights list mixes
+// doc-used weights with INSTALLED-STYLE AUGMENTATION entries (font_mapping_doc_scan
+// :913-926 appends every installed style of a family with used:0). Those are
+// installed by construction — probing them is at best noise and at worst a chip
+// on a weight the document never touches.
+//
+// Derives keys from panelData itself, which is the same object the renderer keys
+// on (`fontName␟weight.actual`, data.jsx nodeMissingFaces) — so the two cannot
+// disagree about spelling.
+function collectPanelFaces(panelData) {
+    var out = [];
+    var seen = {};
+    if (!panelData || typeof panelData !== "object") return out;
+    var langs = panelData.languages || [];
+    for (var li = 0; li < langs.length; li++) {
+        var fonts = (langs[li] && langs[li].fonts) || [];
+        for (var fi = 0; fi < fonts.length; fi++) {
+            var fam = fonts[fi] && fonts[fi].name;
+            if (!fam) continue;
+            var ws = fonts[fi].weights || [];
+            for (var wi = 0; wi < ws.length; wi++) {
+                var w = ws[wi];
+                if (!w || !w.actual) continue;
+                if (!(Number(w.used) > 0)) continue;      // see the used>0 note above
+                var key = faceKey(fam, w.actual);
+                if (seen[key]) continue;
+                seen[key] = true;
+                out.push({ font: String(fam), weight: String(w.actual) });
+            }
+        }
+    }
+    return out;
+}
+
+// Same contract as computeMissingFaceKeys (null = cannot answer ⇒ show NOTHING),
+// only the face set differs.
+function computeMissingFaceKeysFromPanelData(panelData, opts) {
+    return _probeFaces(collectPanelFaces(panelData), opts);
+}
+
+function computeMissingFaceKeys(config, opts) {
+    return _probeFaces(collectConfigFaces(config), opts);
 }
 
 // ── #28e-rep (design-intent §12) — CARRIED, NOT YET DISPLAYED ───────────────
@@ -254,6 +318,9 @@ module.exports = {
     faceKey: faceKey,
     collectConfigFaces: collectConfigFaces,
     computeMissingFaceKeys: computeMissingFaceKeys,
+    // #28(f) 2026-09-08 — doc-driven half, for the panel's normal open (no config yet).
+    collectPanelFaces: collectPanelFaces,
+    computeMissingFaceKeysFromPanelData: computeMissingFaceKeysFromPanelData,
     collectFaceRoles: collectFaceRoles,   // #28e-rep — carried, not yet displayed
     computeAliasSpellings: computeAliasSpellings,   // #28e-alias — wording marker
     makeTwinProbe: makeTwinProbe,

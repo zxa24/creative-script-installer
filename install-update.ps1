@@ -54,14 +54,14 @@ $INSTALL_FOLDER = 'indesign-toolkit-stable'
 # 设计师面板里出现两套 —— 但仅限确实是旧安装, 见 Remove-LegacyFolder。同一个名字
 # 承担两种角色, 正是那个检查必须谨慎而不是图省事的原因。
 $LEGACY_FOLDER  = 'indesign-toolkit'
-$MANIFEST_NAME  = 'toolkit.manifest.json'
-$PAYLOAD_SUBDIR = 'toolkit'
+$MANIFEST_NAME  = 'indesign-toolkit.manifest.json'
+$PAYLOAD_SUBDIR = 'indesign-toolkit'
 $VERSION_MARKER = '.installed_version.json'
 
 # Illustrator: 另一套脚本、另一个位置、另一套权限规则 → 自带 manifest。
 $AI_FOLDER         = 'illustrator-toolkit-stable'
-$AI_PAYLOAD_SUBDIR = 'illustrator'
-$AI_MANIFEST_NAME  = 'illustrator.manifest.json'
+$AI_PAYLOAD_SUBDIR = 'illustrator-toolkit'
+$AI_MANIFEST_NAME  = 'illustrator-toolkit.manifest.json'
 
 # ------------------------------------------------------------------
 # 消息 (中文, 非技术, 无 ETA / 栈)
