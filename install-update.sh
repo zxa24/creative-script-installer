@@ -173,6 +173,26 @@ status_clear() {
 say()  { status_clear; printf '%s\n' "$*"; log "$*"; }
 fail() { status_clear; printf '%s\n' "$*" >&2; log "! $*"; }
 
+# 状态行的标记列(owner 2026-09-11:「有更新的字样放到前面使其更显著」)。
+# 原先写在句尾 —— "InDesign: installed v1.0.0 - v1.0.3 available" —— 要扫到行末才知道
+# 这行要不要紧。放到行首对齐成一列, 有几项待更新一眼数得出。
+# 🔴 MARK_NONE 由 MARK_UPDATE 派生, 不是另写八个空格: 两个写死的值"恰好等长"是巧合,
+#    而巧合会在下一个改宽度的人手里安静地断开 —— 断开时没有任何东西会报错, 只是列歪了。
+# ⚠ 这一段与 install-update.ps1 是【同一个界面的两份实现】。改一边不改另一边 = 制造
+#    第二个真相来源; 两边的措辞与列宽必须一起动。
+MARK_UPDATE='UPDATE  '
+MARK_NONE="$(printf '%*s' "${#MARK_UPDATE}" '')"
+# 只有"待更新"这一种状态上色: 它是唯一一条【读者要据此动手】的。把"已是最新"也上色
+# 等于把颜色变成装饰, 那之后颜色就不再意味着任何事。
+# 绿色(32)是 owner 2026-09-11 定的(初版用黄 33)。⚠ 这里【不是】"一切正常"的绿,
+# 是"有新东西可拿"的绿; 黄色在这套输出里读起来像出了问题, 而有更新并不是问题。
+# 非 tty(管道/重定向)时不发转义序列 —— 否则日志与被 grep 的输出里会混进控制字符。
+say_update() {
+  status_clear
+  if [ -t 1 ]; then printf '\033[32m%s\033[0m\n' "$*"; else printf '%s\n' "$*"; fi
+  log "$*"
+}
+
 # --- 1. 探测 Scripts Panel 目录 (可能多版本 / 多 locale) -----------------------
 #   ~/Library/Preferences/Adobe InDesign/Version <N>/<locale>/Scripts/Scripts Panel
 find_panels() {
@@ -938,16 +958,16 @@ if [ -z "$ACTION" ]; then
     lv="$(installed_version_at "$p")"
     label="$(printf '%s' "$p" | sed -E 's#.*/Adobe InDesign/([^/]*)/([^/]*)/.*#\1 (\2)#')"
     if [ -L "$p/$INSTALL_FOLDER" ]; then
-      say "  ${label}: a link is in the way (development bridge) - rename or remove it and run again"
+      say "  ${MARK_NONE}${label}: a link is in the way (development bridge) - rename or remove it and run again"
     elif [ -n "$lv" ]; then
       INSTALLED_ANY=1
       if [ -n "$RVER" ] && [ "$lv" != "$RVER" ]; then
-        ALL_CURRENT=0; say "  ${label}: installed v${lv} - v${RVER} available"
+        ALL_CURRENT=0; say_update "  ${MARK_UPDATE}${label}: installed v${lv} -> v${RVER}"
       else
-        say "  ${label}: installed v${lv}"
+        say "  ${MARK_NONE}${label}: installed v${lv}"
       fi
     else
-      ALL_CURRENT=0; say "  ${label}: not installed"
+      ALL_CURRENT=0; say "  ${MARK_NONE}${label}: not installed"
     fi
   done <<< "$PANELS"
   while IFS= read -r p; do
@@ -955,22 +975,22 @@ if [ -z "$ACTION" ]; then
     label="${p#*|}"; p="${p%%|*}"
     lv="$(ai_installed_version_at "$p")"
     if [ -L "$p/$AI_FOLDER" ]; then
-      say "  ${label}: a link is in the way (development bridge) - rename or remove it and run again"
+      say "  ${MARK_NONE}${label}: a link is in the way (development bridge) - rename or remove it and run again"
     elif ! ai_writable "$p"; then
       # Not an error, and not counted as "installed" or as "needs updating".
       # Deliberately does NOT promise what happens next: the run may offer to
       # do it, or print the command - saying "shown below" would be false in
       # the first case, and the status line is written before either is known.
-      say "  ${label}: not set up yet"
+      say "  ${MARK_NONE}${label}: not set up yet"
     elif [ -n "$lv" ]; then
       INSTALLED_ANY=1
       if [ -n "$RVER" ] && [ "$lv" != "$RVER" ]; then
-        ALL_CURRENT=0; say "  ${label}: installed v${lv} - v${RVER} available"
+        ALL_CURRENT=0; say_update "  ${MARK_UPDATE}${label}: installed v${lv} -> v${RVER}"
       else
-        say "  ${label}: installed v${lv}"
+        say "  ${MARK_NONE}${label}: installed v${lv}"
       fi
     else
-      ALL_CURRENT=0; say "  ${label}: not installed"
+      ALL_CURRENT=0; say "  ${MARK_NONE}${label}: not installed"
     fi
   done <<< "$AI_DIRS"
 

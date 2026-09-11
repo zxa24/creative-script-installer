@@ -94,6 +94,20 @@ function Ok([string]$m)    { Clear-Status; Write-Host $m -ForegroundColor Green 
 function Warn([string]$m)  { Clear-Status; Write-Host $m -ForegroundColor Yellow }
 function Err([string]$m)   { Clear-Status; Write-Host $m -ForegroundColor Red }
 
+# 状态行的标记列(owner 2026-09-11:「有更新的字样放到前面使其更显著」)。
+# 原先写在句尾 —— "InDesign: installed v1.0.0 - v1.0.3 available" —— 要一直扫到行末
+# 才知道这行要不要紧; 条目一多就得逐行读完。放到行首并对齐成一列, 有几项待更新一眼
+# 数得出, 不必读完任何一行。
+# 🔴 MARK_NONE 由 MARK_UPDATE 派生, 不是另写八个空格: 两个写死的值"恰好等长"是巧合,
+#    而巧合会在下一个改宽度的人手里安静地断开 —— 断开时没有任何东西会报错, 只是列歪了。
+$Script:MARK_UPDATE = 'UPDATE  '
+$Script:MARK_NONE   = ' ' * $Script:MARK_UPDATE.Length
+# 只有"待更新"这一种状态上色: 它是唯一一条【读者要据此动手】的。把"已是最新"也上色
+# 等于把颜色变成装饰, 那之后颜色就不再意味着任何事。
+# 绿色是 owner 2026-09-11 定的(初版用黄)。⚠ 与 Ok() 同色 —— 这里【不是】"一切正常"的绿,
+# 是"有新东西可拿"的绿; 黄色在这套输出里读起来像出了问题, 而有更新并不是问题。
+function SayUpdate([string]$m) { Clear-Status; Write-Host $m -ForegroundColor Green }
+
 $Script:LogLines = @()
 function Log([string]$m) {
   $Script:LogLines += ("{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $m)
@@ -899,35 +913,35 @@ try {
       $label = if ($p -match 'InDesign\\([^\\]+)\\([^\\]+)\\Scripts') { "$($Matches[1]) ($($Matches[2]))" } else { $p }
       $dst = Join-Path $p $INSTALL_FOLDER
       if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) {
-        Say ("  {0}: a link is in the way (development bridge) - rename or remove it and run again" -f $label)
+        Say ("  {0}{1}: a link is in the way (development bridge) - rename or remove it and run again" -f $Script:MARK_NONE, $label)
         continue
       }
       $lv = Get-InstalledVersion $p
       if ($lv) {
         $anyInstalled = $true
-        if ($rver -and $lv -ne $rver) { $allCurrent = $false; Say ("  {0}: installed v{1} - v{2} available" -f $label, $lv, $rver) }
-        else { Say ("  {0}: installed v{1}" -f $label, $lv) }
-      } else { $allCurrent = $false; Say ("  {0}: not installed" -f $label) }
+        if ($rver -and $lv -ne $rver) { $allCurrent = $false; SayUpdate ("  {0}{1}: installed v{2} -> v{3}" -f $Script:MARK_UPDATE, $label, $lv, $rver) }
+        else { Say ("  {0}{1}: installed v{2}" -f $Script:MARK_NONE, $label, $lv) }
+      } else { $allCurrent = $false; Say ("  {0}{1}: not installed" -f $Script:MARK_NONE, $label) }
     }
     foreach ($t in $aiDirs) {
       $dst = Join-Path $t.Dir $AI_FOLDER
       if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst -Force).LinkType) {
-        Say ("  {0}: a link is in the way (development bridge) - rename or remove it and run again" -f $t.Label)
+        Say ("  {0}{1}: a link is in the way (development bridge) - rename or remove it and run again" -f $Script:MARK_NONE, $t.Label)
         continue
       }
       if (-not (Test-IllustratorWritable $t.Dir)) {
         # 既不算"已安装"也不算"要更新"。刻意【不】承诺接下来会怎样: 这次运行
         # 可能会问你要不要现在做, 也可能只打印命令 —— 写"见下方"在前一种情况下
         # 就是假话, 而状态行是在两者都还未定之前打印的。
-        Say ("  {0}: not set up yet" -f $t.Label)
+        Say ("  {0}{1}: not set up yet" -f $Script:MARK_NONE, $t.Label)
         continue
       }
       $lv = Get-IllustratorInstalledVersion $t.Dir
       if ($lv) {
         $anyInstalled = $true
-        if ($rver -and $lv -ne $rver) { $allCurrent = $false; Say ("  {0}: installed v{1} - v{2} available" -f $t.Label, $lv, $rver) }
-        else { Say ("  {0}: installed v{1}" -f $t.Label, $lv) }
-      } else { $allCurrent = $false; Say ("  {0}: not installed" -f $t.Label) }
+        if ($rver -and $lv -ne $rver) { $allCurrent = $false; SayUpdate ("  {0}{1}: installed v{2} -> v{3}" -f $Script:MARK_UPDATE, $t.Label, $lv, $rver) }
+        else { Say ("  {0}{1}: installed v{2}" -f $Script:MARK_NONE, $t.Label, $lv) }
+      } else { $allCurrent = $false; Say ("  {0}{1}: not installed" -f $Script:MARK_NONE, $t.Label) }
     }
     Say ''
     # 已是最新时就不提供"安装/更新"这一项 —— 它无事可做。一个什么都不做的条目仍然
