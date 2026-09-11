@@ -171,7 +171,25 @@ status_clear() {
 # each call site so it cannot be forgotten at one of them - and a forgotten one
 # leaves the next line printed on top of the status text.
 say()  { status_clear; printf '%s\n' "$*"; log "$*"; }
-fail() { status_clear; printf '%s\n' "$*" >&2; log "! $*"; }
+# ok / warn / fail —— 与 install-update.ps1 的 Ok / Warn / Err 一一对应。
+# 🔴 哪一句该是哪一档【不是在这里决定的】: 参照系是 install-update.ps1,
+#    severity 逐条从它那边抄。凭语气判断是 91 次判断, 错一次就是颜色在说谎 ——
+#    而一行绿色的"成功"其实是警告, 比没有颜色更糟(没颜色时人还会去读那行字)。
+#    两边是否还对得上, 由 tools/check-message-parity.js 断言, 不靠记性。
+# 颜色码与 ps1 的 ForegroundColor 对应: ok=32 绿 / warn=33 黄 / err=31 红。
+# 非 tty(管道/重定向)时不发转义序列 —— 否则日志与被 grep 的输出里会混进控制字符。
+# ⚠ log 记的是 "$*" 原文, 永远不含转义序列: 日志要的是可读的历史, 不是屏幕的副本。
+ok()   { status_clear; if [ -t 1 ]; then printf '\033[32m%s\033[0m\n' "$*"; else printf '%s\n' "$*"; fi; log "$*"; }
+warn() { status_clear; if [ -t 1 ]; then printf '\033[33m%s\033[0m\n' "$*"; else printf '%s\n' "$*"; fi; log "$*"; }
+# fail 一直写 stderr, 保持不动 —— 只加颜色。
+# ⚠ 守卫看的是 fd 2(它自己写的那个流), ⛔ 不是 fd 1: `cmd >file` 之下 stderr 仍是
+#   终端, 那时该上色; `cmd 2>file` 之下不该。用 -t 1 守卫一个写 fd 2 的输出, 两种
+#   情形都会判反 —— 而判反的方向恰好是"把转义序列写进文件", 即这条守卫要防的事。
+fail() {
+  status_clear
+  if [ -t 2 ]; then printf '\033[31m%s\033[0m\n' "$*" >&2; else printf '%s\n' "$*" >&2; fi
+  log "! $*"
+}
 
 # 状态行的标记列(owner 2026-09-11:「有更新的字样放到前面使其更显著」)。
 # 原先写在句尾 —— "InDesign: installed v1.0.0 - v1.0.3 available" —— 要扫到行末才知道
@@ -899,7 +917,7 @@ if [ -z "$PANELS" ] && [ -z "$AI_DIRS" ]; then
     fail "there is nothing to go on. Report this with --log and the Illustrator version."
     exit 3
   fi
-  say "No InDesign or Illustrator installation found. Install and launch one of them, then run this again."
+  warn "No InDesign or Illustrator installation found. Install and launch one of them, then run this again."
   exit 3
 fi
 
@@ -1121,13 +1139,13 @@ if [ "$ACTION" = "uninstall" ]; then
   if [ "$DRYRUN" = "1" ]; then
     say "[dry run] Would remove ${REMOVED} installation(s). Nothing was written."
   elif [ "$UFAILED" -gt 0 ]; then
-    say "Removed ${REMOVED}, failed ${UFAILED} - the application may have the files open. Close it and try again."
+    fail "Removed ${REMOVED}, failed ${UFAILED} - the application may have the files open. Close it and try again."
     exit 1
   elif [ "$REMOVED" -gt 0 ]; then
     UAPPS=""
     [ "$REMOVED_ID" -gt 0 ] && UAPPS="InDesign"
     [ "$REMOVED_AI" -gt 0 ] && UAPPS="${UAPPS:+$UAPPS and }Illustrator"
-    say "Removed ${REMOVED} installation(s). Restart ${UAPPS:-the application} for the menu to catch up."
+    ok "Removed ${REMOVED} installation(s). Restart ${UAPPS:-the application} for the menu to catch up."
   else
     say "Nothing to remove - no installation was found."
   fi
@@ -1151,12 +1169,12 @@ if [ -z "$SOURCE" ] && [ "$DRYRUN" != "1" ]; then
       # target that is not installed at all.
       AI_PENDING="$(ai_pending_count)"
       if [ "$AI_PENDING" -gt 0 ]; then
-        say "Up to date (v${RVER}) everywhere it could be installed - but ${AI_PENDING} Illustrator location(s) still need the one-time step below."
+        ok "Up to date (v${RVER}) everywhere it could be installed - but ${AI_PENDING} Illustrator location(s) still need the one-time step below."
         report_pending_ai_setup
       elif [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ]; then
-        say "Up to date (v${RVER}) for InDesign. Illustrator was skipped, see above."
+        ok "Up to date (v${RVER}) for InDesign. Illustrator was skipped, see above."
       else
-        say "Already up to date (v${RVER})."
+        ok "Already up to date (v${RVER})."
       fi
       exit 0
     fi
@@ -1289,7 +1307,7 @@ if [ "$BLOCKED" -gt 0 ]; then
   # for every entry, so a blocked Illustrator target was reported at a path
   # that does not exist - and "rename or remove that link" was the only
   # instruction in the whole block, pointed at nothing.
-  say "Skipped ${BLOCKED} location(s): the toolkit folder there is a link, not a folder."
+  warn "Skipped ${BLOCKED} location(s): the toolkit folder there is a link, not a folder."
   say "Nothing was written there, so a link to a working copy cannot be destroyed."
   say ""
   printf '%s' "$BLOCKED_PANELS" | while IFS= read -r bp; do
@@ -1312,9 +1330,9 @@ if [ "$DRYRUN" = "1" ]; then
   # failure to find anything, when the actual reason is that every location is
   # already current - two very different things behind the same sentence.
   if [ "$TOT_WOULD" -eq 0 ] && [ "$TOT_SKIPPED" -gt 0 ]; then
-    say "[dry run] Nothing to do: ${TOT_SKIPPED} location(s) already have v${VERSION}."
+    ok "[dry run] Nothing to do: ${TOT_SKIPPED} location(s) already have v${VERSION}."
   else
-    say "[dry run] Would install into ${TOT_WOULD} location(s) (v${VERSION}); ${TOT_SKIPPED} already current. Nothing was written."
+    ok "[dry run] Would install into ${TOT_WOULD} location(s) (v${VERSION}); ${TOT_SKIPPED} already current. Nothing was written."
   fi
 elif [ "$TOT_FAILED" -gt 0 ] && [ "$TOT_INSTALLED" -gt 0 ]; then
   # FINAL_RC, not `exit 1`. The pending-Illustrator-setup report is the last
@@ -1323,11 +1341,11 @@ elif [ "$TOT_FAILED" -gt 0 ] && [ "$TOT_INSTALLED" -gt 0 ]; then
   # exactly the runs that did not tell them. The comment on panels_need_update
   # claims the report fires "on the same paths this function can send the run
   # down"; on macOS that was only true of the paths that did not fail.
-  say "Updated to v${VERSION} in some locations, but ${TOT_FAILED} failed - the application may have the files open. Close it and run again."
+  warn "Updated to v${VERSION} in some locations, but ${TOT_FAILED} failed - the application may have the files open. Close it and run again."
   [ -n "$FAILED_WHERE" ] && printf '%s' "$FAILED_WHERE"
   FINAL_RC=1
 elif [ "$TOT_FAILED" -gt 0 ]; then
-  say "Update failed in ${TOT_FAILED} location(s); nothing was updated. Your existing scripts are unchanged. Close the application and run again, or ask IT."
+  fail "Update failed in ${TOT_FAILED} location(s); nothing was updated. Your existing scripts are unchanged. Close the application and run again, or ask IT."
   [ -n "$FAILED_WHERE" ] && printf '%s' "$FAILED_WHERE"
   FINAL_RC=1
 elif [ "$TOT_INSTALLED" -gt 0 ]; then
@@ -1338,10 +1356,10 @@ elif [ "$TOT_INSTALLED" -gt 0 ]; then
   APPS=""
   [ "$INSTALLED" -gt 0 ] && APPS="InDesign"
   [ "$AI_INSTALLED" -gt 0 ] && APPS="${APPS:+$APPS and }Illustrator"
-  say "Installed v${VERSION} - restart ${APPS} to see the scripts."
+  ok "Installed v${VERSION} - restart ${APPS} to see the scripts."
   [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ] && say "(Illustrator was skipped, see above)"
   if [ "$AI_VERIFY_BAD" = "1" ]; then
-    say "(the Illustrator scripts failed verification and were not installed - that is a bad download; run this again)"
+    warn "(the Illustrator scripts failed verification and were not installed - that is a bad download; run this again)"
     FINAL_RC=1
   fi
   # Derived from OWNER/REPO rather than written out: a hard-coded URL here would
@@ -1358,29 +1376,29 @@ elif [ "$TOT_INSTALLED" -gt 0 ]; then
 elif [ "$BLOCKED" -gt 0 ]; then
   # 说发生了什么, 不说打算发生什么。这里原先落进下面那个 else, 于是在一个字都
   # 没写入的情况下打印"已是最新版本" —— 用户会据此认为脚本已经装好了。
-  say "Nothing was installed: all ${BLOCKED} location(s) were skipped, see above."
+  warn "Nothing was installed: all ${BLOCKED} location(s) were skipped, see above."
   FINAL_RC=1
 elif [ "$AI_VERIFY_BAD" = "1" ]; then
-  say "Nothing was installed: the Illustrator scripts failed verification."
+  fail "Nothing was installed: the Illustrator scripts failed verification."
   say "That is a bad download, not a problem with this machine - run this again."
   FINAL_RC=1
 elif [ "$AI_SETUP" -gt 0 ] && [ "$TOT_SKIPPED" -eq 0 ]; then
   # Nothing was written and nothing was already current - so "up to date" would
   # be false. The one thing standing in the way is printed just below.
-  say "Nothing was installed yet."
+  warn "Nothing was installed yet."
 elif [ "$AI_SETUP" -gt 0 ]; then
   # A bare "Already up to date" here would be a claim about every target, while
   # one of them was not written to and could not be. Saying it and then
   # printing "is not set up yet" three lines later reads as a contradiction -
   # and the headline is the part people keep.
-  say "Up to date (v${VERSION}) everywhere it could be installed - but ${AI_SETUP} Illustrator location(s) still need the one-time step below."
+  ok "Up to date (v${VERSION}) everywhere it could be installed - but ${AI_SETUP} Illustrator location(s) still need the one-time step below."
 elif [ -n "$AI_LOCALE_NOTE" ] && [ -z "$AI_DIRS" ]; then
   # The note above explains why Illustrator was skipped, but a bare "Already up
   # to date" is a claim about everything - and the headline is the part people
   # keep. Same shape as the AI_SETUP branch further up.
-  say "Up to date (v${VERSION}) for InDesign. Illustrator was skipped, see above."
+  ok "Up to date (v${VERSION}) for InDesign. Illustrator was skipped, see above."
 else
-  say "Already up to date (v${VERSION})."
+  ok "Already up to date (v${VERSION})."
 fi
 
 # Last, whatever else happened: on this run it is the only thing left for a

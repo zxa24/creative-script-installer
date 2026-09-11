@@ -1,0 +1,84 @@
+{
+  "_README": [
+    "tools/check-message-parity.js 的配套清单。三节各管一件事：",
+    "",
+    "  manualPairs      —— 两边是同一句话但【措辞按平台不同】(PC↔Mac / PowerShell↔Terminal /",
+    "                      -Log↔--log)。声明成对之后, 它们的 severity 【照常被比对】。",
+    "                      ⇒ 这比豁免强：闸仍然钉得住它们。",
+    "",
+    "  severityOverride —— 两边【故意】给不同的档, 且有平台性的理由。",
+    "                      🔴 它把【两边的档都钉住】, 不是把这一条从闸里拿掉：",
+    "                      任一边将来变了都会红。豁免不该等于失明。",
+    "",
+    "  shOnly           —— 只在 sh 里出现、ps1 没有对应的消息。它们没有参照系,",
+    "                      所以不参与比对。每条一个理由。",
+    "",
+    "⚠ 🔴 这三节合起来就是这条闸的【盲区】。清单越长, 闸看得越少 ——",
+    "   而【没有任何东西会在它变长时报警】。它需要人定期看一遍, 问两个问题：",
+    "     ① 这条现在还需要豁免吗？(ps1 后来补上对应的一句了吗)",
+    "     ② 这条的理由现在还成立吗？",
+    "   ⛔ 别因为'它一直在清单里'就当它是对的 —— 那正是清单会腐烂的方式。"
+  ],
+
+  "manualPairs": [
+    {
+      "sh": "A network or source error stopped the update. Nothing was changed. Try again, or ask IT.",
+      "ps1": "A network or installation error stopped the update. Your existing scripts are unchanged. Try again, or ask IT.",
+      "why": "同一个失败出口(网络/下载失败后整个更新中止)。措辞按平台分岔：mac 侧说 source error、win 侧说 installation error。两边都是 err，档必须一起动。"
+    },
+    {
+      "sh": "there is nothing to go on. Report this with --log and the Illustrator version.",
+      "ps1": "there is nothing to go on. Report this with -Log and the Illustrator version.",
+      "why": "同一句，只差各自平台的开关拼写(--log / -Log)。⛔ 不能靠归一化抹掉这个差异——那会把真的措辞漂移也一起抹掉。"
+    }
+  ],
+
+  "severityOverride": [
+    {
+      "sh": "That folder is recognised by the scripts already in it; if it is empty,",
+      "shSev": "err",
+      "ps1Sev": "say",
+      "why": "🔴 平台强制的分岔，不是漂移。ps1 的 Err 与 Say 写【同一个流】(Write-Host)，所以它可以「首行上色、续行不上色」而不付代价。sh 的 fail 写 stderr、say 写 stdout ⇒ 照抄 ps1 会把一条三行的错误【劈到两个流】：`2>/dev/null` 会看到第 2、3 行却看不到第 1 行(即那句解释为什么失败的话)，`2>&1 | grep` 还会重排它们。⇒ 这三行在 sh 侧整块留在 fail。⚠ 已报 arch，等它裁；在裁定之前这条 override 把两边的档都钉住。"
+    },
+    {
+      "sh": "there is nothing to go on. Report this with --log and the Illustrator version.",
+      "shSev": "err",
+      "ps1Sev": "say",
+      "why": "同上——它是那条三行错误的第 3 行。理由与上一条是同一条，⛔ 别分开改。"
+    }
+  ],
+
+  "shOnly": {
+    "\"Source does not exist: {}\"; return 1": "内部 helper(copy_tree)的前置断言，不是面向用户的界面消息。ps1 侧对应的检查不走消息出口。⚠ 抽取器把它连同尾部的 `; return 1` 一起抓进来了——形状不好看，但文本唯一、能稳定定位，先不为它加解析特例。",
+
+    "{} keeps its scripts inside the application itself, so": "Illustrator 权限说明第 1 行。ps1 有语义相同的一段(ps1:687)但断行位置不同 ⇒ 逐行文本对不上。整段措辞按平台分岔(下面几行里有 'your Mac' / 'Terminal' / sudo)。",
+    "installing them there needs your permission - once.": "同上，权限说明的续行。",
+    "It creates one folder inside Illustrator for these scripts. Nothing": "同上。ps1 对应行以 'Nothing else' 结尾，断行不同。",
+    "else on your Mac is changed, and you will not be asked again.": "同上。'your Mac' ↔ ps1 的 'your PC' —— 平台措辞，不是漂移。",
+
+    "The {} folder inside Illustrator still holds files this installer": "卸载后 Illustrator 目录仍有外来文件的说明。ps1 把同一意思压成一行(ps1:1044)，断行不同。",
+    "did not put there, so it is left in place - and so is its permission.": "同上，续行。",
+    "The {} folder inside Illustrator is still there, and so is the": "同上，另一分支的措辞。",
+    "permission that was granted to create it.": "同上，续行。",
+
+    "Removed.": "mac 侧 sudo 删除成功的单行回执。ps1 的对应路径走 Windows 提权流程，没有这一句。",
+    "That did not go through - the folder is still there.": "mac 侧 sudo 删除失败的回执。ps1 对应的是 'The administrator step failed (exit code {})'(ps1:720)——措辞与信息量都不同，⛔ 不硬配对。",
+
+    "needs one administrator command - once. After it, every install and": "mac 的 sudo 说明。ps1 说的是 'administrator step' + PowerShell 提权，平台分岔。",
+    "update runs without a password.": "同上，续行。'without a password' 是 mac 特有的说法。",
+    "Paste this into Terminal, then run this installer again:": "mac 特有：Terminal。ps1 是 'Paste this into PowerShell and approve the prompt Windows shows:'。",
+    "sudo mkdir -p \\\"$1/{}\\\" && sudo chown \\\"\\{}\\\" \\\"$1/{}\\\"": "要用户粘贴的 sudo 命令原文，mac 独有。ps1 的对应是一条 Start-Process 提权命令。",
+    "An Illustrator upgrade replaces the application and takes that folder": "Illustrator 升级会带走该目录的提醒。ps1 有同义的一段(ps1:766)，断行不同。",
+    "with it. Run the same command again afterwards.": "同上，续行。前一行断得不一样。",
+
+    "{}{}: installed v{}": "状态行(每个安装位置一行)。ps1 侧同一列由 MARK_UPDATE/MARK_NONE 拼装，文本组织方式不同 ⇒ 逐行对不上。⚠ 这一条在两个分支各出现一次，是同一句。",
+
+    "The scripts were removed from {} Illustrator location(s).": "卸载回执。ps1 把它与后面的目录说明合成了一行(ps1:1044) ⇒ 断行不同。",
+    "[dry run] Would remove {} installation(s). Nothing was written.": "mac 侧 dry-run 卸载回执。ps1 的 dry-run 只覆盖安装路径，没有卸载的对应句。",
+    "Nothing to remove - no installation was found.": "同上，卸载路径的空结果。ps1 无对应句。",
+
+    "The downloaded package has no checksum list. Nothing was changed. Try again, or ask IT.": "mac 侧独有的校验前置(没有 checksum 清单就不往下走)。ps1 的验证流程在别处失败、没有单独的这一句。⚠ 它是 err —— 值得 arch 确认 ps1 是否该补一条对应的。",
+
+    "What to do next - select the link, then right-click and choose Open:": "收尾指引。mac 的操作是 right-click → Open，ps1 是 Ctrl+click ⇒ 平台措辞。"
+  }
+}
