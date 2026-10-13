@@ -2030,6 +2030,14 @@ The version is the payload version — the number the installer prints, and the
 one it writes into every installed folder. One number covers both the InDesign
 and the Illustrator sets; they are released together.
 
+## 1.1.1 (2026-10-13)
+
+**After installing, the link points to what you need.**
+
+When an install finishes, the installer now links to the "What next" part of the
+install page, which leads on to Folio, More tools and All scripts, instead of
+always to the Folio walkthrough. Useful if you only use the Illustrator tools.
+
 ## 1.1.0 (2026-10-12)
 
 **A new home for the documentation: Creative Script Kit.**

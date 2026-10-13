@@ -1370,7 +1370,7 @@ elif [ "$TOT_INSTALLED" -gt 0 ]; then
   # 会以为它只是一段文字。开法各平台不同, 所以各说各的 —— 这一句只在 macOS
   # 版里, Windows 版说 Ctrl+click。
   say "What to do next - select the link, then right-click and choose Open:"
-  say "  https://${OWNER}.github.io/${REPO}/guide/workflow"
+  say "  https://${OWNER}.github.io/${REPO}/guide/install#next"
   [ "$TOT_SKIPPED" -gt 0 ] && say "(${TOT_SKIPPED} location(s) were already up to date)"
   [ "$BLOCKED" -gt 0 ] && say "(${BLOCKED} location(s) were skipped, see above)"
 elif [ "$BLOCKED" -gt 0 ]; then

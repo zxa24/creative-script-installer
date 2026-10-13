@@ -1274,7 +1274,7 @@ try {
     # 一段文字。Windows 终端是 Ctrl+单击; macOS 那边是选中后右键"打开", 措辞
     # 各自不同, 所以两个脚本各说各的, 不共用一句。
     Say 'What to do next - Ctrl+click the link:'
-    Say ("  https://{0}.github.io/{1}/guide/workflow" -f $Owner, $Repo)
+    Say ("  https://{0}.github.io/{1}/guide/install#next" -f $Owner, $Repo)
     if ($skipped -gt 0) { Say ("({0} location(s) were already up to date)" -f $skipped) }
     if ($blocked.Count -gt 0) { Say ("({0} location(s) were skipped, see above)" -f $blocked.Count) }
   } elseif ($blocked.Count -gt 0) {
