@@ -130,7 +130,7 @@ try {
     // Two-level mkdir: script_outputs/ then baseline_snapshots/. Idempotent:
     // each createFolder swallows "already exists" and re-verifies via stat.
     async function _ensureBaselineDirAsync() {
-        try { fs.statSync(baselineDir); return true; } catch (e) {}
+        try { fs.lstatSync(baselineDir); return true; } catch (e) {}
         try {
             var uxp = require("uxp");
             var lfs = uxp && uxp.storage && uxp.storage.localFileSystem;
@@ -156,7 +156,7 @@ try {
             if (!bsFolder) {
                 try { await soFolder.createFolder("baseline_snapshots"); }
                 catch (eC2) {
-                    try { fs.statSync(baselineDir); return true; } catch (e3) {}
+                    try { fs.lstatSync(baselineDir); return true; } catch (e3) {}
                     return false;
                 }
             }
@@ -189,8 +189,15 @@ try {
         }
 
         // Legacy 2: <docDir>/<docname>.translation_baseline.json (single-file pre-folder).
+        // 🔴 2026-09-10 修：这里原本是 `fs.statSync`，而 UXP 的 fs 里 statSync 是 undefined
+        // ⇒ 调用抛 TypeError ⇒ 被下面这个 catch 吞掉 ⇒ **legacy 条目永远 push 不进 out**。
+        // 症状（若日后有人报，这就是答案）：**「旧版单文件 baseline 看不见 / 列表里没有 /
+        // 选不到」—— 文件还在盘上，但操作者够不着它。** 同形的第二处在
+        // `_defaultBaselinePathRead`（自动选中那条路）。
+        // ⚠ 换成 `lstatSync`：UXP 里它可用且对目录也成立（probe_gate2_file_picker.idjs:9-21
+        // 有存在/不存在两格；承重点变了之后另有 probes/20260910_08_lstat_capability.idjs 复量）。
         try {
-            fs.statSync(legacyBaselinePath);
+            fs.lstatSync(legacyBaselinePath);
             out.push({ name: docName + ".translation_baseline.json (legacy)", path: legacyBaselinePath });
         } catch (eL) {}
         return out;
@@ -211,7 +218,7 @@ try {
     function _defaultBaselinePathRead() {
         var files = _listBaselineFiles();
         if (files.length > 0) return files[0].path;
-        try { fs.statSync(legacyBaselinePath); return legacyBaselinePath; } catch (e) {}
+        try { fs.lstatSync(legacyBaselinePath); return legacyBaselinePath; } catch (e) {}
         return "";
     }
 

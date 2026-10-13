@@ -161,10 +161,78 @@ function withSafeHostEnv(app, indesign, fn) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 存盘前等后台队列排空（IT TODO #114 · 2026-09-28 实测）
+// ---------------------------------------------------------------------------
+// 病：导入末尾 `workDoc.save()` 偶发「Cannot save document because there are open
+// transactions in process on the database」，盘上 .translated.indd 留成英文源副本。
+// 探针读数：首次存盘前队列里是 InDesign 自己的 `Check Links`（RUNNING）→ 存盘失败
+// → 0.68 s 后队列为 0，原地重试即成功。⇒ 存盘撞上了后台任务；与语言、网络盘、
+// 会话累计都无关（TODO #114 实验 1–3）。
+// ⚠ 队列可能**永远不空**（卡死的字体激活，见文件头）⇒ 必须有超时；超时后照常存盘、
+//   由调用方把「没等到空」记进报告 —— ⛔ 不许把导入卡住。
+var DEFAULT_IDLE_TIMEOUT_MS = 30000;
+var DEFAULT_IDLE_POLL_MS = 250;
+
+/**
+ * waitForBackgroundIdle — 轮询 `app.backgroundTasks` 直到为空或超时。
+ *
+ * **从不抛**（impl-audit 2026-09-28 P1）：调用点在导入存盘路径上、外面没有 try —— 这里一抛，
+ * 导入会在存盘**之前**中断（不存、不写报告、自动化拿不到结果），正是本函数要防的那种失败。
+ * 所以任何异常都吞掉，返回 `idle:false, error:<msg>`，由调用方照常存盘。
+ *
+ * @param {Object} app     注入的 InDesign app
+ * @param {Object} [opts]  { timeoutMs, pollMs, sleep(ms)->Promise, now()->ms } —— sleep/now 可注入，便于 Node 测
+ * @returns {Promise<{idle, timedOut, waitedMs, polls, first, last, error?}>}  first/last = 首末两次 _tallyTasks 采样
+ */
+async function waitForBackgroundIdle(app, opts) {
+    opts = opts || {};
+    var timeoutMs = (typeof opts.timeoutMs === "number") ? opts.timeoutMs : DEFAULT_IDLE_TIMEOUT_MS;
+    var pollMs = (typeof opts.pollMs === "number") ? opts.pollMs : DEFAULT_IDLE_POLL_MS;
+    var now = (typeof opts.now === "function") ? opts.now : function () { return Date.now(); };
+    var sleep = opts.sleep;
+    if (typeof sleep !== "function") {
+        if (typeof setTimeout !== "function") {
+            return { idle: false, timedOut: false, waitedMs: 0, polls: 0,
+                first: { total: 0, byName: {} }, last: { total: 0, byName: {} }, error: "setTimeout unavailable" };
+        }
+        sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+    }
+    var t0 = now();
+    var first = { total: 0, byName: {} }, last = first, polls = 0;
+    try {
+        first = _tallyTasks(app); last = first;
+        while (last.total > 0) {
+            if (now() - t0 >= timeoutMs) {
+                return { idle: false, timedOut: true, waitedMs: now() - t0, polls: polls, first: first, last: last };
+            }
+            await sleep(pollMs);
+            polls++;
+            last = _tallyTasks(app);
+        }
+        return { idle: true, timedOut: false, waitedMs: now() - t0, polls: polls, first: first, last: last };
+    } catch (e) {
+        return { idle: false, timedOut: false, waitedMs: now() - t0, polls: polls, first: first, last: last,
+            error: String(e && e.message ? e.message : e) };
+    }
+}
+
+/**
+ * 存盘失败是否就是「后台事务未结束」这一种（只对这一种等排空后重试一次）。
+ * ⚠ 按英文报错文字匹配 —— 非英文界面的 InDesign 会报本地化文字，此时不重试（回到修前行为，
+ *   不会误报成功）。本机为 en_US。
+ */
+function isOpenTransactionError(err) {
+    var msg = String(err && err.message ? err.message : err);
+    return /open transactions in process/i.test(msg);
+}
+
 module.exports = {
     findStuckFontActivations: findStuckFontActivations,
     formatJamReport: formatJamReport,
     withSafeHostEnv: withSafeHostEnv,
+    waitForBackgroundIdle: waitForBackgroundIdle,
+    isOpenTransactionError: isOpenTransactionError,
     FONT_TASK_NAME: FONT_TASK_NAME,
     _internal: { _tallyTasks: _tallyTasks }
 };

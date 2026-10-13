@@ -253,6 +253,13 @@ function captureParagraphSnapshot(para, convertToRGB) {
             return v === null ? null : String(v);
         })(),
         numbering_start_at: toFiniteNumber(safeGet(para, "numberingStartAt", 1)),
+        // TODO #108: the rebuilt _T_p_* style must reuse the source expression —
+        // InDesign's default is "^#.^t", which turns an invisible "^#^t" (format
+        // None) into a visible "." before every line.
+        numbering_expression: (function () {
+            var v = safeGet(para, "numberingExpression", null);
+            return v === null ? null : String(v);
+        })(),
         bullet_char: (function () {
             try {
                 var bc = para.bulletChar;

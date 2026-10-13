@@ -81,12 +81,13 @@ function Port({ ctx, side, addr, hue, title }) {
   const isSource = drag && drag.type === 'wire' && drag.fromId === id;
   const wireActive = drag && drag.type === 'wire';
   const isTarget = wireActive && drag.overPort === id && drag.fromId !== id;
-  // #48 (§14 连带): label wires are DERIVED from the pairing, so the
-  // "drag OUT of the label port" gesture is closed — otherwise derived and
-  // hand-drawn wires become two sources that fight at round-trip
-  // (labelLinked is a bool; it cannot store which ones he drew). The port
-  // stays a DROP target (node→label linking via app.jsx:654 is untouched)
-  // and stays registered: it is still the fan-out anchor for derived wires.
+  // #48 (§14 连带) + §14-b (2026-09-11): label wires are DERIVED from the
+  // pairing, so BOTH directions of the gesture are now closed —
+  // "drag OUT of the label port" (§14) and "drop ONTO the label port" (§14-b).
+  // 🟢 这不是放弃了一个功能，而是**把 §14 当初担心的问题从根上消掉**：
+  //    只要手连还在，「派生」与「手连」就是两个会在往返时打架的来源
+  //    （`labelLinked` 是个 bool，存不下「他画了哪几条」）。两边都收掉 ⇒ 只剩一个来源。
+  // ⚠ 端口仍然**注册**：它还是派生连线的扇出锚点（portPos 的单一坐标来源）。
   const isLabel = addr.lang === '__label__';
   return (
     <div role="button" tabindex="0"
@@ -1447,7 +1448,12 @@ function LabelCard({ ctx, pairing, top }) {
       el.removeEventListener('pointerleave', leave);
     };
   }, [pairing.id]);
-  const linked = pairing.labelLinked;
+  /* 🔴 §14-b（owner 2026-09-11「这个不应用户拖，改成默认自动连且不能改」）：
+     标签线**恒为派生** ⇒ 这张卡永远是 linked 态。
+     ⛔ 不再读 `pairing.labelLinked` —— 那个字段只有「会话内新建且含最左列成员」的配对才为 true，
+     导入的配对从 config 读、文件里没有就是 false ⇒ 正是 owner 报的「空圈、无线」。
+     ⚠ 字段本身**保留**（往返按原样），只是渲染不看它。 */
+  const linked = true;
   const drag = ctx.drag;
   const wireActive = drag && drag.type === 'wire';
   const isWireSource = wireActive && drag.from && drag.from.lang === '__label__' && drag.from.font === pairing.id;
@@ -1461,7 +1467,7 @@ function LabelCard({ ctx, pairing, top }) {
   ]);
   return (
     <div ref={hlRootRef} className={`label-card ${linked ? 'is-linked' : 'is-loose'} ${wireDim ? 'wire-dim' : ''} ${(ctx.hlDimPid && ctx.hlDimPid(pairing.id)) ? 'hl-dim' : ''}`} style={{ top }}
-      title={linked ? 'Unified weight name' : 'Unified weight name — not linked; drag a weight\'s port onto this card\'s port to connect'}>
+      title='Unified weight name'>
       {/* #54ⓐ (owner 2026-08-14): chevron removed so the ✕ sits at the right
           edge consistently — the name stays clickable (title carries the
           affordance), and the freed width feeds the ✕↔port gap (#51 high-risk:
@@ -1472,7 +1478,7 @@ function LabelCard({ ctx, pairing, top }) {
       <div role="button" tabindex="0" className="label-x" title="Remove unified weight" onClick={() => ctx.removePairing(pairing.id)}>
         <Icon name="x" size={11} stroke={1.9} />
       </div>
-      <Port ctx={ctx} side="R" addr={addr} hue={linked ? pairing.hue : null} title="Label port — its wires are derived from the pairing; to link, drag a weight's port onto it" />
+      <Port ctx={ctx} side="R" addr={addr} hue={linked ? pairing.hue : null} title="Label port — its wires are derived from the pairing" />
     </div>
   );
 }

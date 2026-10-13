@@ -40,6 +40,7 @@ var LangScriptTable = require("./lib/lang_script_table.js");
 var VersionCarry = require("./lib/version_carry.js");
 var VersionManifest = require("./lib/version_manifest.js");
 var ProjectUid = require("./lib/project_uid.js");
+var PackageSeq = require("./lib/package_seq.js");
 
 // Canonical source/target language options for the export dialog — codes from
 // lib/lang_script_table.js (single source of truth, shared with the webapp's
@@ -3218,20 +3219,85 @@ async function main() {
     // Test/automation bypass: if EXPORT_OUTPUT_DIR env var is set, resolve
     // the folder via getEntryWithUrl (no UI). Falls through to interactive
     // dialog on any failure so production usage is unchanged.
+    // P6 (task_plan.md#ac-import-hardening, 2026-09-25): automationOptions.outputDir
+    // is the per-run way to say this. The env var persists across bridge calls
+    // (process.env lives as long as the plugin) and had to be deleted by hand
+    // after every run; it stays as a fallback for existing callers.
     var envExportDir = "";
-    try { envExportDir = (process && process.env && process.env.EXPORT_OUTPUT_DIR) || ""; } catch (eEnvR) {}
+    var __outDirSource = "";
+    if (__autoOpts && typeof __autoOpts.outputDir === "string" && __autoOpts.outputDir) {
+        envExportDir = __autoOpts.outputDir; __outDirSource = "automationOptions.outputDir";
+    } else {
+        try { envExportDir = (process && process.env && process.env.EXPORT_OUTPUT_DIR) || ""; } catch (eEnvR) {}
+        if (envExportDir) __outDirSource = "EXPORT_OUTPUT_DIR";
+    }
     var packageFolderPathFromDialog = "";   // set when dialog picks the full path
     if (envExportDir) {
         try {
             var fileUrl = "file:///" + String(envExportDir).replace(/\\/g, "/").replace(/^\/+/, "");
             outputFolder = await lfs.getEntryWithUrl(fileUrl);
-            exportLog("EXPORT_OUTPUT_DIR override: resolved " + fileUrl);
+            exportLog(__outDirSource + " override: resolved " + fileUrl);
         } catch (eEnvResolve) {
-            exportLog("EXPORT_OUTPUT_DIR resolve failed: " + (eEnvResolve && eEnvResolve.message ? eEnvResolve.message : String(eEnvResolve)) + " — falling back to dialog");
+            var __outDirErr = eEnvResolve && eEnvResolve.message ? eEnvResolve.message : String(eEnvResolve);
+            if (__outDirSource === "automationOptions.outputDir") {
+                // An explicit per-run folder that does not resolve must not fall
+                // back to a dialog (headless: nobody there to answer it) nor to
+                // another folder (the caller named this one).
+                exportLog("automationOptions.outputDir resolve failed: " + __outDirErr + " — export refused");
+                try {
+                    await AutomationBridge.recordAutomationResult("export_translation_package", {
+                        ok: false, refused: "output_dir_unresolvable", summary: "outputDir does not resolve: " + envExportDir + " (" + __outDirErr + ")"
+                    });
+                } catch (eOdR) {}
+                return;
+            }
+            exportLog("EXPORT_OUTPUT_DIR resolve failed: " + __outDirErr + " — falling back to dialog");
             outputFolder = null;
         }
     }
     baseName = sanitizeForPath(stripFileExtension(doc.name));
+
+    // Package sequence prefix V01D_ (owner 2026-09-25, task_plan.md#pkg-seq-prefix).
+    // One number shared by InDesign (role D) and webapp (role T) exports; interim
+    // source = names only:
+    //   ① the number this doc last imported (label written by import_integrated), and
+    //   ② the highest V<nn>[DT]_ among this doc's packages — BOTH roles — in the
+    //      package folders we know about (export runs in no-modify mode, so it cannot
+    //      record its own number in the doc).
+    // next = max(①, ②) + 1. Folders scanned: the env override (automation), the
+    // default <docDir>/packages, and the legacy <docDir>/script_outputs/package.
+    // If the operator browses elsewhere, ① still carries the round trip.
+    var __seqFromLabel = 0;
+    try {
+        var __seqRaw = doc.extractLabel(PackageSeq.LABEL_KEY);
+        if (__seqRaw && typeof __seqRaw.then !== "function") {
+            var __seqObj = JSON.parse(String(__seqRaw));
+            if (__seqObj && isFinite(Number(__seqObj.seq))) __seqFromLabel = Number(__seqObj.seq);
+        }
+    } catch (eSeqL) { exportLog("package seq: label read failed (" + (eSeqL && eSeqL.message || eSeqL) + ")"); }
+    var __seqScanDirs = [];
+    if (envExportDir) __seqScanDirs.push(String(envExportDir));
+    if (sourceDirResolved) {
+        var __ssep = (sourceDirResolved.indexOf("\\") >= 0) ? "\\" : "/";
+        __seqScanDirs.push(sourceDirResolved + __ssep + "packages");
+        __seqScanDirs.push(sourceDirResolved + __ssep + "script_outputs" + __ssep + "package");
+    }
+    var __seqFromDir = 0, __seqScanLog = [];
+    for (var __sd = 0; __sd < __seqScanDirs.length; __sd++) {
+        try {
+            var __scanEntry = await lfs.getEntryWithUrl("file:///" + String(__seqScanDirs[__sd]).replace(/\\/g, "/").replace(/^\/+/, ""));
+            var __scanKids = (__scanEntry && typeof __scanEntry.getEntries === "function") ? await __scanEntry.getEntries() : [];
+            var __scanNames = [];
+            for (var __si = 0; __si < __scanKids.length; __si++) __scanNames.push(String(__scanKids[__si].name));
+            var __m = PackageSeq.maxSeqForStem(__scanNames, baseName);
+            __seqScanLog.push(__seqScanDirs[__sd] + "=" + __m);
+            if (__m > __seqFromDir) __seqFromDir = __m;
+        } catch (eSeqD) { __seqScanLog.push(__seqScanDirs[__sd] + "=absent"); }
+    }
+    var __seqNext = PackageSeq.nextSeq([__seqFromLabel, __seqFromDir]);
+    var __seqPrefix = PackageSeq.formatPrefix(__seqNext, PackageSeq.ROLE_DESIGNER);
+    exportLog("package seq: label=" + __seqFromLabel + " folders=[" + __seqScanLog.join(" | ") + "] → " + __seqPrefix);
+
     if (!outputFolder && !envExportDir) {
         // 2026-05-28: replaced legacy lfs.getFolder() picker with a richer
         // HTML dialog. User can see + edit the full output path, browse for
@@ -3239,15 +3305,17 @@ async function main() {
         // confirming. EXPORT_OUTPUT_DIR env var still skips the dialog for
         // automation.
         //
-        // Default target lives under the unified script_outputs/ umbrella:
-        //   <docDir>/script_outputs/package/<docname>_translation_package_<ts>
-        // — same convention as baseline_snapshots/ etc. The dialog's Browse
-        // button lets the user pick any other parent (e.g. a delivery dir).
-        var __suggestedLeaf = baseName + "_translation_package_" + compactTimestampNow();
+        // Default target (owner 2026-09-25, task_plan.md#pkg-seq-prefix): ONE
+        // package folder per project, next to the doc:
+        //   <docDir>/packages/V<nn>D_<docname>_translation_package_<ts>
+        // Designer (D) and translator (T) packages share it and sort by name = by
+        // time. (Was <docDir>/script_outputs/package until 2026-09-25; that folder
+        // is still scanned for the sequence number.) Browse picks any other parent.
+        var __suggestedLeaf = __seqPrefix + baseName + "_translation_package_" + compactTimestampNow();
         var __defaultParent = sourceDirResolved || "";
         if (__defaultParent) {
             var __dsep = (__defaultParent.indexOf("\\") >= 0) ? "\\" : "/";
-            __defaultParent = __defaultParent + __dsep + "script_outputs" + __dsep + "package";
+            __defaultParent = __defaultParent + __dsep + "packages";
         }
         var __dialogRes;
         try {
@@ -3339,7 +3407,7 @@ async function main() {
     // full path it's already set above; otherwise (env-override path) build
     // the conventional <basename>_translation_package_<ts>.
     if (!packageFolderName) {
-        packageFolderName = baseName + "_translation_package_" + compactTimestampNow();
+        packageFolderName = __seqPrefix + baseName + "_translation_package_" + compactTimestampNow();
     }
     packageFolderPath = packageFolderPathFromDialog || (outputRoot + sep + packageFolderName);
     exportLog("packageFolderPath: " + packageFolderPath);

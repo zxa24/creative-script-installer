@@ -1,6 +1,6 @@
 ---
 title: Files and folders
-description: The directory convention — the working folder stays simple, and everything the scripts produce goes into script_outputs/. Today, import copies the previous translated document into script_outputs/backup/ before overwriting it, and stops if that copy fails.
+description: The directory convention — the working folder stays simple, and everything the scripts produce goes into script_outputs/. A later-round import backs up the previous translated document into script_outputs/backup/ before saving, and stops if that copy fails; importing into the original again replaces it without a backup.
 ---
 
 # Files and folders
@@ -18,8 +18,9 @@ of them. The top of your working folder stays as simple as possible.
   <doc>.indd                      the source document
   <doc>.translated.indd           the current live output — one stable name
 
+  packages/                       exported translation packages (V01D_…) and their .zip
+
   script_outputs/                 ← the scripts' folder; you rarely open it
-    package/                      exported translation packages
     log/                          run logs
     report/                       import reports
     backup/                       the copy import takes before overwriting
@@ -34,16 +35,18 @@ Two files sit at the top level, and they always have the same names:
 
 ## What import does to the previous output
 
-**Import copies the old file to safety first, then overwrites it — and if that
-copy fails, the import stops rather than continuing.**
+**It depends on which document you import into.**
 
-When a `<doc>.translated.indd` already exists in the working folder and you
-import over it, `1.2 Import Translation Package` first copies that file into
-`script_outputs/backup/`. Only if the copy is confirmed on disk does the import
-go on to overwrite the original.
+- **A later round, into the `.translated.indd`** (the [normal way](/folio/rounds#next-round)):
+  the import updates that document in place, and before saving it copies the
+  previous version into `script_outputs/backup/`. Only if the copy is confirmed
+  on disk does it save.
+- **Into the original again, when a `.translated.indd` already exists:** the
+  import starts over and replaces the `.translated.indd` **without a backup**.
+  Do not do this after you have adjusted the translated document.
 
 If the backup cannot be made, **the import aborts and your document on disk is
-left untouched**. That is deliberate: the alternative is overwriting the one
+left untouched** ([what to do](/folio/export-import#backup-failed)). That is deliberate: the alternative is overwriting the one
 copy of a file you may not be able to reproduce. An aborted import is a
 recoverable annoyance; a lost output is not.
 

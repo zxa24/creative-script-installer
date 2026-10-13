@@ -28,6 +28,7 @@ import {
   REPO_URL,
   SECTIONS,
   ALL_PAGES,
+  REDIRECTS,
   absoluteUrl
 } from "./site.mjs";
 
@@ -39,9 +40,9 @@ const PUBLIC_DIR = join(ROOT, "public");
 const DIR_EXCLUDE = new Set([".vitepress", "node_modules", "public", "dist", "cache"]);
 
 /**
- * Locales deliberately outside the llms surface. `zh` is an i18n stub with no
- * translated content; including it would put placeholder text in front of a
- * model as if it were documentation.
+ * Locales deliberately outside the llms surface. The llms files are English
+ * only: `zh` follows the English pages and leaves technical details out, so
+ * including it would give a model a second, thinner copy of the same site.
  */
 const LOCALE_EXCLUDE = new Set(["zh"]);
 
@@ -132,8 +133,15 @@ function pageTitle(fm, body, fallback) {
 // ───────────────────────────── generation ─────────────────────────────
 
 function main() {
-  const onDisk = walk(ROOT).sort();
+  // Redirect stubs (pages that moved) are on disk but are not content: keep them
+  // out of the llms surface. A stub that is also listed as a page is an error.
+  const stubs = new Set(REDIRECTS.map((r) => r.file));
+  const onDisk = walk(ROOT).sort().filter((f) => !stubs.has(f));
   const listed = new Set(ALL_PAGES.map((p) => p.file));
+  for (const r of REDIRECTS) {
+    if (listed.has(r.file)) { console.error(`gen-llms: ${r.file} is both a page and a redirect stub`); process.exit(1); }
+    try { statSync(join(ROOT, r.file)); } catch { console.error(`gen-llms: redirect stub missing on disk: ${r.file} (old path ${r.from} would 404)`); process.exit(1); }
+  }
 
   const unlisted = onDisk.filter((f) => !listed.has(f));
   if (unlisted.length) {
@@ -187,9 +195,14 @@ function main() {
   index.push(`Source repository: ${REPO_URL}`);
   index.push("");
   index.push(
-    "Adobe InDesign scripts installed into the InDesign Scripts panel. Group 1 " +
-      "(1.1, 1.2) is the normal translation path a designer runs; groups 2, 3 and 4 " +
-      "are tools reached for when a specific problem appears."
+    "Three products installed by one command. Folio: InDesign scripts 1.1 (export a " +
+      "translation package as a zip) and 1.2 (import the translated zip into a copy of " +
+      "the layout), with a browser web app in between where a translator works. The " +
+      "designer's work is five stages in order (before you export, export and import, make " +
+      "the new language look right, later rounds, sister documents); each numbered InDesign " +
+      "script is documented on the stage page where it is used. More tools: InDesign 3.5 " +
+      "Save and Reveal and five standalone Illustrator scripts, outside the translation " +
+      "workflow. The All scripts page indexes every script of both apps."
   );
   index.push("");
   index.push(

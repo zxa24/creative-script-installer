@@ -254,8 +254,31 @@ function nodeMissingFaces(missingKeys, fontName, node) {
 // 8D-ext-MM step 4 semantics preserved verbatim: a wire per CROSS-lang member
 // pair, same-lang members never wire to each other; ms is lang-sorted so for
 // i<j the cross pair has ms[i] on the LEFT column (R port) and ms[j] on the
-// RIGHT column (L port). Label wire only when labelLinked (the label port's
+// RIGHT column (L port). Label wires are ALWAYS derived (§14-b, 2026-09-11 —
+// the old `labelLinked` gate is gone; see the tombstone below). (the label port's
 // own hue logic already matches this and stays untouched).
+/* 🔴 标签卡的 y —— **唯一来源**（2026-09-11，🅐′）。
+   渲染期（app.jsx 的 labelCards）与测量期（recomputePorts 里给标签端口定位）
+   **必须用同一个函数**：抄成两份就是第二个真相来源（`#27`），而这两份一旦漂，
+   症状恰好又是"线和端口对不上" —— 与我们正在修的那个 bug 同形、极难区分。
+
+   纯函数：只依赖 (data, portPos)。y 取【领头语言（最左存在列）成员的 L 口】的 y；
+   拿不到就退回老的等距兜底 `70 + i*70`（保持既有行为，⛔ 不趁机改它）。
+   ⚠ 卡片 CSS 是 `position:absolute; transform:translateY(-50%)` ⇒ **这个 y 是卡片的中心**，
+   不是上边缘（panel.css:782-783；实测 20260911_03：卡高 38、端口卡内偏移 19 = 正中）。 */
+function labelCardLayout(data, portPos) {
+    var langOrder = {};
+    (data.languages || []).forEach(function (l, i) { langOrder[l.id] = i; });
+    return (data.pairings || []).map(function (p, i) {
+        var ms = (p.members || []).slice().sort(function (a, b) {
+            return (langOrder[a.lang] || 0) - (langOrder[b.lang] || 0);
+        });
+        var lead = ms[0];
+        var lp = lead && portPos[lead.lang + ':' + lead.font + ':' + lead.node + ':L'];
+        return { p: p, lead: lead || null, y: lp ? lp.y : (70 + i * 70) };
+    });
+}
+
 function deriveLogicalWires(pairings, langOrder) {
   const wires = [];
   (pairings || []).forEach(p => {
@@ -265,12 +288,24 @@ function deriveLogicalWires(pairings, langOrder) {
     // card, so §14's "only connect adjacent" holds; cross-lang members never
     // label-wire (that would be the rejected 2C). All fan out of the ONE
     // label port anchor (single portPos coordinate source; same single-anchor
-    // multi-wire look the MM node ports already have). Boundary, NOT a miss:
-    // a pairing with no leftmost-column member has labelLinked=false from
-    // construction (app.jsx includesLeftmost) ⇒ no label wires — unchanged
-    // behavior, do not "fix". Wires stay DERIVED (never stored; labelLinked
-    // remains a plain bool — the round-trip shape is untouched).
-    if (p.labelLinked && ms[0]) {
+    // multi-wire look the MM node ports already have).
+    //
+    // 🪦 2026-09-11 — 这里原本还有一道 `p.labelLinked &&` 闸，注释写着：
+    //   「a pairing with no leftmost-column member has labelLinked=false from
+    //    construction (app.jsx includesLeftmost) ⇒ no label wires —
+    //    **unchanged behavior, do not "fix"**」
+    // 🔴 **那句从此不成立，留碑不静默删** —— 它正是会让下一个人把本次改动改回去的那句。
+    // 它当时描述的是一个真实行为，但那个行为本身就是 owner 2026-09-11 报的缺陷：
+    // `labelLinked` 只有**会话内新建且含最左列成员**的配对才为 true，而**导入的**配对
+    // 从 config 读（文件里没这个字段就是 false）⇒ **导入一份正常 config 后，
+    // 标签端口是空圈、一条线都没有**。
+    // ⇒ design-intent §14-b（owner 原话「这个不应用户拖，改成默认自动连且不能改」）：
+    //   **标签线恒为派生** —— 只要配对有成员就连到领头语言的每一个成员。
+    //   按 §14 自己的判据（「他会不会自己动手去连 —— 会，那机器就该已经连好」），
+    //   这道闸本就不该在；§14 当时只收掉了「从标签往外拖」那一半。
+    // ⚠ `labelLinked` 字段**不删**：渲染一律忽略，往返按原样保留（adapter 仍读仍写），
+    //   ⛔ 不动既有 config 的字节形状。（arch 的保守默认，见 §14-b）
+    if (ms[0]) {
       const leadLang = ms[0].lang;
       let li = 0;
       ms.forEach(m => {
@@ -410,6 +445,15 @@ function nodeLabel(node) {
 // key survives, the thing it named does not. The 2026-08-22 sweep found FIVE of
 // these on top of the two already handled (#33d chip / #41 gate).
 //
+// 🔴 2026-09-10: THREE of those seven named state that TODO#58 had already deleted
+// two days earlier, so `handleImport` was calling three undeclared setters and
+// aborting mid-funnel. They are gone; the tombstone at the bottom of the return
+// says, per name, what each was resetting and why removing it drops nothing.
+// ⚠ Live set is now FOUR: skipDecisions / autoRepKeys / autoFauxKeys /
+// keepPrimaryLang. If you add a key here you MUST add the setter in handleImport —
+// and `tests/import_state_reset_tests.js` now checks BOTH halves: that the setter
+// is called, AND that it EXISTS. The second half is the one that was missing.
+//
 // 🔴 PURE, so the rule can be tested — the panel itself cannot run under Node.
 // `handleImport` only APPLIES what this returns, so adding a new session map
 // means adding it HERE, not adding another line to handleImport (that function
@@ -437,21 +481,57 @@ function computeImportStateReset(next, fap) {
     return {
         // positional key `pairIdx|lang` — pairIdx is re-assigned every import
         skipDecisions: {},
-        // content key `normalized_key` — merges made THIS session
-        autoMerged: [],
-        // content key `normalized_key`. 🔴 A stale dismissal HIDES a candidate
-        // the new config legitimately raises — an absence-type symptom: nothing
-        // reports it, the suggestion simply never appears.
-        recombDismissed: {},
-        // 🔴 NOT `[]`: this is a DOC-SCAN product seeded once at mount whose only
-        // setters are filters (confirm / dismiss). Clearing it would drop real
-        // candidates; what a new config deserves is the UNFILTERED scan again.
-        confirmableMerges: ((fap.confirmableMerges) || []).slice(),
         // already reset before this sweep — folded in so ONE place answers
         // "what does Import reset".
         autoRepKeys: {},
         autoFauxKeys: {},
         keepPrimaryLang: keepPrimaryLang
+        /* ── 🪦 2026-09-10: three keys REMOVED, and why each one is not a
+           silent drop ──────────────────────────────────────────────────────
+           The 2026-08-22 sweep was written against the state list as it stood
+           BEFORE TODO#58 landed (2026-08-20). #58 deleted the three useState
+           hooks below; the sweep two days later still emitted keys for them and
+           `handleImport` still called `setAutoMerged` / `setRecombDismissed` /
+           `setConfirmableMerges` — three identifiers declared NOWHERE.
+           🔴 Measured, not read (probes/20260910_01_import_reset_chromium.mjs):
+           the first of them throws `ReferenceError: setAutoMerged is not defined`
+           INSIDE an async handler ⇒ an unhandled rejection, no banner, no visible
+           failure — and everything after it never ran. `setData` and
+           `setSkipDecisions` had already gone out, so an import half-applied:
+           config B was loaded while `primaryLang` stayed on config A's language.
+           That is the exact leak class this funnel exists to close.
+
+           · `autoMerged` — WAS: a useState list of merges made THIS session,
+             written only by `confirmRecombination`, content-keyed by
+             `normalized_key`. NOW: a useMemo over `data.equivalence_groups`
+             (app.jsx TODO#58(c)). `setData(r.data)` already re-derives it, so
+             there is nothing left to reset — a mirror cannot go stale if there
+             is no mirror.
+           · `recombDismissed` — WAS: which recombination candidates the operator
+             dismissed; its bug was ABSENCE-type (a stale dismissal silently hid
+             a candidate the new config legitimately raised). NOW: retired with
+             its producer `detectRecombinationCandidates` (#58), and the successor
+             identity path has NO dismissal state at all (`identityDismissed` also
+             removed, owner 姿态甲 2026-08-20). ⚠ The absence-type risk is gone
+             because the FEATURE is gone, not because it is handled: if the
+             "earn-it" un-merge/dismiss affordance in app.jsx's tombstone is ever
+             built, its session map belongs back HERE on day one.
+           · `confirmableMerges` — WAS: a doc-scan product seeded once at mount
+             whose only setters were filters, so after an import it was the
+             PREVIOUS document's scan already whittled by the previous config's
+             gestures; the fix was to re-seed rather than empty. NOW: the whole
+             collision-banner line was retired (1f10eda, #58①②) — no state, no
+             consumer in the panel. ⚠ `lib/font_panel_env.js:165` still fills
+             `fap.confirmableMerges` from the scan; that producer now feeds
+             nobody (noted, out of scope here).
+
+           ⚠ NOT added in their place: `identityBuild` / `identityApply`, the #58
+           successors. They are recomputed by an effect on `[data]` and carry the
+           SAME early-return-on-invalid-config shape as `unresolvedByLang`
+           (app.jsx, the `if (!cv.ok) return;` effect) ⇒ they belong to the
+           deliberate NON-entry class below, not to this funnel. #58 replaced two
+           session mirrors with derived state, so this funnel SHRANK; it did not
+           grow. */
     };
 }
 Object.assign(window, {
@@ -459,7 +539,8 @@ Object.assign(window, {
   uid, LANG_PRESETS, SEMANTIC_WEIGHTS, PAIR_HUES, PAIR_COLOR,
   buildSample, deriveNodes, egFoldedWeightSet, deriveVisibleNodes, nodeLabel, closestPreset,
   nodeMissingFaces,   // #28e — shared face-level not-installed predicate
-  deriveLogicalWires, // #28e-port — one wire-set SoT for renderer + per-side port lighting
+  deriveLogicalWires,  // #28e-port — one wire-set SoT for renderer + per-side port lighting
+  labelCardLayout,     // 🅐′ 2026-09-11 — 标签卡 y 的唯一来源（渲染期与测量期共用）
   computeHoverRelationSet, // #45 — hover relation set (single derivation, #44 swaps only this)
   computeAutoFauxAdditions, // #41 — translator-italic auto-faux (pure decision, effect applies)
   italicBaseWeightOf,

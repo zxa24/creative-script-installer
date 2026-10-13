@@ -40,6 +40,15 @@
  * routing/feature-flag is the user's choice via which command they invoke.
  */
 
+// TODO#42-orig timing instrument (importtime 2026-09-13). ⛔ Instrument only: it writes
+// `[import-timing]` log lines and nothing else. Read lib/import_timing.js's header BEFORE
+// reading any numbers — it holds the pre-registered hypotheses and what this cannot measure.
+// Created FIRST so the load time of every top-level require below lands on the timeline.
+var ImportTiming = require("./lib/import_timing.js");
+var __IT = ImportTiming.createTimeline();
+var __ITK = ImportTiming.KINDS;
+__IT.mark("module eval start", __ITK.ORIGIN);
+
 var indesign = require("indesign");
 var app = indesign.app;
 var ScriptLanguage = indesign.ScriptLanguage;
@@ -105,6 +114,11 @@ var ProjectMetaAssemble = require("./lib/project_meta_assemble.js");
 var PreOverwriteBackup = require("./lib/pre_overwrite_backup.js");
 var VersionManifest = require("./lib/version_manifest.js");
 var ProjectUid = require("./lib/project_uid.js");
+var PackageSeq = require("./lib/package_seq.js");
+var PostImportCheck = require("./lib/post_import_check.js");
+var AutoSourceGuard = require("./lib/auto_source_guard.js");
+var DialogBaseCss = require("./lib/dialog_base_css.js");
+var ExportDialog = require("./lib/export_dialog.js");   // Advanced options window (shared)
 // 8D-ext-D step-3b: M4/M5 importer byPair wiring (mode default + hazard +
 // discovery paths + ctx shape live in the lib so Node can test them).
 var ByPairWiring = require("./lib/import_byPair_wiring.js");
@@ -138,9 +152,12 @@ async function __extractTranslationZip(zipEntry, zipNativePath) {
     } catch (eR) {
         return { ok: false, error: "read .zip failed: " + ((eR && eR.message) || eR) };
     }
+    __IT.mark("zip read bytes (zipEntry.read)", __ITK.COMPUTE, "bytes=" + zipBytes.length);
     var entries;
     try { entries = ZipCore.readZip(zipBytes); }
     catch (eU) { return { ok: false, error: "decompress failed: " + ((eU && eU.message) || eU) }; }
+    __IT.mark("zip decompress (ZipCore.readZip, sync JS)", __ITK.COMPUTE,
+        "entries=" + Object.keys(entries).length);
 
     var keys = Object.keys(entries);
     if (keys.length === 0) return { ok: false, error: "empty archive" };
@@ -168,6 +185,8 @@ async function __extractTranslationZip(zipEntry, zipNativePath) {
     var outRootFolder;
     try { outRootFolder = await parentFolder.createFolder(outDirName); }
     catch (eC) { return { ok: false, error: "createFolder " + outDirName + ": " + eC.message }; }
+    __IT.mark("zip out folder (getEntryWithUrl + createFolder)", __ITK.COMPUTE);
+    var __itWrittenFiles = 0, __itWrittenBytes = 0;
 
     async function ensureFolderChain(rootFolder, segments) {
         var cur = rootFolder;
@@ -204,6 +223,7 @@ async function __extractTranslationZip(zipEntry, zipNativePath) {
                 : outRootFolder;
             var f = await leafFolder.createFile(fileName, { overwrite: true });
             await f.write(bytes.buffer, { format: formats.binary });
+            __itWrittenFiles++; __itWrittenBytes += bytes.length;
             if (fileName === "translations.json" && !translationsEntry) {
                 translationsEntry = f;
             }
@@ -211,6 +231,8 @@ async function __extractTranslationZip(zipEntry, zipNativePath) {
             return { ok: false, error: "extract " + archivePath + ": " + eF.message };
         }
     }
+    __IT.mark("zip write entries (per-file createFile + write, async)", __ITK.COMPUTE,
+        "files=" + __itWrittenFiles + " bytes=" + __itWrittenBytes);
     if (!translationsEntry) {
         return { ok: false, error: "translations.json not found inside .zip" };
     }
@@ -379,6 +401,7 @@ function loadSegmentsSidecar(folderPath) {
 // ─── Entry point ─────────────────────────────────────────────────
 
 async function main() {
+    __IT.mark("module eval (top-level requires) -> main() entry", __ITK.COMPUTE);
     // Resolve the project base dir from app.activeScript so panel
     // double-click runs (where lib/*.js modules see __dirname=undefined)
     // get correct .scratch / temp_data / log paths. Idempotent and a
@@ -402,6 +425,60 @@ async function main() {
     var __autoOptsCached = null;
     try { __autoOptsCached = await AutomationBridge.readAutomationOptions("import_integrated"); }
     catch (eABEarly) { /* peek-only — not fatal */ }
+
+    // P5 (task_plan.md#ac-import-hardening, 2026-09-25): with a sourcePath the
+    // automated import only ever touches THAT file. It used to fall back silently
+    // to app.activeDocument whenever any document was open — on 2026-09-22 that
+    // saved a zh-HK translation over the ja deliverable
+    // (findings automation-sourcepath-ignored-when-docs-open).
+    if (app.documents.length > 0 && __autoOptsCached && __autoOptsCached.sourcePath
+            && AutomationBridge.isAutomatedRun("import_integrated")) {
+        var __asgPathOf = async function (d) {
+            try {
+                var fn = d.fullName;
+                if (fn && typeof fn.then === "function") fn = await fn;
+                return (fn && fn.nativePath) ? String(fn.nativePath) : String(fn || "");
+            } catch (eAsgP) { return ""; }
+        };
+        // Active doc identified by PATH (names are not unique across folders;
+        // host objects are never compared by identity).
+        var __asgActivePath = "";
+        try { __asgActivePath = AutoSourceGuard.normPath(await __asgPathOf(app.activeDocument)); } catch (eAsgA) {}
+        var __asgDocs = [];
+        var __asgEls = app.documents.everyItem().getElements();
+        for (var __asgI = 0; __asgI < __asgEls.length; __asgI++) {
+            var __asgP = await __asgPathOf(__asgEls[__asgI]);
+            __asgDocs.push({ path: __asgP, name: String(__asgEls[__asgI].name),
+                             active: !!__asgActivePath && AutoSourceGuard.normPath(__asgP) === __asgActivePath });
+        }
+        var __asg = AutoSourceGuard.decide(String(__autoOptsCached.sourcePath), __asgDocs);
+        // (no plog here: this runs before _fsRef is set, where plog writes nothing —
+        //  the refuse path speaks through showAlert, which the bridge surfaces.)
+        if (__asg.action === "refuse") {
+            // showAlert is suppressed headless and plog is not live yet ⇒ the
+            // caller would see nothing. Record the refusal as the automation result.
+            try {
+                await AutomationBridge.recordAutomationResult("import_integrated", {
+                    ok: false, refused: "source_not_open", summary: __asg.message, openDocuments: __asgDocs
+                });
+            } catch (eAsgR) {}
+            showAlert(__asg.message);
+            return;
+        }
+        if (__asg.action === "activate") {
+            try { app.activeDocument = __asgEls[__asg.index]; }
+            catch (eAsgAct) {
+                try {
+                    await AutomationBridge.recordAutomationResult("import_integrated", {
+                        ok: false, refused: "activate_failed", summary: String(eAsgAct && eAsgAct.message || eAsgAct)
+                    });
+                } catch (eAsgR2) {}
+                showAlert("Automated import refused: the sourcePath document is open but could not be made active ("
+                    + (eAsgAct && eAsgAct.message || eAsgAct) + "). Nothing was changed.");
+                return;
+            }
+        }
+    }
 
     if (app.documents.length === 0) {
         // #BRIDGE-6: in automated runs, try to open the source from the
@@ -450,12 +527,17 @@ async function main() {
             jsonEntry = null;
         }
     }
+    __IT.mark("bootstrap + automation options + doc-open checks (+ IMPORT_PACKAGE_DIR probe)", __ITK.COMPUTE);
     if (!jsonEntry) {
         // Accept either a translations.json directly OR a .zip package (which
         // we auto-extract to a sibling folder, then locate translations.json
         // inside it). Same picker invocation handles both.
         jsonEntry = await lfs.getFileForOpening({ types: ["json", "zip"] });
+        __IT.mark("file picker open (operator choosing)", __ITK.INTERACTIVE,
+            jsonEntry ? "picked" : "returned nothing");
     }
+    // at_ms = 0 from here: "after the file was chosen" is what owner reported as the stall.
+    __IT.anchor();
     if (!jsonEntry) {
         // 取消不弹窗（owner 2026-08-30）：**主动取消是有意行为，不需要被告知**
         // —— 同元数据那一区的裁决。以前这里 showAlert，现在只留痕、不打扰。
@@ -501,6 +583,20 @@ async function main() {
     var parentDir = FileUtils.getOutputDirectory(jsonPath);
     var sep = RuntimePaths.getSep(parentDir);
 
+    // Package sequence (owner 2026-09-25, task_plan.md#pkg-seq-prefix): remember the
+    // V<nn> of the package being imported so the doc's NEXT export can be V<nn+1>.
+    // Take the max over the zip name + every path segment: a webapp zip keeps the
+    // ORIGINAL InDesign root folder inside (V01_…) while the zip itself is V02_…
+    var __pkgSeq = 0;
+    try {
+        var __seqSegs = String((typeof zipPath === "string" && zipPath) ? zipPath : "").split(/[\\\/]/)
+            .concat(String(jsonPath || "").split(/[\\\/]/));
+        for (var __qi = 0; __qi < __seqSegs.length; __qi++) {
+            var __qn = PackageSeq.parseSeq(__seqSegs[__qi]);
+            if (__qn != null && __qn > __pkgSeq) __pkgSeq = __qn;
+        }
+    } catch (ePkgSeq) { __pkgSeq = 0; }
+
     // 2026-05-28: Progress log moved to <docDir>/script_outputs/log/.
     // When the active doc has a path we use its parent dir; else fall back
     // to the unzipped package's parentDir so the log is still next to the
@@ -523,6 +619,7 @@ async function main() {
     if (!__logBaseDir) __logBaseDir = parentDir;
     try { await ScriptLogPaths.ensureLogDirAsync(__logBaseDir); } catch (eELD) {}
     var progressLogPath = ScriptLogPaths.resolveLogPath(__logBaseDir, "import_integrated");
+    __IT.mark("log dir resolve (activeDocument.fullName + ensureLogDirAsync)", __ITK.COMPUTE);
     var _logBuffer = "";
     var _logStarted = false;
     var _fsRef = require("fs");
@@ -555,6 +652,8 @@ async function main() {
     plog("v2_pipeline build-stamp=" + ((V2Pipeline && V2Pipeline.__V2_BUILD_STAMP) || "<MISSING — stale/old v2_pipeline loaded; 19364d7 gate NOT active>")
         + " moduleDir=" + ((V2Pipeline && V2Pipeline.__V2_MODULE_DIR) || "<undef>"));
     plog("jsonPath=" + jsonPath);
+    // plog is live from here: flush every timing row held since module eval, then write as we go.
+    __IT.attachSink(plog);
 
     // Load translations payload
     var translations;
@@ -569,6 +668,7 @@ async function main() {
         return;
     }
     plog("translations.rows=" + translations.rows.length);
+    __IT.mark("loadTranslations (read + JSON.parse)", __ITK.COMPUTE, "rows=" + translations.rows.length);
 
     var sidecar = loadSegmentsSidecar(parentDir);
     if (!sidecar || !sidecar.segments || sidecar.segments.length === 0) {
@@ -576,6 +676,7 @@ async function main() {
         return;
     }
     plog("segments=" + sidecar.segments.length + " path=" + sidecar.path);
+    __IT.mark("loadSegmentsSidecar (read + JSON.parse)", __ITK.COMPUTE, "segments=" + sidecar.segments.length);
 
     // #41 (design-intent §6, 2026-08-13 修订): which SOURCE faces carry a
     // translator italic mark. Threaded into BOTH font-panel opens below so the
@@ -595,6 +696,7 @@ async function main() {
             + " missSeg=" + __idm.stats.demandRowsMissingSeg
             + " missSnap=" + __idm.stats.demandRowsMissingSnapshot);
     } catch (eIDm) { plog("italic-demand compute failed (feature dark): " + (eIDm && eIDm.message || eIDm)); }
+    __IT.mark("italic-demand compute", __ITK.COMPUTE);
 
     var report = {
         schema_version: SCHEMA_VERSION,
@@ -849,6 +951,7 @@ async function main() {
         // appears when non-empty cannot be told apart from one that never ran.
         plog("_meta prefill source keys: [" + Object.keys(__earlyMeta).join(",") + "]");
         var __earlyDesigner = (__earlyMeta.contributors && __earlyMeta.contributors.designer) || "";
+        __IT.mark("ctx build + reorg option resolve + _meta prefill (package + doc label)", __ITK.COMPUTE);
         var __unifiedChoice = await __showByPairImportDialog({
             deferPairs: true,
             defaultMode: ctx.skipStyleCleanup ? "M5" : "M4",
@@ -861,6 +964,7 @@ async function main() {
             brandConfigPath: __autoBrandPath || "",
             presetPath: __pickedPresetPath || ""
         });
+        __IT.mark("unified settings dialog (operator)", __ITK.INTERACTIVE, __unifiedChoice ? "ok" : "cancelled");
         if (!__unifiedChoice) {
             // guard-ux UX sweep: was a silent plog+return — surface the cancel
             // so dismissing the settings panel doesn't look like a crash.
@@ -933,7 +1037,11 @@ async function main() {
 
         if (typeof __autoReorg.dimensions !== "undefined")           ctx.fingerprintDimensions = __autoReorg.dimensions || null;
         if (typeof __autoReorg.colorTol === "number")                ctx.colorTol = __autoReorg.colorTol;
-        if (typeof __autoReorg.autoMerge === "string")               ctx.autoMergeConfidence = __autoReorg.autoMerge;
+        // autoMerge: null = 关闭自动合并（与对话框里选「不合并」同义，见 reorganize_dialog.js
+        // `result.autoMerge = null`）。原先只收字符串 ⇒ null 被静默跳过、默认 "hybrid" 照样生效，
+        // 自动化通道因此【无法表达关闭】（2026-09-22 Client-A 26-0955 实测：preseed 写 null，
+        // report.reorganize_choice.auto_merge 仍为 "hybrid"）。
+        if (typeof __autoReorg.autoMerge === "string" || __autoReorg.autoMerge === null) ctx.autoMergeConfidence = __autoReorg.autoMerge;
         if (typeof __autoReorg.hybridOpts !== "undefined")           ctx.hybridOpts = __autoReorg.hybridOpts || null;
         if (typeof __autoReorg.spacePreservingMerge !== "undefined") ctx.spacePreservingMerge = (__autoReorg.spacePreservingMerge !== false);
         if (typeof __autoReorg.editMode !== "undefined")             ctx.editMode = !!__autoReorg.editMode;
@@ -996,6 +1104,7 @@ async function main() {
         plog("reorganize panel skipped (skipReorganizeDialog=" + skipReorganizeDialog
             + " skipStyleCleanup=" + ctx.skipStyleCleanup + ")");
     }
+    __IT.mark("reorganize choice -> ctx", __ITK.COMPUTE);
 
     // TODO#42 (2026-08-13): ProcessingDialog used to open HERE ("用户已经过完
     // 所有交互" — true when written 2026-05-28, when the only interactions were
@@ -1092,6 +1201,7 @@ async function main() {
             : (__legacyPromotion ? "saveACopy + legacy-promotion edit-mode" : "fresh saveACopy import");
         plog("source provenance: " + DocProvenance.formatSummary(__sourceProv) + " → " + __mode);
     }
+    __IT.mark("sourceDoc lookup + DocProvenance.classify", __ITK.COMPUTE);
     // Honor reorganize dialog's "Force full pipeline" checkbox: operator can
     // override edit-mode detection even when a valid label is present
     // OR override legacy promotion when they intentionally want a re-cluster.
@@ -1180,6 +1290,7 @@ async function main() {
     saveTargetPath = srcDir + srcSep + _basename(stem) + ".translated.indd";
     report.save_target_path = saveTargetPath;
     plog("save target: " + saveTargetPath);
+    __IT.mark("source-doc guard + source path resolve (fullName await)", __ITK.COMPUTE);
 
     // ── 8D-ext-D step-3b: M4/M5 mode pick + byPair font-mapping wiring ──
     // Position pinned by spec (DR3 split-entry, task_plan :2242/:2258-2266):
@@ -1224,6 +1335,7 @@ async function main() {
             }
         } catch (eMeta) {}
     }
+    __IT.mark("_meta.json load (+ project_meta_uxp require)", __ITK.COMPUTE);
     // Effective skip flag: ctx.skipStyleCleanup (:553) ORed with the raw
     // payload field — the :553 read goes through the loadTranslations wrapper
     // ({rows, byTid, raw}) which does not carry payload top-level keys, while
@@ -1362,6 +1474,7 @@ async function main() {
     var __bcStatus = ByPairWiring.brandConfigStatus(__bcLoadedPath, __bcFoundInvalid);
     report.bypair_sweep = { brand_config_status: __bcStatus };
     plog("brand_config status: " + __bcStatus);
+    __IT.mark("mode default + brand_config ladder/load/validate/attribution", __ITK.COMPUTE);
 
     // 3. mode/langs/runEnforcer/per-pair skips — dialog (interactive) or
     //    automationOptions (bridge). Langs prefill from _meta when present.
@@ -1437,6 +1550,7 @@ async function main() {
             + " runEnforcer=" + __bpRunEnforcer);
         __meta = __mergeImportDialogMeta(__meta, __integratedFontChoice);
     } else if (__bpInteractive) {
+        __IT.mark("byPair lang/mode setup", __ITK.COMPUTE);
         var __bpChoice = await __showByPairImportDialog({
             defaultMode: __modeDefault.mode,
             hint: __modeDefault.hint,
@@ -1448,6 +1562,7 @@ async function main() {
             designer: (__meta && __meta.contributors && __meta.contributors.designer) || "",
             brandConfig: __brandConfig
         });
+        __IT.mark("import-mode/byPair dialog (operator)", __ITK.INTERACTIVE, __bpChoice ? "ok" : "cancelled");
         if (!__bpChoice) {
             plog("user cancelled at import-mode/byPair dialog");
             // 取消不弹窗（owner 2026-08-31「都去」）。⛔ 只去弹窗，上面那行 plog 必须留。
@@ -1508,6 +1623,7 @@ async function main() {
     // 8D-ext-bypair-tofu-ux Phase 2: track whether the no-config branch already
     // opened the font panel — so Hook A (config-selected, below) does NOT re-open it
     // (the no-config panel already showed the red outlines + Done popup this run).
+    __IT.mark("byPair wiring branch (unified choice / automation)", __ITK.COMPUTE);
     var __earlyPanelShown = false;
     if (!__brandConfig && __bpInteractive && sourceDoc) {
         // ── no-config → full font_apply_panel React UI (config-only re-host) ──
@@ -1518,10 +1634,14 @@ async function main() {
         var __fpRes = null;
         try {
             var FontPanelUI = require("./lib/font_mapping_panel_ui.js");
+            __IT.mark("require font_mapping_panel_ui.js", __ITK.COMPUTE);
             __earlyPanelShown = true;
             __fpRes = await FontPanelUI.showFontMappingPanelForConfig(RuntimePaths.getBaseDir(),
-                { italicDemand: __italicDemand });
+                { italicDemand: __italicDemand, timingMark: __IT.mark });
         } catch (eFp) { plog("font UI (React) load/run failed: " + (eFp && eFp.message ? eFp.message : eFp)); }
+        // ok:false = the panel bailed before (or at) showModal ⇒ nobody was being waited on.
+        __IT.mark("no-config font panel (operator)", (__fpRes && __fpRes.ok) ? __ITK.INTERACTIVE : __ITK.COMPUTE,
+            !__fpRes ? "threw" : (__fpRes.ok ? (__fpRes.cancelled ? "cancelled" : "done") : ("unavailable: " + __fpRes.error)));
         if (__fpRes && __fpRes.ok && __fpRes.config && ByPairWiring.configHasMeaning(__fpRes.config)) {
             // re-audit残留-2 fix: accept the panel's config when it has PAIRS *or*
             // a font_skip set (or other meaningful content) — NOT pairs-only. A
@@ -1552,6 +1672,7 @@ async function main() {
             plog("font UI: React panel unavailable (" + ((__fpRes && __fpRes.error) || "load failed") + ") → lean fallback");
             if (__bpSrcLang && __bpTgtLang) {
                 var __leanCfg = await __showFontMappingUI({ srcLang: __bpSrcLang, tgtLang: __bpTgtLang, sourceDoc: sourceDoc });
+                __IT.mark("lean font-mapping dialog (operator)", __ITK.INTERACTIVE);
                 if (__leanCfg && Array.isArray(__leanCfg.pairs) && __leanCfg.pairs.length) {
                     // 8D-ext-MM step 5 (on-reject surface 1, lean): validate the
                     // lean config too — a validate-fail must not silently become a
@@ -1602,8 +1723,10 @@ async function main() {
             plog("Hook A (early tofu warn): SKIPPED — source not active (scanActiveDoc binds activeDocument); Hook B backstops");
         } else {
             var __earlyScan = null;
+            __IT.mark("byPair projection + Hook A gate", __ITK.COMPUTE);
             try { __earlyScan = DocScan.scanActiveDoc({ config: __brandConfig }); }
             catch (eES) { plog("Hook A: scanActiveDoc threw (" + (eES && eES.message || eES) + ") — skip, Hook B backstops"); }
+            __IT.mark("Hook A: DocScan.scanActiveDoc", __ITK.COMPUTE);
             if (__earlyScan && __earlyScan.ok) {
                 try {
                     var __canonTgt = LangScriptTableLib.normalizeBcp47Identity(__bpTgtLang);
@@ -1619,10 +1742,14 @@ async function main() {
                     // config. Skip if the no-config branch already ran the panel this run.
                     if (__earlyUnowned.length && !__earlyPanelShown) {
                         plog("Hook A: " + __earlyUnowned.length + " source-present unpaired font(s) — opening seeded font panel");
+                        __IT.mark("Hook A: synthetic tofu scan + resolveByPairActions", __ITK.COMPUTE);
                         var __fprA = await require("./lib/font_mapping_panel_ui.js")
                             .showFontMappingPanelForConfig(RuntimePaths.getBaseDir(),
                                 { seedConfig: __brandConfig, targetLang: __bpTgtLang,
-                                  italicDemand: __italicDemand });
+                                  italicDemand: __italicDemand, timingMark: __IT.mark });
+                        __IT.mark("Hook A: seeded font panel (operator)",
+                            (__fprA && __fprA.ok) ? __ITK.INTERACTIVE : __ITK.COMPUTE,
+                            !__fprA ? "no result" : (__fprA.ok ? (__fprA.cancelled ? "cancelled" : "done") : ("unavailable: " + __fprA.error)));
                         if (__fprA && __fprA.cancelled) {
                             plog("Hook A: user cancelled at font panel — abort import (no doc write)");
                             // 取消不弹窗（owner 2026-08-31「都去」）。⛔ 只去弹窗，上面那行 plog 必须留。
@@ -1744,6 +1871,7 @@ async function main() {
         meta_present: !!__meta,
         mode_default_hint: __modeDefault.hint || null
     };
+    __IT.mark("Hook A tail + CJK preference + authoritative mode + ctx fields", __ITK.COMPUTE);
 
     // 6. detectM4CJKHazard — M4 only; consumes the PROJECTED byPair via ctx
     //    (r25 P3 ordering: after step 5, before runPipeline), modal BEFORE
@@ -1765,7 +1893,9 @@ async function main() {
             plog("M4 CJK hazard: " + __hazards.length + " byPair entries will NOT apply (cluster force-SHS)");
             var __hazardAccepted = false;
             if (__bpInteractive) {
+                __IT.mark("M4 CJK hazard detect", __ITK.COMPUTE);
                 __hazardAccepted = await __showM4CJKHazardDialog(__hazards);
+                __IT.mark("M4 CJK hazard dialog (operator)", __ITK.INTERACTIVE, __hazardAccepted ? "accepted" : "declined");
             } else {
                 // Headless: no operator to accept — require an explicit
                 // automation opt-in, otherwise abort (cleanly, pre-mutation).
@@ -1799,6 +1929,9 @@ async function main() {
     // the bridge's plugin document persists across requests — so close() (and
     // the fatal-path safety close via __topLevelProcessing) must always run,
     // there is no script-death teardown to catch a leak like double-click has.
+    __IT.mark("tail -> ProcessingDialog.show()", __ITK.COMPUTE);
+    // The span owner reported as mute ends here: the first "working" indicator appears next.
+    __IT.summarize("picker returned -> ProcessingDialog.show");
     if (typeof document !== "undefined" && !AutomationBridge.isAutomatedRun("import_integrated")) {
         try {
             __processing = ProcessingDialog.show("Starting import pipeline");
@@ -1857,9 +1990,11 @@ async function main() {
     // 只能重启 InDesign。所以在开文档之前就报，别一头扎进去。
     // 判据是「Adding Font 卡在 RUNNING」，**不是任务总数** —— 正常开一个文档就有
     // 22 条、几十秒排空。详 findings.md#adobe-fonts-auto-activation-jams-the-task-queue
+    var __hostJammed = false;
     try {
         var __jam = HostEnvGuard.findStuckFontActivations(app);
         if (__jam.jammed) {
+            __hostJammed = true;   // TODO #114: the pre-save wait would only time out — skip it
             var __jamMsg = HostEnvGuard.formatJamReport(__jam);
             plog("HOST ENV WARN: " + __jamMsg.replace(/\n/g, " | "));
             report.warnings = report.warnings || [];
@@ -3507,6 +3642,21 @@ async function main() {
                 plog("project_meta label write threw (non-fatal): " + (ePmLabel && ePmLabel.message ? ePmLabel.message : ePmLabel));
             }
 
+            // Package sequence label (task_plan.md#pkg-seq-prefix): the next export of
+            // this doc reads it and names itself V<seq+1>_. Only written when the
+            // imported package carried a prefix; a prefix-less (old) package leaves
+            // any earlier value untouched. Best-effort + non-fatal.
+            try {
+                report.package_seq = { imported: __pkgSeq || null, label_written: false };
+                if (__pkgSeq > 0) {
+                    var __psr = workDoc.insertLabel(PackageSeq.LABEL_KEY, JSON.stringify({ seq: __pkgSeq, source: String(zipPath || jsonPath || "") }));
+                    if (!(__psr && typeof __psr.then === "function")) report.package_seq.label_written = true;
+                }
+                plog("package seq: imported=" + (__pkgSeq || "none") + " label_written=" + report.package_seq.label_written);
+            } catch (ePsLabel) {
+                plog("package seq label write threw (non-fatal): " + (ePsLabel && ePsLabel.message ? ePsLabel.message : ePsLabel));
+            }
+
             // AC8 (arch ruling 2026-07-05): mint a stable rename-robust project_uid
             // on the doc IF absent, so a later (read-only) export can carry lineage
             // identity forward. This save persists it (proven rename-robust by
@@ -3624,17 +3774,54 @@ async function main() {
                 if (__processing) __processing.update("Saving translated document", 95);
                 plog("await workDoc.save(" + saveTargetPath + ", false) — in-place save"
                     + (__backupGate.required ? " (backup verified: " + __backupGate.backupPath + ")" : ""));
+                // TODO #114: a save that lands while one of InDesign's own background tasks
+                // (measured: "Check Links") is running fails with "open transactions" and
+                // leaves the source copy on disk. Wait for the queue to drain first (bounded:
+                // a stuck font activation never drains — then save anyway and say so).
+                // A known jam (start-of-run self-check) never drains: skip the wait instead of
+                // paying the full timeout. waitForBackgroundIdle never throws (returns error:…).
+                var __idleOpts = __hostJammed ? { timeoutMs: 0 } : undefined;
+                var __idle = await HostEnvGuard.waitForBackgroundIdle(app, __idleOpts);
+                report.pre_save_idle = { idle: __idle.idle, waitedMs: __idle.waitedMs, polls: __idle.polls,
+                    tasksBefore: __idle.first.byName, tasksAfter: __idle.last.byName,
+                    skipped_for_jam: __hostJammed, error: __idle.error || null };
+                plog("pre-save: background tasks " + (__idle.idle ? "idle" : (__idle.error ? "UNKNOWN (" + __idle.error + ")" : "STILL BUSY"))
+                    + " after " + __idle.waitedMs + "ms; at start " + JSON.stringify(__idle.first.byName));
+                if (!__idle.idle && !__hostJammed) {
+                    report.warnings = report.warnings || [];
+                    report.warnings.push("pre_save_wait: background tasks did not drain before saving ("
+                        + (__idle.error || ("timed out after " + __idle.waitedMs + "ms")) + ") — saved anyway");
+                }
+                var __saveOk = false, __saveErr = null;
                 try {
                     await workDoc.save(saveTargetPath, false);
+                    __saveOk = true;
+                } catch (eSA) {
+                    __saveErr = eSA || new Error(String(eSA));
+                    // Only this one error gets a retry, and only after the queue drains again —
+                    // a blind retry would hide any other kind of save failure.
+                    if (HostEnvGuard.isOpenTransactionError(__saveErr)) {
+                        var __idle2 = await HostEnvGuard.waitForBackgroundIdle(app, __idleOpts);
+                        plog("save hit open transactions; background " + (__idle2.idle ? "idle" : "STILL BUSY")
+                            + " after " + __idle2.waitedMs + "ms — retrying once");
+                        var __firstMsg = __saveErr.message;
+                        try { await workDoc.save(saveTargetPath, false); __saveOk = true; __saveErr = null; }
+                        catch (eRetry) { __saveErr = eRetry || new Error(String(eRetry)); }
+                        report.save_retry = { reason: "open_transactions", first_error: __firstMsg,
+                            waitedMs: __idle2.waitedMs, idle: __idle2.idle, ok: __saveOk };
+                    }
+                }
+                if (__saveOk) {
                     report.output = { path: saveTargetPath, ok: true, backup: __backupGate.backupPath || null };
+                    if (report.save_retry) report.output.retried = true;
                     report.opened_translated = true;   // doc has been open since stage ⓪.b
-                    plog("save DONE — workDoc remains open as the deliverable");
+                    plog("save DONE" + (report.save_retry ? " (after one retry)" : "") + " — workDoc remains open as the deliverable");
                     // (8D-ext-GI: the old 2-step tee-up alert was removed — the
                     //  style preset is now applied INLINE before this save, above.)
-                } catch (eSA) {
-                    report.output = { path: saveTargetPath, ok: false, error: eSA.message };
-                    report.errors.push("save failed: " + eSA.message);
-                    plog("save FAIL " + eSA.message);
+                } else {
+                    report.output = { path: saveTargetPath, ok: false, error: __saveErr.message };
+                    report.errors.push("save failed: " + __saveErr.message);
+                    plog("save FAIL " + __saveErr.message);
                 }
             }
         } else {
@@ -3759,6 +3946,31 @@ async function main() {
             + " blocked=" + report.bypair_sweep.blocked);
     }
 
+    // Post-import self-check (task_plan.md#ac-import-hardening P1, 2026-09-25).
+    // Read-only scan of the SAVED document: text lost vs. the package, CJK chars
+    // in non-CJK fonts, overset frames, rewritten mixed-format paragraphs. On
+    // 2026-09-25 three imports said `errors: 0` while each of these was present.
+    // Non-fatal by construction: runHostCheck catches internally and reports
+    // "incomplete"; the outer try only guards the wiring itself.
+    if (report.output && report.output.ok && workDoc) {
+        if (__processing) __processing.update("Checking the imported document", 97);
+        try {
+            var __picNotLoc = [];
+            var __picLp = (pipelineResult && pipelineResult.locatePlan) || [];
+            for (var __pli = 0; __pli < __picLp.length; __pli++) {
+                if (__picLp[__pli] && !__picLp[__pli].para && __picLp[__pli].seg) __picNotLoc.push(__picLp[__pli].seg.tid);
+            }
+            var __picKnown = {};
+            (ScriptFontEnforcer._CJK_FAMILIES || []).forEach(function (f) { __picKnown[f] = true; });
+            report.post_import_check = PostImportCheck.runHostCheck(workDoc, ctx.segments, ctx.translations,
+                { notLocatedTids: __picNotLoc, knownCjkFamilies: __picKnown, documentName: String(workDoc.name) });
+            plog("post-import check: " + PostImportCheck.summaryLine(report.post_import_check));
+        } catch (ePic) {
+            report.post_import_check = { verdict: "自检未完成", incomplete: "wiring: " + (ePic && ePic.message || ePic) };
+            plog("post-import check FAILED (non-fatal): " + (ePic && ePic.message || ePic));
+        }
+    }
+
     // Report files (always written, regardless of outcome)
     //
     // 🔴 2026-09-08: this used to be written into `parentDir` — the UNZIPPED PACKAGE
@@ -3799,6 +4011,14 @@ async function main() {
     try {
         if (!__reportWritten) writeUtf8File(reportJsonPath, __reportBody);
         plog("report: written to " + reportJsonPath);
+        if (report.post_import_check && report.post_import_check.counts) {
+            var __picMdPath = reportJsonPath.replace(/writeback_v2_report_([^\\\/]*)\.json$/, "post_import_check_$1.md");
+            try {
+                writeUtf8File(__picMdPath, PostImportCheck.toMarkdown(report.post_import_check));
+                report.post_import_check.md_path = __picMdPath;
+                plog("post-import check: written to " + __picMdPath);
+            } catch (ePicMd) { plog("post-import check md write FAILED (non-fatal): " + (ePicMd && ePicMd.message || ePicMd)); }
+        }
     } catch (eR) {
         if (__processing) { try { __processing.close(); } catch (eCp) {} __processing = null;
                             try { __topLevelProcessing = null; } catch (eExp) {} }
@@ -3911,7 +4131,8 @@ async function main() {
             summary += "Output: SKIPPED — " + (report.output.reason || "no usable output") + "\n";
             summary += "  (pipeline didn't reach save stage; nothing was written to disk)\n";
         } else {
-            summary += "Output: " + (report.output.path || "?") + (report.output.ok ? " OK" : " FAIL") + "\n";
+            summary += "Output: " + (report.output.path || "?") + (report.output.ok ? " OK" : " FAIL")
+                + (report.output.retried ? " (saved on the second try — InDesign was still busy)" : "") + "\n";
             if (report.opened_translated === true) {
                 summary += "  (opened in InDesign)\n";
             } else if (report.opened_translated === false) {
@@ -3939,6 +4160,12 @@ async function main() {
             summary += "  (separate undo step — Ctrl+Z reverts the preset only)\n";
         }
     }
+    if (report.post_import_check) {
+        summary += (report.post_import_check.counts
+            ? PostImportCheck.summaryLine(report.post_import_check)
+            : "Self-check: " + report.post_import_check.verdict + " — " + (report.post_import_check.incomplete || "")) + "\n";
+        if (report.post_import_check.md_path) summary += "  " + report.post_import_check.md_path + "\n";
+    }
     summary += "Errors: " + report.errors.length + "\n";
     summary += "Report: " + reportJsonPath + "\n";
     summary += "Log: " + progressLogPath;
@@ -3948,6 +4175,10 @@ async function main() {
     report.elapsed_sec = Number(__importElapsedSec);
     summary += "\nElapsed: " + __importElapsedSec + "s";
     plog("=== import_translations_v2 complete in " + __importElapsedSec + "s ===");
+    // ⚠ The "complete in" figure above starts at __importStartMs, which is AFTER the picker, zip
+    // extraction and log-dir resolve. The timeline below starts at the picker return.
+    __IT.mark("ProcessingDialog era, not subdivided (may include operator dialogs)", __ITK.UNSUBDIVIDED);
+    __IT.summarize("picker returned -> import complete");
     // #26: route trailing summary to result file when headless;
     // see reorganize_styles_inplace.idjs for the same pattern.
     if (AutomationBridge.isAutomatedRun("import_integrated")) {
@@ -4041,6 +4272,7 @@ function __bpEscHtml(s) {
 }
 
 var __BP_DIALOG_STYLES = [
+    DialogBaseCss.controlMarginReset("dialog.bp-dlg"),   // first: host-independent control margins (lib/dialog_base_css.js)
     'dialog.bp-dlg {',
     '  padding: 0; border: 1px solid #494949;',
     '  max-width: none; max-height: none;',  // neutralise the :modal cap; the fixed-size .bp-shell child carries the real size
@@ -4081,7 +4313,9 @@ var __BP_DIALOG_STYLES = [
     '.bp-body .footer { margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px; }',
     '.bp-body .footer button.primary { background: #2680eb; border-color: #2680eb; color: #fff; }',
     '.bp-body .warn-list { margin: 8px 0; padding: 8px 10px; background: #3d2a1a; border: 1px solid #b86d2a; border-radius: 3px; }',
-    '.bp-body .warn-list div { font-size: 12px; color: #f0d0a0; margin: 2px 0; }'
+    '.bp-body .warn-list div { font-size: 12px; color: #f0d0a0; margin: 2px 0; }',
+    '.bp-body .adv-toggle { display: block; width: 100%; box-sizing: border-box; text-align: left; }',
+    '.bp-body .hint { font-size: 11px; color: #7c7c7c; margin: 2px 0 0 0; }'
 ].join("\n");
 
 // A3a': fold the import dialog's project-metadata edits (project name / workflow
@@ -4218,9 +4452,11 @@ async function __showFontMappingUI(opts) {
         try { dlg.close("skip"); } catch (e) {}
         resolveOuter(null);
     });
+    __IT.mark("lean font-mapping dialog: DOM build", __ITK.COMPUTE);
     try {
         var sm = dlg.showModal();
-        if (sm && typeof sm.then === "function") sm.catch(function () { resolveOuter(null); });
+        // × / Esc RESOLVES showModal (measured 2026-09-25) — handle both, not catch only.
+        if (sm && typeof sm.then === "function") sm.then(function () { resolveOuter(null); }, function () { resolveOuter(null); });
     } catch (eShow) { resolveOuter(null); }
     var out = await resultPromise;
     try { dlg.remove(); } catch (e) {}
@@ -4281,10 +4517,18 @@ async function __showByPairImportDialog(opts) {
             + '</div>';
     }
 
+    // Window height is fixed at showModal (the OS window locks to .bp-shell) and
+    // UXP does not scroll on wheel, so size it to what THIS dialog will hold.
+    // Every variable block is known here, before show: base 700 (content measured
+    // 683px in bridge, 2026-09-26 — the shared 640 cut OK/Cancel off, owner
+    // screenshot), + the pairs skip list (max-height 160 + label/margins) on the
+    // non-deferred path, + the optional warning line. Never grows after show.
+    var __bpWorkflow = opts.workflow || "translation";   // set by the Advanced options window
+    var __bpShellH = 700 + (opts.deferPairs ? 0 : 190) + (opts.hint ? 24 : 0);
     var dlg = document.createElement("dialog");
     dlg.className = "bp-dlg";
     dlg.innerHTML = '<style>' + __BP_DIALOG_STYLES + '</style>'
-        + '<div class="bp-shell">'
+        + '<div class="bp-shell" style="height:' + __bpShellH + 'px;">'
         + '<div class="bp-body">'
         + '  <h2>Import Settings — Reorganize &amp; Font Mapping</h2>'
         + (opts.hint ? '<p class="bp-hint-warn">' + __bpEscHtml(opts.hint) + '</p>' : '')
@@ -4336,13 +4580,13 @@ async function __showByPairImportDialog(opts) {
         + '    <input type="text" id="bp-project-name" maxlength="200" value="' + __bpEscHtml(opts.projectName || "") + '" placeholder="Project name">'
         + '  </div>'
         + '  <div class="field-row bp-cols">'
+        // Workflow (incl. edit-only) behind "Advanced options…" in its own OK/Cancel
+        // window — same as the export dialog (owner 2026-09-26 「也做」). A carried
+        // non-default workflow is named under the button so it is never applied unseen.
         + '    <div>'
-        + '      <label for="bp-workflow">Workflow:</label>'
-        + '      <select id="bp-workflow">'
-        + '        <option value="translation"' + ((opts.workflow || "translation") === "translation" ? " selected" : "") + '>translation</option>'
-        + '        <option value="edit-only"' + (opts.workflow === "edit-only" ? " selected" : "") + '>edit-only</option>'
-        + '        <option value="bilingual"' + (opts.workflow === "bilingual" ? " selected" : "") + '>bilingual</option>'
-        + '      </select>'
+        + '      <label style="visibility:hidden">Workflow:</label>'
+        + '      <button id="bp-adv-btn" type="button" class="adv-toggle">Advanced options…</button>'
+        + '      <p class="hint" id="bp-adv-note">' + __bpEscHtml(ExportDialog.advNote(__bpWorkflow)) + '</p>'
         + '    </div>'
         + '    <div>'
         + '      <label for="bp-deadline">Deadline:</label>'
@@ -4365,7 +4609,17 @@ async function __showByPairImportDialog(opts) {
     var srcInput = dlg.querySelector("#bp-src-lang");
     var tgtInput = dlg.querySelector("#bp-tgt-lang");
     var pmNameInput = dlg.querySelector("#bp-project-name");
-    var pmWorkflowInput = dlg.querySelector("#bp-workflow");
+    var bpAdvBtn = dlg.querySelector("#bp-adv-btn");
+    if (bpAdvBtn) {
+        bpAdvBtn.addEventListener("click", async function () {
+            var chosen = await ExportDialog.showAdvancedOptions(__bpWorkflow);
+            if (chosen) {
+                __bpWorkflow = chosen;
+                var note = dlg.querySelector("#bp-adv-note");
+                if (note) note.textContent = ExportDialog.advNote(__bpWorkflow);
+            }
+        });
+    }
     var pmDeadlineInput = dlg.querySelector("#bp-deadline");
     var pmDesignerInput = dlg.querySelector("#bp-designer");
     var enfCheck = dlg.querySelector("#bp-run-enforcer");
@@ -4469,7 +4723,7 @@ async function __showByPairImportDialog(opts) {
             sourceLanguage: (srcInput.value || "").replace(/^\s+|\s+$/g, ""),
             targetLanguage: (tgtInput.value || "").replace(/^\s+|\s+$/g, ""),
             project_name: pmNameInput ? (pmNameInput.value || "").replace(/^\s+|\s+$/g, "") : "",
-            workflow_mode: pmWorkflowInput ? (pmWorkflowInput.value || "translation") : "translation",
+            workflow_mode: __bpWorkflow || "translation",
             deadline: pmDeadlineInput ? (pmDeadlineInput.value || "").replace(/^\s+|\s+$/g, "") : "",
             designer: pmDesignerInput ? (pmDesignerInput.value || "").replace(/^\s+|\s+$/g, "") : "",
             runEnforcer: !!enfCheck.checked,
@@ -4491,10 +4745,13 @@ async function __showByPairImportDialog(opts) {
         resolveOuter(null);
     });
 
+    // Shared by the unified settings dialog and the import-mode/byPair dialog; the caller's
+    // next mark names which one was on screen.
+    __IT.mark("import dialog: DOM build", __ITK.COMPUTE);
     try {
         var sm = dlg.showModal();
         if (sm && typeof sm.then === "function") {
-            sm.catch(function () { resolveOuter(null); });
+            sm.then(function () { resolveOuter(null); }, function () { resolveOuter(null); });   // × / Esc resolves
         }
     } catch (eShow) {
         resolveOuter(null);
@@ -4538,10 +4795,11 @@ async function __showM4CJKHazardDialog(hazards) {
         try { dlg.close("cancel"); } catch (e) {}
         resolveOuter(false);
     });
+    __IT.mark("M4 CJK hazard dialog: DOM build", __ITK.COMPUTE);
     try {
         var sm = dlg.showModal();
         if (sm && typeof sm.then === "function") {
-            sm.catch(function () { resolveOuter(false); });
+            sm.then(function () { resolveOuter(false); }, function () { resolveOuter(false); });   // × / Esc resolves
         }
     } catch (eShow) {
         resolveOuter(false);
@@ -4687,7 +4945,8 @@ async function __showTofuResolutionDialog(opts) {
 
     try {
         var sm = dlg.showModal();
-        if (sm && typeof sm.then === "function") sm.catch(function () { resolveOuter({ cancel: true, addPairs: [], skips: [] }); });
+        if (sm && typeof sm.then === "function") sm.then(function () { resolveOuter({ cancel: true, addPairs: [], skips: [] }); },
+                                                     function () { resolveOuter({ cancel: true, addPairs: [], skips: [] }); });   // × / Esc resolves
     } catch (eShow) { resolveOuter({ cancel: true, addPairs: [], skips: [] }); }
     var result = await resultPromise;
     try { dlg.remove(); } catch (e) {}
@@ -4742,9 +5001,23 @@ try { __origIntLvl = app.scriptPreferences.userInteractionLevel; } catch (eIL0) 
 // Hoisted to module scope so main() can read/update via closure.
 var origEnableRedraw = null;
 try { origEnableRedraw = app.scriptPreferences.enableRedraw; } catch (eED0) {}
+// TODO #116: live preflight ("Checking") re-checks every frame the repair step resizes; with it
+// on, the 2nd ja import after a restart hung in repair (CPU 0, no dialog) — with it off, 3/3 passed.
+// Off for the whole run; the finally below restores the app setting and every open document's.
+var __origPreflightOff = null;
+try { __origPreflightOff = app.preflightOptions.preflightOff; app.preflightOptions.preflightOff = true; } catch (ePF0) { __origPreflightOff = null; }
 try {
     await main();
 } finally {
+    if (__origPreflightOff !== null) {
+        try { app.preflightOptions.preflightOff = __origPreflightOff; } catch (ePF1) {}
+        try {
+            var __pfDocs = app.documents.everyItem().getElements();
+            for (var __pi = 0; __pi < __pfDocs.length; __pi++) {
+                try { if (__pfDocs[__pi].preflightOptions.preflightOff !== __origPreflightOff) __pfDocs[__pi].preflightOptions.preflightOff = __origPreflightOff; } catch (ePF2) {}
+            }
+        } catch (ePF3) {}
+    }
     // 兜底关 ProcessingDialog（main 抛 fatal 或 return 早退时可能漏关）
     if (__topLevelProcessing) {
         try { __topLevelProcessing.close(); } catch (eCl) {}

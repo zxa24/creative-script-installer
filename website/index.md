@@ -1,68 +1,84 @@
 ---
 layout: home
-title: Creative Script Installer
-titleTemplate: Scripts for InDesign and Illustrator, installed with one command
-description: One command installs and updates scripts for Adobe InDesign and Illustrator. The InDesign set takes a laid-out document out to a translator and brings the translated text back into the same layout; the Illustrator set is five stand-alone tools.
+title: Creative Script Kit
+titleTemplate: Scripts for InDesign and Illustrator
+description: Free scripts for Adobe InDesign and Illustrator. Folio takes a finished InDesign layout to a translator and brings the translation back into the same layout. A set of InDesign tools fixes what a new language changes, and five Illustrator tools handle everyday chores. Install them all with one line.
 
 hero:
-  name: Creative Script Installer
-  text: Translation, back into the layout.
-  tagline: One pasted command installs a set of InDesign scripts that take a laid-out document out to a translator and bring the translated text back into the same layout — then help you repair what the new language broke. Five Illustrator tools ride along.
+  name: Creative Script Kit
+  text: Scripts for InDesign and Illustrator.
+  tagline: Install with one line. Update with the same line. Free and open source.
   actions:
     - theme: brand
-      text: Install it
+      text: Install
       link: /guide/install
     - theme: alt
-      text: The normal path
-      link: /guide/workflow
+      text: Folio
+      link: /folio/
+    - theme: alt
+      text: More tools
+      link: /tools/
     - theme: alt
       text: All scripts
       link: /scripts/
 
 features:
-  - title: Two scripts for the normal day
-    details: 1.1 Export Translation Package, then 1.2 Import Translation Package. That is the whole path. Everything else is a tool you reach for when something needs fixing.
-    link: /scripts/workflow
-    linkText: Group 1 — Workflow
-  - title: Tools when you need them
-    details: Font pairing, CJK styles, style consolidation, missing-link repair, change highlighting, brand presets. Not part of the normal path — reached for deliberately.
+  - title: Folio
+    details: Translate a finished InDesign layout without rebuilding it. You send the text to a translator, who works in a web page, and the translation comes back into the same frames, styles and pages.
+    link: /folio/
+    linkText: How Folio works
+  - title: More tools
+    details: Scripts outside the translation workflow. In InDesign, save and open the document's folder in one step. In Illustrator, five small helpers. Unembed every image, save each artboard as its own PDF, finish a job in one click with Export Small PDF (smallest PDF, largest PDF, save, package), replace fonts across a file, and set Chinese and Japanese line breaking and spacing.
+    link: /tools/
+    linkText: See the tools
+  - title: All scripts
+    details: Saw a script name in the Scripts panel or the File menu? Find what it does and where it is explained.
     link: /scripts/
-    linkText: The full index
-  - title: Installs and updates itself
-    details: One command on Windows or macOS. No GitHub account, no git, no password - except Illustrator, which asks once. Everything is checksum-verified before anything is written.
-    link: /guide/install
-    linkText: Install and update
+    linkText: Look it up
 ---
 
-## What this is
+**Translating a Folio zip?** You need nothing installed. Go to
+[For translators](/folio/translator).
 
-**Creative Script Installer** puts two sets of scripts where the applications
-read them, with one command, and updates them with the same command afterwards.
-The larger set, `indesign-toolkit`, lives in InDesign's **Scripts panel**; a
-small set of Illustrator tools lives under Illustrator's File → Scripts, and is
-not mentioned at all if you have no Illustrator.
+## Install in one line
 
-The scripts serve one job: taking an InDesign document that is already laid out
-in one language, getting its text translated somewhere else, and putting the
-translated text back into that same layout without rebuilding the design.
+Open InDesign (and Illustrator) once before installing, then quit. Open a
+terminal, paste the line for your computer, and press Enter.
+[Install](/guide/install) shows each step.
 
-## Who this is for
+**Mac**: open the Terminal app and paste:
 
-- **Designers** who receive a translated document and have to make it fit.
-  Start with [Install and update](/guide/install), then
-  [The normal path](/guide/workflow). Two scripts cover most days.
-- **Anyone automating the pipeline.** The
-  [Advanced reference](/reference/advanced) covers installer flags, source
-  overrides, and how the distribution bundle is built.
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+```
 
-## Machine-readable copy of this site
+**Windows**: open PowerShell and paste:
 
-Every page on this site is also published as plain text so a language model can
-read the whole thing at once:
+```powershell
+irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
 
-- `llms.txt` — an index of the site, following the
-  [llms.txt](https://llmstxt.org) convention.
-- `llms-full.txt` — the full text of every page, concatenated.
+Then restart InDesign and Illustrator. To update later, paste the same line again.
 
-Both are generated from the same Markdown that builds this site, so they cannot
-drift out of date.
+## Who it is for
+
+- **Designers** who lay out documents in more than one language, or who want a
+  few chores in InDesign and Illustrator done for them.
+- **Translators** who receive a Folio package. You work in a web page and need
+  nothing installed. See [For translators](/folio/translator).
+
+You do not need to write code. In InDesign you double-click a script in the
+Scripts panel; in Illustrator you pick it from the File menu.
+
+## Free and open source
+
+The scripts and this site are on
+[GitHub](https://github.com/zxa24/creative-script-installer). Questions and bug
+reports are welcome there.
+
+::: details For AI assistants
+This whole site is also published as plain text, so you can give an AI
+assistant the address and ask it questions:
+[`llms.txt`](/llms.txt) is an index and [`llms-full.txt`](/llms-full.txt) is
+every page in one file.
+:::

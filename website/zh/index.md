@@ -1,53 +1,73 @@
 ---
 layout: home
-title: Creative Script Installer
-titleTemplate: 一条命令装好 InDesign 与 Illustrator 脚本
-description: 一条命令安装并更新 Adobe InDesign 与 Illustrator 的脚本。InDesign 那套把排好版的文档送去翻译、再把译文放回同一个版式；Illustrator 那套是五个独立工具。
+title: Creative Script Kit
+titleTemplate: InDesign 与 Illustrator 脚本
+description: 免费的 Adobe InDesign 与 Illustrator 脚本。Folio 把排好版的 InDesign 文档交给译者，再把译文放回同一个版面。一组 InDesign 工具修好换语言后要调整的地方，五个 Illustrator 工具处理日常杂活。一条命令全部装好。
 
 hero:
-  name: Creative Script Installer
-  text: 译文，回到原版式。
-  tagline: 粘贴一条命令，装好一组 InDesign 脚本：把排好版的文档交给译者，再把译文放回同一个版式 —— 然后帮你修好新语言弄坏的地方。另附五个 Illustrator 工具。
+  name: Creative Script Kit
+  text: InDesign 与 Illustrator 脚本。
+  tagline: 一条命令安装，同一条命令更新。免费，开源。
   actions:
     - theme: brand
       text: 安装
       link: /zh/guide/install
     - theme: alt
-      text: 正常流程
-      link: /zh/guide/workflow
+      text: Folio
+      link: /zh/folio/
+    - theme: alt
+      text: 更多工具
+      link: /zh/tools/
     - theme: alt
       text: 全部脚本
       link: /zh/scripts/
 
 features:
-  - title: 日常只用两个脚本
-    details: 先 1.1 Export Translation Package，再 1.2 Import Translation Package。这就是全部流程。其余都是出问题时才拿出来的工具。
-    link: /zh/scripts/workflow
-    linkText: 第 1 组 — 工作流
-  - title: 需要时才用的工具
-    details: 字体配对、CJK 样式、样式合并、缺失链接修复、改动高亮、品牌预设。不属于正常流程 —— 有目的地去用。
+  - title: Folio
+    details: 翻译一份排好版的 InDesign 文档，不用重新排版。你把文字发给译者，译者在网页里翻译，译文回到原来的文本框、样式和页面里。
+    link: /zh/folio/
+    linkText: Folio 怎么用
+  - title: 更多工具
+    details: 翻译流程以外的脚本。InDesign 里，一步保存文档并打开它所在的文件夹。Illustrator 里，五个小帮手：取消嵌入所有图片，把每个画板存成单独的 PDF，用 Export Small PDF 一键收尾（最小 PDF、最大 PDF、保存、打包），整份文件替换字体，设置中文和日文的断行与间距。
+    link: /zh/tools/
+    linkText: 查看工具
+  - title: 全部脚本
+    details: 在脚本面板或文件菜单里看到一个脚本名？查它是做什么的、在哪里有说明。
     link: /zh/scripts/
-    linkText: 完整索引
-  - title: 自己安装、自己更新
-    details: Windows 或 macOS 上一条命令。不需要 GitHub 账号、git，不需要密码 —— 只有 Illustrator 例外，它会问一次。写入任何东西之前先做完校验。
-    link: /zh/guide/install
-    linkText: 安装与更新
+    linkText: 查一下
 ---
 
-## 这是什么
+**要翻译一个 Folio zip？** 你什么都不用装。请看[给译者](/zh/folio/translator)。
 
-**Creative Script Installer** 用一条命令把两组脚本放到应用读取它们的位置，之后用同一条命令更新。较大的那组 `indesign-toolkit` 住在 InDesign 的**脚本面板**里；一小组 Illustrator 工具住在 Illustrator 的 File → Scripts 下 —— 没装 Illustrator 的话它一个字都不会提。
+## 一条命令安装
 
-这些脚本只做一件事：一份已经用某种语言排好版的 InDesign 文档，把文字送到别处翻译，再把译文放回**同一个版式**，而不是重新排一遍。
+安装前先把 InDesign（和 Illustrator）各打开一次，再退出。打开终端，粘贴适合你电脑的那一行，按回车。每一步见[安装](/zh/guide/install)。
+
+**Mac**：打开 Terminal（终端）应用，粘贴：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+```
+
+**Windows**：打开 PowerShell，粘贴：
+
+```powershell
+irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
+
+然后重启 InDesign 和 Illustrator。以后要更新，再粘贴同一行即可。
 
 ## 给谁用
 
-给做多语言排版的设计师，以及帮他们跑流程的人。它不要求会写代码：正常流程就是在脚本面板里双击两个脚本。
+- **设计师**：要把文档排成多种语言，或者想让 InDesign 和 Illustrator 里的一些杂活自动完成。
+- **译者**：收到了一个 Folio 包。你在网页里工作，什么都不用装。请看[给译者](/zh/folio/translator)。
 
-## 给自动化的人
+你不需要会写代码。在 InDesign 里，双击 Scripts 面板里的脚本；在 Illustrator 里，从 File 菜单选它。
 
-每个脚本都写日志和报告，落在文档旁边的 `script_outputs/` 里。安装器有退出码、有开关、有环境变量覆盖，见[高级安装与分发](/zh/reference/advanced)。
+## 免费，开源
 
-## 给 AI
+脚本和本站都在 [GitHub](https://github.com/zxa24/creative-script-installer) 上。欢迎在那里提问和报告问题。
 
-本站另有一份机器可读的全文：[`llms.txt`](/llms.txt) 与 [`llms-full.txt`](/llms-full.txt)。把本站地址交给一个 AI 助手，就可以直接向它提问。
+::: details 给 AI 助手
+整个网站也有纯文本版本（只有英文），你可以把地址交给 AI 助手，直接向它提问：[`llms.txt`](/llms.txt) 是索引，[`llms-full.txt`](/llms-full.txt) 是全部页面合成的一个文件。
+:::

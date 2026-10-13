@@ -768,6 +768,14 @@ function fingerprintParagraph(paraSnap, baseline, tolerance, dimensions) {
         key.bullets = paraSnap.bullets_and_numbering_type || "NONE";
         key.nfmt    = paraSnap.numbering_format || null;
         key.nStart  = paraSnap.numbering_start_at || 0;
+        // TODO #108: "^#^t" vs "^#.^t" render differently — don't merge them.
+        // Only present for a numbered paragraph with a captured expression: the key
+        // is JSON-stringified into the style hash, so an always-present field would
+        // rename every _T_p_* style (every paragraph has an expression, lists or not).
+        if (String(paraSnap.bullets_and_numbering_type || "").indexOf("NUMBERED_LIST") >= 0
+            && paraSnap.numbering_expression) {
+            key.nExpr = paraSnap.numbering_expression;
+        }
         key.bChar   = paraSnap.bullet_char || null;
         // [codex bullet-audit] include the explicit bullet_font so two bullet paragraphs
         // with the same type/char/baseline but DIFFERENT captured bullet fonts don't
@@ -1317,8 +1325,12 @@ function buildStylePlan(segments, workDoc, options, deps) {
             // underlineColor needs swatch resolution at commit time (see
             // fillColorSpec / underlineColorSpec below).
             underline:       !!baseline.underline,
-            underlineOffset: (typeof baseline.underlineOffset === "number") ? baseline.underlineOffset : 0,
-            underlineWeight: (typeof baseline.underlineWeight === "number") ? baseline.underlineWeight : 0,
+            // TODO #109: uncaptured ⇒ InDesign's AUTO (-9999), not 0. The paragraph
+            // baseline of most packages carries no offset/weight; a 0 default gave
+            // every rebuilt _T_p_* style a zero-weight underline, so an underline
+            // turned on in its text (e.g. the URL run) drew an invisible line.
+            underlineOffset: (typeof baseline.underlineOffset === "number") ? baseline.underlineOffset : UNDERLINE_AUTO,
+            underlineWeight: (typeof baseline.underlineWeight === "number") ? baseline.underlineWeight : UNDERLINE_AUTO,
             underlineTint:   (typeof baseline.underlineTint   === "number") ? baseline.underlineTint   : -1,
             // Keep options
             keepWithNext: paraSnap.keep_with_next || 0,
@@ -1364,6 +1376,9 @@ function buildStylePlan(segments, workDoc, options, deps) {
                 type: paraSnap.bullets_and_numbering_type || "NO_LIST",   // string → ListType enum
                 numberingFormat: paraSnap.numbering_format || null,
                 numberingStartAt: paraSnap.numbering_start_at || 1,
+                // TODO #108: null for packages exported before 2026-09-29 — commit
+                // then falls back to the source paragraph style in workDoc.
+                numberingExpression: paraSnap.numbering_expression || null,
                 bulletChar: paraSnap.bullet_char || null,                 // single-char string or null
                 // [P1-C (a)] original bullet Latin font "Family\tStyle". Prefer the
                 // explicitly-captured bullet_font; FALL BACK to the cluster's LATIN font
@@ -1412,7 +1427,15 @@ function buildStylePlan(segments, workDoc, options, deps) {
             // unions all of their nested GREP rules, deduping by
             // (grepExpression, charStyleName) so URL/brand/superscript
             // rules from non-sample styles survive the consolidation.
-            _sourceStyleNames: bucket.sourceStyleNames ? bucket.sourceStyleNames.slice() : []
+            _sourceStyleNames: bucket.sourceStyleNames ? bucket.sourceStyleNames.slice() : [],
+            // TODO #108: where the cluster sample lives in workDoc, so commit can
+            // read a list setting the package did not capture from the live source
+            // paragraph (Client-A 26-1415: "^#^t" is a paragraph override, not on the style).
+            _sampleLoc: bucket.sample ? {
+                storyId: bucket.sample.story_id,
+                paragraphIndex: bucket.sample.paragraph_index,
+                text: String(bucket.sample.source_text || "")
+            } : null
         });
     }
 
@@ -2631,6 +2654,72 @@ function _applyTabStops(psObj, tabStops, deps) {
     }
 }
 
+// InDesign's "Auto" underline offset / weight (a style's default).
+var UNDERLINE_AUTO = -9999;
+
+// TODO #108: "^#" (number) and "^H" (chapter number) are the number placeholders
+// InDesign rejects while numberingFormat is None; under None they render empty.
+function _numberingExpressionWithoutPlaceholders(expr) {
+    return String(expr).replace(/\^[#H]/g, "");
+}
+
+// TODO #108: packages exported before 2026-09-29 carry no numbering expression.
+// Fill it from workDoc (still the English source at commit time):
+//   1. the live source paragraph of the cluster sample — found in its story by
+//      text, and only if it is itself a numbered list (host 2026-09-29: Client-A's
+//      "^#^t" is a PARAGRAPH override; the style says NO_LIST / "^#.^t");
+//   2. else the source paragraph style, only if IT is a numbered list.
+// No match ⇒ nothing filled ⇒ old behaviour. Mutates spec; returns the source.
+function _fillNumberingExpressionFromSource(ps, workDoc, findStyle) {
+    var spec = ps && ps.bulletsSpec;
+    if (!spec || spec.numberingExpression) return null;
+    if (String(spec.type || "").indexOf("NUMBERED_LIST") < 0) return null;
+    var fromPara = _numberingExpressionFromLiveParagraph(workDoc, ps._sampleLoc);
+    if (fromPara !== null) {
+        spec.numberingExpression = fromPara;
+        return "source-paragraph";
+    }
+    var name = ps._sourceStyleName ||
+        (ps._sourceStyleNames && ps._sourceStyleNames.length ? ps._sourceStyleNames[0] : "");
+    if (!name || name.indexOf("_T_") === 0) return null;
+    try {
+        var src = (findStyle || _findParagraphStyleByName)(workDoc, name);
+        if (!src || !src.isValid) return null;
+        if (String(src.bulletsAndNumberingListType).indexOf("NUMBERED_LIST") < 0) return null;
+        var expr = src.numberingExpression;
+        if (expr === undefined || expr === null) return null;
+        spec.numberingExpression = String(expr);
+        return "source-style:" + name;
+    } catch (e) { return null; }
+}
+
+// Live numbered paragraph matching the sample: same story, contents starting
+// with the sample's source text (prefix, so a trailing return / later edits to
+// the tail don't matter); the snapshot index is tried first. null if not found.
+function _numberingExpressionFromLiveParagraph(workDoc, loc) {
+    if (!workDoc || !loc || loc.storyId === undefined || loc.storyId === null) return null;
+    var want = String(loc.text || "").replace(/[\r\n]+$/, "").slice(0, 40);
+    if (!want) return null;
+    try {
+        var story = workDoc.stories.itemByID(Number(loc.storyId));
+        if (!story || !story.isValid) return null;
+        var paras = story.paragraphs;
+        var n = paras.length;
+        var order = [];
+        var hint = Number(loc.paragraphIndex);
+        if (hint >= 0 && hint < n) order.push(hint);
+        for (var i = 0; i < n && i < 500; i++) if (i !== hint) order.push(i);
+        for (var k = 0; k < order.length; k++) {
+            var p = paras.item(order[k]);
+            if (String(p.contents).indexOf(want) !== 0) continue;
+            if (String(p.bulletsAndNumberingListType).indexOf("NUMBERED_LIST") < 0) return null;
+            var expr = p.numberingExpression;
+            return (expr === undefined || expr === null) ? null : String(expr);
+        }
+    } catch (e) {}
+    return null;
+}
+
 /**
  * Apply bulletsSpec to a paragraph style. Handles ListType enum + bullet
  * char + numbering format. No-op for NO_LIST (default already).
@@ -2682,6 +2771,26 @@ function _applyBulletsSpec(psObj, spec, deps, workDoc) {
         }
     }
     if (typeStr === "NUMBERED_LIST") {
+        // TODO #108: copy the source numbering expression. A new style's default
+        // is "^#.^t" — with format None the "^#" renders empty but the "." does
+        // not, so an invisible "^#^t" marker became a visible "." + tab shift.
+        // ORDER MATTERS (host 2026-09-29): write the expression BEFORE the format.
+        // With format already None InDesign throws "The format is None but number
+        // placeholders are specified"; expression first, then None, is accepted.
+        if (spec.numberingExpression) {
+            var _want = String(spec.numberingExpression);
+            try { psObj.numberingExpression = _want; } catch (eNE) {}
+            var _got = null;
+            try { _got = String(psObj.numberingExpression); } catch (eNEr) {}
+            if (_got !== _want) {
+                // Still refused (e.g. the style was already None): "^#" renders
+                // nothing under None, so the placeholder-free form looks the same.
+                var _alt = _numberingExpressionWithoutPlaceholders(_want);
+                if (_alt !== _want) {
+                    try { psObj.numberingExpression = _alt; } catch (eNE2) {}
+                }
+            }
+        }
         if (spec.numberingFormat) {
             try { psObj.numberingFormat = String(spec.numberingFormat); } catch (eNF) {}
         }
@@ -3100,10 +3209,11 @@ function commitStylePlan(workDoc, plan, deps) {
                 // Offset / weight: same fallback. baseline values were 0
                 // when snapshot didn't include the fields; copy from
                 // source ps in that case so the visual matches.
-                if (__srcUlPs && (!ps.properties.underlineOffset || ps.properties.underlineOffset === 0)) {
+                // (TODO #109: uncaptured is now UNDERLINE_AUTO, not 0 — still fall back.)
+                if (__srcUlPs && (!ps.properties.underlineOffset || ps.properties.underlineOffset === UNDERLINE_AUTO)) {
                     try { psObj.underlineOffset = __srcUlPs.underlineOffset; } catch (eUlO) {}
                 }
-                if (__srcUlPs && (!ps.properties.underlineWeight || ps.properties.underlineWeight === 0)) {
+                if (__srcUlPs && (!ps.properties.underlineWeight || ps.properties.underlineWeight === UNDERLINE_AUTO)) {
                     try { psObj.underlineWeight = __srcUlPs.underlineWeight; } catch (eUlW) {}
                 }
             }
@@ -3120,6 +3230,10 @@ function commitStylePlan(workDoc, plan, deps) {
             // bullets / numbering: needs ListType enum resolution
             __psStepStart = Date.now();
             if (ps.bulletsSpec) {
+                // TODO #108: packages exported before 2026-09-29 carry no numbering
+                // expression — fall back to the source paragraph style in workDoc
+                // (same pattern as the underline offset/weight fallback above).
+                _fillNumberingExpressionFromSource(ps, workDoc);
                 var _bfSurf = _applyBulletsSpec(psObj, ps.bulletsSpec, deps, workDoc);
                 // [P1-C (a)] a bullet whose original Latin font isn't installed → collect
                 // (NEVER silently substituted — the • stays AUTO/unrendered, not swapped).
@@ -3703,6 +3817,8 @@ module.exports = {
         _resolveLeading: _resolveLeading,
         _resolveListType: _resolveListType,
         _applyBulletsSpec: _applyBulletsSpec,
+        _numberingExpressionWithoutPlaceholders: _numberingExpressionWithoutPlaceholders,
+        _fillNumberingExpressionFromSource: _fillNumberingExpressionFromSource,
         _applyTabStops: _applyTabStops,
         _tabStopsKey: _tabStopsKey,
         _resolveTabAlignment: _resolveTabAlignment,

@@ -9,6 +9,57 @@ The version is the payload version — the number the installer prints, and the
 one it writes into every installed folder. One number covers both the InDesign
 and the Illustrator sets; they are released together.
 
+## 1.1.0 (2026-10-12)
+
+**A new home for the documentation: Creative Script Kit.**
+
+The site is rebuilt around what you are doing rather than script numbers. Folio
+is laid out stage by stage for designers, with its own page for translators;
+every problem the site mentions links to how to fix it; and there is a full
+Chinese edition.
+
+**Translation packages are numbered and live next to the document.**
+
+1.1 Export Translation Package now saves to a **packages** folder next to your
+document, and each package is numbered: V01D, V02D and so on for the designer's
+exports, V…T for the zips translators save back. You can see at a glance which
+round a file belongs to.
+
+**2.2 Apply CJK Styles sets the rules for each language.**
+
+Line breaking and punctuation spacing are now set for the language you choose:
+Traditional Chinese (Hong Kong and Taiwan), Japanese and Korean as well as
+Simplified Chinese. The script checks the settings were actually written and
+says so if they were not.
+
+**Clearer dialogs.**
+
+The export dialog has its own window for advanced options, and closing it with
+the window's close button no longer leaves InDesign waiting. The import and
+reorganize-styles dialogs share one tidy layout and size themselves to their
+content.
+
+**Import fixes.**
+
+- Anchored objects inside translated text are no longer deleted.
+- When one paragraph's translation is longer, the paragraph before it no longer
+  spills its style into it.
+- Bold or italic left over from an earlier import is cleared on paragraphs that
+  are rewritten.
+- Numbered lists keep the numbering they had in the source.
+- Underline offset and weight that were never set stay on Auto instead of
+  becoming zero.
+- Import waits for InDesign to finish its background work before saving, so it
+  no longer fails with a message about open transactions.
+- InDesign's live preflight is paused during an import and turned back on
+  afterwards.
+- **Import** inside the font pairing panel no longer stops halfway with an error.
+
+**Illustrator: Unembed All Images keeps the image as it was.**
+
+Images are exported at their own resolution, hidden or locked items are no
+longer shown or unlocked along the way, and each relink is checked.
+
 ## 1.0.3 — 2026-09-10
 
 **Fixed: dragging a weight onto the italic button turned the whole panel black.**

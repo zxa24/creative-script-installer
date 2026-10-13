@@ -21,7 +21,7 @@ description: 安装器开关、TOOLKIT_SOURCE / TOOLKIT_ZIP_URL / TOOLKIT_MANIFE
 | `TOOLKIT_ZIP_URL` | 直接覆盖载荷 URL。 |
 | `TOOLKIT_MANIFEST_URL` | 直接覆盖 manifest URL。 |
 | `TOOLKIT_AUTH_TOKEN` | 私有源的退路：请求带上 `Authorization: token …` 头。 |
-| `CSI_LOG` | 设为 `1` 把诊断日志存到桌面。见[收集日志](#出了问题时收集日志)。 |
+| `CSI_LOG` | 设为 `1` 把诊断日志存到桌面。见[收集日志](#collecting-a-log-when-something-goes-wrong)。 |
 
 ## 命令行开关
 
@@ -49,7 +49,7 @@ Windows 需要 **PowerShell 5 或更新**（Windows 10 和 11 自带；缺失时
 | 3 | 没找到 InDesign 或 Illustrator 安装。 |
 | 4 | 下载未通过校验。 |
 
-## 出了问题时收集日志
+## 出了问题时收集日志 {#collecting-a-log-when-something-goes-wrong}
 
 安装器在普通运行中**不写日志文件**。机器上什么都不累积，事后也没有文件可找 —— 这正是用意：一份总是被写的日志，是没人读也没人清理的日志。
 
@@ -115,12 +115,12 @@ node toolkit_installer/make_dist.mjs
 ## 更新语义，重述
 
 - **InDesign：**整个文件夹**原子**替换：先下载并校验，再换入。`.bak` 文件夹只在换入*期间*存在，作为事务的撤销，新文件夹就位后即删除。它**不是**事后可用的回退副本 —— 残留的副本会在脚本面板里显示成重复的一套脚本，因为 InDesign 递归扫描它。
-- **Illustrator：**文件**就地**替换，每个各自原子；没有 `.bak`，也没有整个文件夹换入，因为那需要它外面那个 Adobe 目录的写权限，而安装器没有。见[更新是怎么进行的](/zh/guide/install#更新是怎么进行的)。
+- **Illustrator：**文件**就地**替换，每个各自原子；没有 `.bak`，也没有整个文件夹换入，因为那需要它外面那个 Adobe 目录的写权限，而安装器没有。见[更新是怎么进行的（英文）](/guide/install#how-updating-behaves)。
 - 回退就是重装旧分发包：`--source=/path/to/old-dist`（macOS）或 `-Source C:\path\to\old-dist`（Windows）。留着你当前用的分发包，是唯一的回退路径。
 - 对 InDesign，任何一步失败都让现有安装原样不动。对 Illustrator，就地替换中途失败会被报告为失败，下次运行自愈。
 - 已是最新时再跑，不写入任何东西。
 
-## Illustrator 的 Scripts 目录是怎么找到的
+## Illustrator 的 Scripts 目录是怎么找到的 {#how-illustrator-s-scripts-folder-is-found}
 
 Illustrator 在应用程序内部每种语言各放一个 Scripts 目录，而目录的**名字是本地化的** —— `Scripts`、`脚本`、`スクリプト`、`Komut Dosyaları` 等等。安装器不匹配名字。在 Illustrator 记录为自己所用的那个语言目录里（见安装页），它找**包含 `.jsx` 文件的那个子目录** —— 通常是 Adobe 的三个示例脚本，或我们早先的一次安装。
 

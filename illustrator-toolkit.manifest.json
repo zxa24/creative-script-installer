@@ -1,14 +1,14 @@
 {
   "name": "illustrator-toolkit",
-  "version": "1.0.3",
-  "generatedAt": "2026-09-10T14:12:05.833Z",
+  "version": "1.1.0",
+  "generatedAt": "2026-10-13T00:36:11.714Z",
   "payloadDir": "illustrator-toolkit",
   "fileCount": 5,
   "files": [
     {
       "path": "Unembed All Images.jsx",
-      "sha256": "a9c383997e11c388387612535a1d301654d882982d32aa44476c2f5e893234b9",
-      "bytes": 7373
+      "sha256": "c34025a71204c1a2781f47d53b027f326632a258c44ff3a44403a966678bebce",
+      "bytes": 14386
     },
     {
       "path": "Export Artboard PDFs.jsx",

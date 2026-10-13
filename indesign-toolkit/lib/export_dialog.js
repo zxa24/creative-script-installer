@@ -34,6 +34,7 @@
  *     - exportLog      ← optional logger function for breadcrumbs
  */
 
+var DialogBaseCss = require("./dialog_base_css.js");
 var LabelDelegate = require("./dialog_label_delegate.js");
 
 function _esc(s) {
@@ -70,7 +71,64 @@ function _esc(s) {
 // to the stable CLASS; the id is unique per show (existence checks must query
 // the class, never a fixed id).
 var _dlgSeq = 0;
+
+var WORKFLOW_OPTIONS = ["translation", "edit-only", "bilingual"];
+
+// Text under the "Advanced options…" button: empty for the default workflow.
+function _advNote(workflow) {
+    return (workflow && workflow !== "translation") ? ("Workflow: " + workflow) : "";
+}
+
+// "Advanced options" window (owner 2026-09-25: a separate window with OK /
+// Cancel). Opened ON TOP of the export dialog — stacking measured 2026-09-25:
+// the second showModal opens and closes on its own, the first stays open.
+// Resolves the chosen workflow, or null on Cancel / close.
+async function _showAdvancedOptions(currentWorkflow) {
+    var dlg = document.createElement("dialog");
+    dlg.id = "export-adv-dlg-" + (++_dlgSeq) + "-" + Date.now().toString(36);
+    dlg.className = "export-dlg";
+    var opts = "";
+    for (var i = 0; i < WORKFLOW_OPTIONS.length; i++) {
+        var w = WORKFLOW_OPTIONS[i];
+        opts += '<option value="' + _esc(w) + '"' + (w === currentWorkflow ? " selected" : "") + '>' + _esc(w) + '</option>';
+    }
+    dlg.innerHTML = '<style>' + DIALOG_STYLES + '</style>'
+        + '<div class="export-shell" style="width:380px;height:190px;">'
+        + '<div class="export-body">'
+        + '  <h2>Advanced options</h2>'
+        + '  <div class="field-row">'
+        + '    <label for="pm-workflow">Workflow:</label>'
+        + '    <select id="pm-workflow">' + opts + '</select>'
+        + '  </div>'
+        + '  <div class="footer">'
+        + '    <button id="adv-cancel-btn" type="button">Cancel</button>'
+        + '    <button id="adv-ok-btn" type="button" class="primary">OK</button>'
+        + '  </div>'
+        + '</div>'
+        + '</div>';
+    document.body.appendChild(dlg);
+    var done;
+    var p = new Promise(function (r) { done = r; });
+    dlg.querySelector("#adv-ok-btn").addEventListener("click", function () {
+        var sel = dlg.querySelector("#pm-workflow");
+        var v = sel ? String(sel.value || "") : "";
+        try { dlg.close("ok"); } catch (e) {}
+        done(WORKFLOW_OPTIONS.indexOf(v) >= 0 ? v : null);
+    });
+    dlg.querySelector("#adv-cancel-btn").addEventListener("click", function () {
+        try { dlg.close("cancel"); } catch (e) {}
+        done(null);
+    });
+    try {
+        var sm = dlg.showModal();
+        if (sm && typeof sm.then === "function") sm.then(function () { done(null); }, function () { done(null); });
+    } catch (eShow) { done(null); }
+    var v = await p;
+    try { dlg.remove(); } catch (e2) {}
+    return v;
+}
 var DIALOG_STYLES = [
+    DialogBaseCss.controlMarginReset("dialog.export-dlg"),   // first: shared base (lib/dialog_base_css.js)
     'dialog.export-dlg {',
     '  padding: 0; border: 1px solid #494949;',
     '  max-width: none; max-height: none;',  // neutralise the UA :modal max-block-size cap
@@ -91,6 +149,13 @@ var DIALOG_STYLES = [
     '.export-body p { margin: 4px 0 10px 0; font-size: 12px; color: #9b9b9b; }',
     '.export-body label { font-size: 12px; color: #e6e6e6; }',
     '.export-body .field-row { margin: 6px 0; }',
+    // Explicit control margins: the bridge-launched dialog (plugin document) gives
+    // input/select/button a UA margin of 8px as inline-blocks, which inflated each
+    // row by ~35px (measured 2026-09-25: label→input gap 43px vs 4px with margin:0),
+    // while the Scripts-panel run did not — the same dialog looked different
+    // depending on how it was launched. Never inherit the host default here.
+    '.export-body input, .export-body select, .export-body button { margin: 0; }',
+    '.export-body .field-row > input[type="text"], .export-body .meta-2col > div > input[type="text"], .export-body .meta-2col > div > select, .export-body .meta-2col > div > button { display: block; }',
     '.export-body .field-row .hint { margin: 1px 0 0 0; }',
     '.export-body .field-row label { display: block; margin-bottom: 4px; }',
     '.export-body .field-row .path-line { display: flex; gap: 6px; align-items: center; }',
@@ -123,7 +188,8 @@ var DIALOG_STYLES = [
     '.export-body .warning .msg { flex: 1; font-size: 12px; color: #f0d0a0; }',
     '.export-body .warning button { background: #5a4020; border-color: #b86d2a; color: #f5d8a8; }',
     '.export-body .warning button:hover:not([disabled]) { background: #6d4d28; border-color: #d18546; }',
-    '.export-body .hint { font-size: 11px; color: #7c7c7c; margin: 2px 0 0 0; }'
+    '.export-body .hint { font-size: 11px; color: #7c7c7c; margin: 2px 0 0 0; }',
+    '.export-body .adv-toggle { width: 100%; box-sizing: border-box; text-align: left; }'
 ].join("\n");
 
 // Read the current "saved" + "modified" state from the doc. UXP InDesign
@@ -189,6 +255,7 @@ async function showExportDialog(app, opts) {
     var defaultSourceLang = opts.defaultSourceLang || "";
     var defaultTargetLang = opts.defaultTargetLang || "";
     var defaultWorkflow = opts.defaultWorkflow || "translation";
+    var _workflow = defaultWorkflow;   // set by the Advanced options window
     var defaultDeadline = opts.defaultDeadline || "";
     var languageOptions = opts.languageOptions || []; // [{ code, label }] from caller (lang_script_table)
     var sep = (defaultDocDir.indexOf("\\") >= 0) ? "\\" : "/";
@@ -257,17 +324,21 @@ async function showExportDialog(app, opts) {
         + '    </div>'
         + '    <div>'
         + '      <label for="pm-target-lang">Target language:</label>'
-        + '      <select id="pm-target-lang">' + _optsHtml(languageOptions, defaultTargetLang, "— none (edit-only) —") + '</select>'
+        + '      <select id="pm-target-lang">' + _optsHtml(languageOptions, defaultTargetLang, "— none —") + '</select>'
         + '    </div>'
         + '  </div>'
         + '  <div class="field-row meta-2col">'
+        // Workflow lives behind "Advanced options…" in its OWN window with OK /
+        // Cancel (owner 2026-09-25: the edit-only choice goes into an advanced
+        // option; 2026-08-28 「edit only 这个东西之后要去掉，在交互上不需要让用户知道」).
+        // A carried non-default workflow is named under the button — a hidden
+        // non-default would otherwise be exported without the operator seeing it.
         + '    <div>'
-        + '      <label for="pm-workflow">Workflow:</label>'
-        + '      <select id="pm-workflow">'
-        + '        <option value="translation"' + (defaultWorkflow === "translation" ? " selected" : "") + '>translation</option>'
-        + '        <option value="edit-only"' + (defaultWorkflow === "edit-only" ? " selected" : "") + '>edit-only</option>'
-        + '        <option value="bilingual"' + (defaultWorkflow === "bilingual" ? " selected" : "") + '>bilingual</option>'
-        + '      </select>'
+        // spacer = a real (invisible) label: '&nbsp;' collapses to 0 height in UXP
+        // and lifted the button onto the label row (owner eye-check 2026-09-25).
+        + '      <label style="visibility:hidden">Workflow:</label>'
+        + '      <button id="adv-btn" type="button" class="adv-toggle">Advanced options…</button>'
+        + '      <p class="hint" id="adv-note">' + _esc(_advNote(defaultWorkflow)) + '</p>'
         + '    </div>'
         + '    <div>'
         + '      <label for="pm-deadline">Deadline:</label>'
@@ -293,6 +364,17 @@ async function showExportDialog(app, opts) {
     var browseBtn = dlg.querySelector("#browse-btn");
     var carryInput = dlg.querySelector("#carry-path");
     var carryBrowseBtn = dlg.querySelector("#carry-browse-btn");
+    var advBtn = dlg.querySelector("#adv-btn");
+    if (advBtn) {
+        advBtn.addEventListener("click", async function () {
+            var chosen = await _showAdvancedOptions(_workflow);
+            if (chosen) {
+                _workflow = chosen;
+                var note = dlg.querySelector("#adv-note");
+                if (note) note.textContent = _advNote(_workflow);
+            }
+        });
+    }
 
     // Optional "previous package" picker (version carry-forward). Picks a .zip;
     // blank = normal export (AC7 zero-regression, no versions/ written).
@@ -385,7 +467,7 @@ async function showExportDialog(app, opts) {
             project_name: _val("#pm-project-name"),
             source_language: _val("#pm-source-lang"),
             target_language: _val("#pm-target-lang"),
-            workflow_mode: _val("#pm-workflow") || "translation",
+            workflow_mode: _workflow || "translation",
             deadline: _val("#pm-deadline")
         });
     });
@@ -404,7 +486,9 @@ async function showExportDialog(app, opts) {
     try {
         var sm = dlg.showModal();
         if (sm && typeof sm.then === "function") {
-            sm.catch(function () { resolveOuter(null); });
+            // resolve AND reject: closing with the window's × / Esc RESOLVES this
+            // promise (measured 2026-09-25) — catch-only left the script waiting forever.
+            sm.then(function () { resolveOuter(null); }, function () { resolveOuter(null); });
         }
     } catch (eShow) {
         resolveOuter(null);
@@ -416,5 +500,8 @@ async function showExportDialog(app, opts) {
 }
 
 module.exports = {
-    showExportDialog: showExportDialog
+    showExportDialog: showExportDialog,
+    // shared with the import settings dialog (owner 2026-09-26: 「也做」)
+    showAdvancedOptions: _showAdvancedOptions,
+    advNote: _advNote
 };

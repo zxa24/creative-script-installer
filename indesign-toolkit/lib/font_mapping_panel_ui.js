@@ -48,6 +48,9 @@ var FontPanelEnv = require("./font_panel_env.js");
 // #28e — face-level not-installed precompute: the probe passed to
 // configToPanelData is the byPair Stage-1 gate itself (shared function).
 var FaceMissing = require("./font_face_missing.js");
+// TODO#42-orig timing (importtime 2026-09-13): kind names only — the timeline belongs to the
+// caller and arrives as opts.timingMark. Absent → no-op, so every other caller is unaffected.
+var TIMING_KINDS = require("./import_timing.js").KINDS;
 
 function joinAll() {
     var out = arguments[0];
@@ -57,6 +60,8 @@ function joinAll() {
 
 async function showFontMappingPanelForConfig(mvpDir, opts) {
     opts = opts || {};
+    // ⛔ instrument only: import_timing's mark never throws and changes no control flow.
+    var __tm = (typeof opts.timingMark === "function") ? opts.timingMark : function () {};
     if (typeof document === "undefined") return { ok: false, error: "document undefined (must run in UXP webview context)" };
     var app = require("indesign").app;
     var DEV_DIR = joinAll(mvpDir, "dev", "font_apply_panel");
@@ -74,12 +79,15 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
             if (installedFamilies[fam].indexOf(style) === -1) installedFamilies[fam].push(style);
         }
     } catch (eIF) { return { ok: false, error: "installed-font enumerate failed: " + (eIF && eIF.message || eIF) }; }
+    __tm("font panel: installed-font enumerate (app.fonts.everyItem().name)", TIMING_KINDS.COMPUTE,
+        "families=" + Object.keys(installedFamilies).length);
 
     // ── Step 1b: scan active doc ──
     var scanResult = null;
     try { scanResult = DocScan.scanActiveDoc({ installedFamilies: installedFamilies }); }
     catch (eScan) { return { ok: false, error: "scan threw: " + (eScan && eScan.message || eScan) }; }
     if (!scanResult || !scanResult.ok) return { ok: false, error: "scan failed: " + (scanResult && scanResult.reason || "unknown") };
+    __tm("font panel: DocScan.scanActiveDoc", TIMING_KINDS.COMPUTE);
     var panelData = scanResult.panelData;
     if (panelData) {
         // TODO#58: same field, different criterion — `equivalence_groups_auto` now
@@ -95,6 +103,7 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
         Babel = require("./vendor/babel.min.js");   // LOCAL — used by compileAndEval below
         FontPanelEnv.installGlobals();              // React/ReactDOM/CanvasPan/WireHitTest (shared SoT)
     } catch (eReq) { return { ok: false, error: "React/Babel require failed: " + (eReq && eReq.message || eReq) }; }
+    __tm("font panel: require babel.min.js + installGlobals", TIMING_KINDS.COMPUTE);
 
     // ── Step 3: panel.css ──
     var cssText = "";
@@ -166,6 +175,7 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
     // (single SoT, shared with importJson below + font_apply_panel.idjs — was inline
     // here only → drift, which dropped doc fonts on in-panel import). The config's
     // pairs still become wires; the doc-extra fonts arrive unwired.
+    __tm("font panel: panel.css read + enforcer eligibility", TIMING_KINDS.COMPUTE);
     var __initialData = panelData;
     if (opts.seedConfig && PanelAdapter && typeof PanelAdapter.configToPanelData === "function") {
         try {
@@ -177,6 +187,8 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
             }
         } catch (eSeed) { /* fall back to bare scan panelData */ }
     }
+    __tm("font panel: seedConfig -> configToPanelData (face probe)", TIMING_KINDS.COMPUTE,
+        opts.seedConfig ? "seeded" : "no seedConfig (segment should be ~0)");
 
     var resolveConfig, done = false;
     var configPromise = new Promise(function (r) { resolveConfig = r; });
@@ -251,6 +263,7 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
     dlg.appendChild(bodyWrap);
     document.body.appendChild(dlg);
     if (typeof globalThis !== "undefined") globalThis.__fapDialog = dlg;
+    __tm("font panel: fap build + fillCommonFap + dialog DOM build", TIMING_KINDS.COMPUTE);
     // Escape / chrome-close without Apply → resolve cancel (no config, no
     // validateErrors → importer logs "cancelled", NOT "invalid_rejected").
     dlg.addEventListener("close", function () { if (!done) { done = true; resolveConfig({ config: null, validateErrors: null }); } }, { once: true });
@@ -270,9 +283,13 @@ async function showFontMappingPanelForConfig(mvpDir, opts) {
         try { dlg.close(); } catch (e) {} try { dlg.remove(); } catch (e) {}
         return { ok: false, error: "JSX compile/eval failed: " + (eJsx && eJsx.message || eJsx) };
     }
+    // ⚠ showModal ran just before this, but compile/eval is synchronous JS: the window may not
+    //   have painted at all meanwhile. The kind means "a window was requested", not "it was visible".
+    __tm("font panel: showModal + JSX compile/eval x3 (sync)", TIMING_KINDS.COMPUTE_WINDOW_UP);
 
     // ── Step 7: let React commit ──
     await new Promise(function (resolve) { setTimeout(resolve, 400); });
+    __tm("font panel: React commit wait (fixed 400ms setTimeout)", TIMING_KINDS.COMPUTE_WINDOW_UP);
 
     // Smoke mode (automation): verify the React app mounted, then close +
     // return WITHOUT waiting for user interaction (no host operator to click).

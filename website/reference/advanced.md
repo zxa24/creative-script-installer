@@ -58,10 +58,10 @@ double-click `install-update.bat` or run
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Done, or nothing to do. A refusal that leaves something for you to do first (Illustrator never launched, the one-time step declined) is also 0. |
-| 1 | Something failed, or nothing could be installed. |
+| 1 | Something failed, or nothing could be installed. See [Something went wrong](/guide/install#something-went-wrong). |
 | 2 | Not one of the menu choices. |
-| 3 | No InDesign or Illustrator installation was found. |
-| 4 | The download failed verification. |
+| 3 | No InDesign or Illustrator installation was found. See [It says it could not find InDesign or Illustrator](/guide/install#not-found). |
+| 4 | The download failed verification. See [Something went wrong](/guide/install#something-went-wrong). |
 
 ## Collecting a log when something goes wrong
 

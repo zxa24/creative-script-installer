@@ -19,6 +19,7 @@ var RunnerConfig = require("./lib/smoke_runner_config.js");
 var AutomationBridge = require("./lib/automation_bridge.js");
 var StyleImport = require("./lib/style_import.js");
 var CjkFieldCheck = require("./lib/cjk_field_check.js");
+var CjkLanguageProfile = require("./lib/cjk_language_profile.js");
 var TextCleanup = require("./lib/text_cleanup.js");
 var Contract = require("./lib/frame_repair_contract.js");
 var FramePartition = require("./lib/frame_partition.js");
@@ -59,6 +60,11 @@ var statusLine = "";
 var cjkImportBroken = false;
 var cjkImportBrokenDetail = "";
 var sourceDoc = null;
+// #CJK-LANG-PROFILE (TODO #118): per-language donor carrier saved from CJK.idml
+// (deleted after import); runOk drives the automation result — any failure
+// path leaves it false so a bridge caller sees ok:false, not a log line.
+var tempDonorPath = null;
+var runOk = false;
 var targetDocRef = null;
 var mergedStyleNames = {};
 var acceptanceBundle = null;
@@ -850,28 +856,37 @@ async function askCleanupOptions() {
     var autoOpts = null;
     try { autoOpts = await AutomationBridge.readAutomationOptions("cjk_style_apply"); }
     catch (eAB) {}
+    // targetLanguage (2026-09-22): picks the kinsoku/mojikumi profile
+    // (lib/cjk_language_profile.js). Omitted => "zh-CN" = previous behaviour.
     if (autoOpts && (
         Object.prototype.hasOwnProperty.call(autoOpts, "removeSoftReturns") ||
         Object.prototype.hasOwnProperty.call(autoOpts, "removeSpaces") ||
-        Object.prototype.hasOwnProperty.call(autoOpts, "collapseEmptyLines"))) {
+        Object.prototype.hasOwnProperty.call(autoOpts, "collapseEmptyLines") ||
+        Object.prototype.hasOwnProperty.call(autoOpts, "targetLanguage"))) {
         return {
             removeSoftReturns:  (autoOpts.removeSoftReturns !== false),
             removeSpaces:       (autoOpts.removeSpaces !== false),
-            collapseEmptyLines: (autoOpts.collapseEmptyLines !== false)
+            collapseEmptyLines: (autoOpts.collapseEmptyLines !== false),
+            targetLanguage:     (typeof autoOpts.targetLanguage === "string" && autoOpts.targetLanguage) ? autoOpts.targetLanguage : "zh-CN"
         };
     }
 
     if (RunnerConfig.isRunnerActive(app)) {
-        return RunnerConfig.getCleanupOptions(app, {
+        result = RunnerConfig.getCleanupOptions(app, {
             removeSoftReturns: true,
             removeSpaces: true,
             collapseEmptyLines: true
         });
+        if (result && !result.targetLanguage) result.targetLanguage = "zh-CN";
+        return result;
     }
 
+    var ddLang;
     try {
         dlg = app.dialogs.add({ name: "Text Pre-processing" });
         col = dlg.dialogColumns.add();
+        col.staticTexts.add({ staticLabel: "Target language (line-breaking rules):" });
+        ddLang     = col.dropdowns.add({ stringList: CjkLanguageProfile.LANGUAGES, selectedIndex: 0 });
         col.staticTexts.add({ staticLabel: "Options (all enabled by default):" });
         cbSoft     = col.checkboxControls.add({ staticLabel: "Remove soft line breaks (Shift+Enter)",       checkedState: true });
         cbCollapse = col.checkboxControls.add({ staticLabel: "Collapse consecutive empty lines (spaces too)", checkedState: true });
@@ -881,14 +896,15 @@ async function askCleanupOptions() {
             ? {
                 removeSoftReturns: !!cbSoft.checkedState,
                 removeSpaces: !!cbSpaces.checkedState,
-                collapseEmptyLines: !!cbCollapse.checkedState
+                collapseEmptyLines: !!cbCollapse.checkedState,
+                targetLanguage: CjkLanguageProfile.LANGUAGES[ddLang.selectedIndex] || "zh-CN"
             }
             : null;
         dlg.destroy();
         return result;
     } catch (e0) {
         try { if (dlg) { dlg.destroy(); } } catch (e1) {}
-        return { removeSoftReturns: true, removeSpaces: true, collapseEmptyLines: true };
+        return { removeSoftReturns: true, removeSpaces: true, collapseEmptyLines: true, targetLanguage: "zh-CN" };
     }
 }
 
@@ -1005,6 +1021,58 @@ async function main() {
     }
     log("Selected source style: " + sourceStyleName);
 
+    // #CJK-LANG-PROFILE (2026-09-22; moved into the donor document 2026-09-29,
+    // TODO #118): the only donor is Simplified Chinese. The kinsokuSet/mojikumi
+    // override for the target language is written HERE, on the donor inside
+    // CJK.idml (which holds every kinsoku/mojikumi table), and the donor is
+    // saved as a carrier .indd that the import reads — the table travels with
+    // the style. Writing it on the donor after import only works if the target
+    // document already has that table; Client-A 26-1415 has none ⇒ silent NOTHING.
+    var importSourcePath = SOURCE_FILE_PATH;
+    var __lp = CjkLanguageProfile.resolve(cleanupOpts.targetLanguage);
+    if (!__lp.known) {
+        log("CJK language profile: UNKNOWN targetLanguage '" + safe(cleanupOpts.targetLanguage)
+            + "' — donor (Simplified Chinese) rules kept.");
+        pushBundleIssue("unknown targetLanguage '" + safe(cleanupOpts.targetLanguage) + "': Simplified-Chinese kinsoku/mojikumi kept");
+    } else if (__lp.profile) {
+        var __lpFail = null;
+        try {
+            var __donorInSource = StyleImport.findParagraphStyleByName(sourceDoc, sourceStyleName);
+            if (!__donorInSource) {
+                __lpFail = "donor style '" + safe(sourceStyleName) + "' not found in " + SOURCE_FILE_PATH;
+            } else {
+                __donorInSource.kinsokuSet = CjkLanguageProfile.enumOrName(indesign.KinsokuSet, __lp.profile.kinsokuSet);
+                __donorInSource.mojikumi = CjkLanguageProfile.enumOrName(indesign.MojikumiTableDefaults, __lp.profile.mojikumi);
+                var __ksSrc = CjkFieldCheck.normalizeFieldValue(getFieldValue(__donorInSource, "kinsokuSet"));
+                var __mjSrc = CjkFieldCheck.normalizeFieldValue(getFieldValue(__donorInSource, "mojikumi"));
+                log("CJK language profile (donor document): " + safe(cleanupOpts.targetLanguage)
+                    + " kinsokuSet=" + safe(__ksSrc) + " mojikumi=" + safe(__mjSrc));
+                if (!CjkLanguageProfile.readBackMatches(__lp.profile, __ksSrc, __mjSrc)) {
+                    __lpFail = "not accepted by the donor document: kinsokuSet=" + safe(__ksSrc) + " mojikumi=" + safe(__mjSrc);
+                } else {
+                    tempDonorPath = joinWindowsPath(DATA_DIR, "cjk_donor_" + CjkLanguageProfile.donorFileTag(cleanupOpts.targetLanguage) + ".indd");
+                    var __prevUil = app.scriptPreferences.userInteractionLevel;
+                    app.scriptPreferences.userInteractionLevel = indesign.UserInteractionLevels.NEVER_INTERACT;
+                    try { await sourceDoc.save(tempDonorPath); }
+                    finally { app.scriptPreferences.userInteractionLevel = __prevUil; }
+                    importSourcePath = tempDonorPath;
+                    log("CJK language profile: donor carrier saved: " + tempDonorPath);
+                }
+            }
+        } catch (eLpSrc) {
+            __lpFail = "donor carrier failed: " + safe(eLpSrc && eLpSrc.message ? eLpSrc.message : eLpSrc);
+        }
+        if (__lpFail) {
+            statusLine = "FAILED: CJK language profile " + safe(cleanupOpts.targetLanguage) + " — " + __lpFail
+                + ". Nothing was changed in the document.";
+            log(statusLine);
+            pushBundleIssue(statusLine);
+            return;
+        }
+    } else {
+        log("CJK language profile: " + safe(cleanupOpts.targetLanguage) + " = donor as-is.");
+    }
+
     StyleImport.closeDocNoSave(sourceDoc);
     sourceDoc = null;
     log("Source document closed.");
@@ -1029,7 +1097,8 @@ async function main() {
     var __doScriptOk = true;
     try {
         app.doScript(function () {
-            StyleImport.importTextStylesOfficial(targetDoc, SOURCE_FILE_PATH);
+            StyleImport.importTextStylesOfficial(targetDoc, importSourcePath);
+            log("Imported text styles from: " + importSourcePath);
             log("Official text style import complete.");
             log("Target focus restored after import: " + safe(restoreTargetDocumentFocus(targetDoc)));
 
@@ -1077,6 +1146,26 @@ async function main() {
                 }
             } catch (eGuard) {
                 log("CJK donor import check failed: " + safe(eGuard && eGuard.message ? eGuard.message : eGuard));
+            }
+
+            // #CJK-LANG-PROFILE read-back (TODO #118): the override was written
+            // in the donor document (see main() above); prove it survived the
+            // import. A mismatch FAILS the run before any merge — merging would
+            // ship Simplified-Chinese (or no) line breaking under a zh-HK/ja/ko
+            // label, and a log line alone went unnoticed (Client-A 26-1415).
+            if (__lp.known && __lp.profile) {
+                var __ksBack = CjkFieldCheck.normalizeFieldValue(getFieldValue(importedSourceStyle, "kinsokuSet"));
+                var __mjBack = CjkFieldCheck.normalizeFieldValue(getFieldValue(importedSourceStyle, "mojikumi"));
+                var __lpOk = CjkLanguageProfile.readBackMatches(__lp.profile, __ksBack, __mjBack);
+                log("CJK language profile: " + safe(cleanupOpts.targetLanguage) + " kinsokuSet=" + safe(__ksBack)
+                    + " mojikumi=" + safe(__mjBack) + (__lpOk ? " (read-back OK)" : " (READ-BACK MISMATCH)"));
+                if (!__lpOk) {
+                    __abortReason = "FAILED: CJK language profile " + safe(cleanupOpts.targetLanguage)
+                        + " not applied after import (kinsokuSet=" + safe(__ksBack) + " mojikumi=" + safe(__mjBack)
+                        + "). Stopped before merging; only the donor style '" + safe(sourceStyleName) + "' was imported.";
+                    pushBundleIssue(__abortReason);
+                    return;
+                }
             }
 
             // Snapshot BEFORE cleanup + style apply so repair targets the
@@ -1167,6 +1256,25 @@ async function main() {
             + cjkImportBrokenDetail + "). Kinsoku (line-breaking rules) is not in effect; fix lib/CJK.idml so the donor style carries local CJK fields. ["
             + statusLine + "]";
     }
+    if (!__doScriptOk) {
+        statusLine = "FAILED: doScript wrapper failed (see log). [" + statusLine + "]";
+    }
+    runOk = __doScriptOk && !cjkImportBroken;
+}
+
+// Best-effort removal of the per-language donor carrier (fs.unlinkSync is not
+// available in UXP — lib/file_utils.js). A leftover is overwritten next run.
+async function removeTempDonor() {
+    if (!tempDonorPath) return;
+    try {
+        var lfs = require("uxp").storage.localFileSystem;
+        var entry = await lfs.getEntryWithUrl("file:" + tempDonorPath.replace(/\\/g, "/"));
+        await entry.delete();
+        log("Donor carrier removed: " + tempDonorPath);
+    } catch (eRm) {
+        log("Donor carrier NOT removed (left for next run to overwrite): " + tempDonorPath
+            + " — " + safe(eRm && eRm.message ? eRm.message : eRm));
+    }
 }
 
 // Top-level await — IIFE breaks the bridge runner's async handshake.
@@ -1180,6 +1288,7 @@ await main().catch(function (e) {
 try {
     StyleImport.closeDocNoSave(sourceDoc);
 } catch (e0) {}
+await removeTempDonor();
 
 try {
     if (acceptanceBundle) {
@@ -1190,6 +1299,18 @@ try {
 }
 
 writeTextFileObserved(OUT_PATH, lines.join("\n"), "cjk-style-apply-log");
+// Bridge callers read automationResult; before 2026-09-29 it was null and a
+// failure was visible only in the log (TODO #118).
+if (AutomationBridge.isAutomatedRun("cjk_style_apply")) {
+    try {
+        await AutomationBridge.recordAutomationResult("cjk_style_apply", {
+            ok: runOk,
+            statusLine: statusLine,
+            issues: acceptanceBundle ? acceptanceBundle.summary.issues : [],
+            logPath: OUT_PATH
+        });
+    } catch (eAR) {}
+}
 // Skip the trailing summary dialog when running headlessly. Without this
 // the bridge / MCP run blocks on the modal until someone clicks OK.
 if (!AutomationBridge.isAutomatedRun("cjk_style_apply")) {

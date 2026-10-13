@@ -320,3 +320,45 @@ html {
 .vp-doc table td:first-child {
   white-space: nowrap;
 }
+
+/* Code blocks sit on a dark background in BOTH themes (--vp-code-block-bg), but
+   Shiki colours tokens with its light palette in light mode, which made the
+   install command nearly unreadable (dark blue on near-black). Always use the
+   dark palette inside code blocks. */
+.vp-doc div[class*="language-"] .shiki span {
+  color: var(--shiki-dark, inherit) !important;
+}
+
+/* Jump highlight: what a link points at lights up, then fades (IT TODO #145).
+   Amber fill plus an amber outline: fades in (ease-in, about 0.5 s), then
+   straight out (ease-in, about 2.5 s); 3 s in total (owner 2026-10-12). */
+@keyframes jump-highlight-fade {
+  0% { opacity: 0; animation-timing-function: ease-in; }
+  17% { opacity: 1; animation-timing-function: ease-in; }
+  100% { opacity: 0; }
+}
+:root { --jump-highlight-bg: rgba(255, 190, 0, 0.45); --jump-highlight-ring: rgba(214, 140, 0, 0.9); }
+.dark { --jump-highlight-bg: rgba(255, 190, 0, 0.30); --jump-highlight-ring: rgba(255, 190, 0, 0.85); }
+.jump-highlight {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: 6px;
+  background-color: var(--jump-highlight-bg);
+  box-shadow: 0 0 0 2px var(--jump-highlight-ring);
+  mix-blend-mode: multiply; /* tint behind the text's look, keep text dark */
+  animation: jump-highlight-fade 3s linear forwards;
+}
+.dark .jump-highlight { mix-blend-mode: screen; }
+/* Keep the fade when reduced motion is on: it is a colour fade, not movement,
+   and without it the highlight vanishes abruptly. VitePress forces every
+   animation to 1ms under prefers-reduced-motion (a global `*` rule with
+   !important), and Windows with "Animation effects" off reports that setting
+   (owner's machine, 2026-10-12), so restore the duration explicitly. */
+@media (prefers-reduced-motion: reduce) {
+  .jump-highlight {
+    animation-duration: 3s !important;
+    animation-delay: 0s !important;
+  }
+}
+

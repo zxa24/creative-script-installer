@@ -656,6 +656,11 @@ function App() {
   };
 
   // ---------- port registry & geometry ----------
+  /* 🅐′：`recomputePorts` 要读最新的 data，但它的 deps 必须留 `[]`（身份稳定）
+     ⇒ 走 ref，不进 deps。⚠ 今天刚因「回调身份每轮变」被拦过一次闸（`#96` 那一族）。 */
+  const dataRef = React.useRef(data);
+  dataRef.current = data;
+
   const registerPort = useCallback((id, el) => {
     if (el) portEls.current[id] = el; else delete portEls.current[id];
   }, []);
@@ -673,6 +678,41 @@ function App() {
       const r = el.getBoundingClientRect();
       next[id] = { x: r.left - c.left + r.width / 2, y: r.top - c.top + r.height / 2 };
     }
+    /* ── 🅐′ 2026-09-11：打断那个「滞后一代」的测量反馈环 ──────────────
+       病因（20260911_02 实测定位）：标签卡的 y 取自 `portPos[领头成员 L 口]`，
+       而这里又去**量**那张卡上的标签端口 ⇒ 闭环；本函数每次变化只跑一次
+       ⇒ **标签端口存的位置永远晚一代**（实测：加入后恒偏 15.5px 且不恢复；
+       再触发一次任意重算才收敛 —— 那条判别实验证明是"滞后"不是"算错"）。
+
+       修法：标签端口的 y **不用量到的那个**，改成
+           【本趟算出的卡片 y】 + 【本趟实测的"端口相对卡片中心"的偏移】
+       ⇒ 它变成领头成员位置的**纯函数**，一趟收敛，且**没有写死的常数**
+         （偏移是当场量的 —— 这正是 🅐′ 比"写死偏移"强的地方：CSS 改了它自己跟着变）。
+       ⚠ 只改 **y**：卡片 `left` 由 CSS 固定（panel.css:782 `left:24px`），x 不滞后。
+       ⚠ 前提「卡内偏移与卡片放在哪一行无关」已实测（20260911_03：三张卡 y 各异，
+         偏移极差 0.00px）。⛔ 若哪天卡片改成参与布局流，这条前提要重测。
+       ⚠ 用 `dataRef` 而不是把 `data` 加进 deps —— `recomputePorts` 的身份必须稳定
+         （今天刚为「身份每轮变 → effect 重跑」那一族踩过闸，`#96`）。 */
+    try {
+      const d = dataRef.current;
+      if (d && window.labelCardLayout) {
+        const cards = window.labelCardLayout(d, next);
+        cards.forEach(({ p, lead, y }) => {
+          if (!lead) return;
+          const id = `__label__:${p.id}::R`;
+          const el = portEls.current[id];
+          if (!el || !el.isConnected || !next[id]) return;
+          let card = el;
+          while (card && !(card.classList && card.classList.contains('label-card'))) card = card.parentElement;
+          if (!card) return;
+          const pr = el.getBoundingClientRect();
+          const cr = card.getBoundingClientRect();
+          // 卡片的 y 是它的【中心】（transform:translateY(-50%)），所以偏移也按中心算。
+          next[id] = { x: next[id].x, y: y + ((pr.top + pr.height / 2) - (cr.top + cr.height / 2)) };
+        });
+      }
+    } catch (eLbl) { /* 定位是增强，⛔ 永远不许它把整次测量搞挂 */ }
+
     /* 🔴 #96：这里原本无条件 `setPortPos(next)`，而 `next` 每次都是新对象
        ⇒ 每跑一次就必然重渲染一次。它自己不成环（portPos 不在任何 effect 依赖里，
        全仓 grep 过），**但它是循环的"泵"**：只要别处让 data 换了身份，
@@ -937,11 +977,19 @@ function App() {
         const fromLabel = d.from.lang === '__label__';
         const tp = d.overPort.split(':');
         const toLabel = tp[0] === '__label__';
-        if (fromLabel && !toLabel) {
-          linkLabel(d.from.font, { lang: tp[0], font: tp[1], node: tp[2] });
-        } else if (toLabel && !fromLabel) {
-          linkLabel(tp[1], d.from);
-        } else if (!fromLabel && !toLabel) {
+        /* 🪦 §14-b（2026-09-11）—— 这里原本还有两条 `linkLabel(...)` 分支：
+             fromLabel && !toLabel  →  linkLabel(d.from.font, …)   // 从标签往外拖
+             toLabel && !fromLabel  →  linkLabel(tp[1], d.from)    // 节点拖到标签上
+           前者在 §14 之后**已经是死分支**（components.jsx 的 port `onPointerDown`
+           对 `isLabel` 直接不启动拖拽 —— 我核过）；后者是**活的**，正是 owner 要收掉的那半。
+           ⇒ 两条都删，`linkLabel` 退役（见它的墓碑）。
+           **落到标签端口上什么都不发生**，且不报错、不留半状态 —— 这里直接没有分支可走。
+           ⚠ 顺带失去的能力（如实说，不粉饰）：「把一个节点拖到某个配对的标签上以加入该配对」。
+           它与 `applyPair` 重叠 —— 拖到**该配对的任一成员节点**上等效（app.jsx 的
+           `else if (pb) pb.members.push(a)` 分支）。⚠ 唯一不等效的边界：
+           **成员全部不可放置（parked）因而没有可见节点**的配对，标签曾是唯一把手。
+           已报 arch，⛔ 未自行补偿。 */
+        if (!fromLabel && !toLabel) {
           if (!(tp[0] === d.from.lang && tp[1] === d.from.font && tp[2] === d.from.node)) {
             applyPair(d.from, { lang: tp[0], font: tp[1], node: tp[2] });
           }
@@ -1196,9 +1244,15 @@ function App() {
       const ord = {}; d.languages.forEach((l, i) => { ord[l.id] = i; });
       const lead = leadMember(d, members);
       const seed = window.closestPreset(memberSemantic(d, lead));
-      const includesLeftmost = members.some(m => ord[m.lang] === 0);
+      /* 🔴 §14-b（2026-09-11）：去掉 `includesLeftmost` 闸。
+         它原本让「不含最左列成员」的新配对拿到 labelLinked=false ——
+         而渲染现在**根本不读这个字段**（标签线恒为派生，见 data.jsx 的墓碑）。
+         ⚠ 仍然写 `labelLinked: true`：**往返形状不变**（adapter 只在 true 时导出这个键，
+         所以新配对导出后与「今天含最左列成员的新配对」字节一致）。
+         ⛔ 不写 false、也不省略 —— 那会改变导出文件的形状，而字段处置是
+         「渲染忽略、往返保留」（arch 的保守默认，§14-b）。 */
       const newPair = { id: window.uid('P'), hue: window.PAIR_COLOR, members,
-        label: seed, labelLinked: includesLeftmost };
+        label: seed, labelLinked: true };
       d.pairings.push(newPair);
     }
     setData(d);
@@ -1206,19 +1260,16 @@ function App() {
 
   function removePairing(pid) { mutate(d => { d.pairings = d.pairings.filter(p => p.id !== pid); }); }
   const setPairingLabel = (pid, v) => mutate(d => { const p = d.pairings.find(x => x.id === pid); if (p) p.label = v; });
-  function linkLabel(pid, addr) {
-    mutate(d => {
-      const p = d.pairings.find(x => x.id === pid); if (!p) return;
-      // 8D-ext-MM step 4 [P2]: a distinct same-lang member can now link via the
-      // label lane (matches node-to-node MM construction) — the old same-lang
-      // reject was a SILENT no-op. Exact-dup is still skipped by the push guard
-      // below; the normalize effect then sets representative_by_lang.
-      d.pairings.forEach(q => { if (q !== p) q.members = q.members.filter(m => !sameAddr(m, addr)); });
-      if (!p.members.some(m => sameAddr(m, addr))) p.members.push(addr);
-      p.labelLinked = true;
-      d.pairings = d.pairings.filter(q => pairMemberCount(d, q) >= 1);
-    });
-  }
+  /* 🪦 `linkLabel(pid, addr)` —— §14-b（owner 2026-09-11「这个不应用户拖，
+     改成默认自动连且不能改」）退役，2026-09-11。
+     它做两件事：把 `addr` 加进配对 `pid`（从别的配对里摘走），并置 `p.labelLinked = true`。
+     · 第二件事现在**没有意义**：渲染不再读 labelLinked，标签线恒为派生。
+     · 第一件事与 `applyPair` 重叠：拖到该配对的**任一成员节点**上等效
+       （`applyPair` 的 `else if (pb) pb.members.push(a)` 分支）。
+     🟢 收掉它的正收益：**「派生」与「手连」两个来源从根上消失** —— 那正是 §14 当初担心的。
+     ⚠ 唯一不等效的边界：成员全部 parked（无可见节点）的配对，标签曾是唯一把手。已报 arch。
+     ⛔ 别"顺手恢复"它：恢复它就等于把两个来源请回来，而 labelLinked 是个 bool、
+        存不下"他画了哪几条"。要恢复请先回到 design-intent §14-b 重新拍。 */
 
   // W1 (owner: "两侧端口不应该是亮的，只有在实际有连接的时候才变蓝") ---------
   // The lit port and the drawn wire used to encode two DIFFERENT facts: lit meant
@@ -1321,6 +1372,25 @@ function App() {
     });
     // #33d: an explicit star click IS the operator's decision — the
     // machine-picked notice for this (pair, lang) comes off.
+    /* 🔴 2026-09-11 留痕：点星是「auto-picked 合法消失」的其中一条路。
+       起因：一次 owner 眼验里出现「他说 chip 出现过、而 import 那一刻的键数是 0」的冲突，
+       候选之一正是「他中途点过星」—— 当时**没有任何读数能把这条路和『键从未出现』分开**。
+
+       ⚠ 无条件打印，**不去读当前的 autoRepKeys**。这是刻意的：
+       初版写成「只有该键存在时才打印」，为此把 deps 从 `[]` 改成 `[autoRepKeys]` ——
+       那会让 `setPairRep` 的**身份每次状态变化都换**，正是 `#96`（2026-09-09 面板变黑）
+       那一族的形状：身份每轮变 → 下游 effect 重跑 → 嵌套更新超限 → 整树卸载。
+       🔴 本轮审计过一遍，**这条风险在今天的代码里并不成立**（唯一消费点是
+       `components.jsx:624` 的 `onClick`；`setPairRep` 没进任何 deps 数组；
+       它所在的 `ctx` 是**每渲染重建的普通对象字面量**、本就没有稳定身份）——
+       **但一个只在「当前没人这么用」的前提下才安全的写法，不该为一行日志而引入。**
+       ⇒ 改成不需要新鲜闭包的形式：deps 回到 `[]`，事件无条件记。
+       ⚠ 代价（写明，别让读者以为等价）：这条只说「**点了星**」，不说「**清掉了键**」。
+       要判断有没有清掉，读日志时把它和 `autoRep:machinePicked` 对着看 ——
+       🟢 而且这样**更多**一条信息：一次没清掉任何东西的点星，现在也留痕了。 */
+    try {
+      if (window.fapTrace) window.fapTrace('autoRep:starClicked', { pairId, langCode });
+    } catch (eTr) {}
     setAutoRepKeys(prev => {
       const k = pairId + '|' + langCode;
       if (!prev[k]) return prev;
@@ -1328,6 +1398,9 @@ function App() {
       delete n[k];
       return n;
     });
+    /* ⚠ deps 保持 `[]`（见上面那段）：这个 callback 内部两处都是函数式 updater
+       （`setData(prev=>)` / `setAutoRepKeys(prev=>)`）⇒ **本来就不需要新鲜闭包**，
+       而新加的那条 trace 也已经改成不读状态。⛔ 别为了打印一个值而给它加 dep。 */
   }, []);
 
   const wireConnectable = useCallback((addr) => {
@@ -1347,12 +1420,11 @@ function App() {
       if (p.members.some(m => sameAddr(m, addr))) return false;
       return true;
     }
-    if (toLabel) {
-      const p = data.pairings.find(x => x.id === addr.font);
-      if (!p) return true;
-      if (p.members.some(m => sameAddr(m, from))) return false;
-      return true;
-    }
+    /* 🔴 §14-b：标签端口**不再是 drop 目标** ⇒ 一律不可连（视觉上保持 dim）。
+       原逻辑是「不是本配对已有成员就可连」，那是 `linkLabel` 那条路的伴生判定。
+       ⚠ 这一条与 up() 里删掉的分支是**同一件事的两半**：这里管"看起来能不能放"，
+         那里管"放下去发生什么"。只改一边会留下「亮着却没反应」的半吊子状态。 */
+    if (toLabel) return false;
     const pa = data.pairings.find(p => p.members.some(m => sameAddr(m, from)));
     const pb = data.pairings.find(p => p.members.some(m => sameAddr(m, addr)));
     // Already the same pair → connecting is a no-op; keep it dimmed.
@@ -2136,6 +2208,21 @@ function App() {
     const repSource = repSourceIsLoadRef.current ? 'load' : 'wire';
     repSourceIsLoadRef.current = false;
     if (machineSet.length) {
+      /* 🔴 2026-09-11 留痕：「机器挑了代表」= 那枚 auto-picked 诞生的时刻。
+         有了它，日志里就能把三件事分开：键**出现过**（这一行）/ 键**被星清掉**
+         （autoRep:clearedByStar）/ 键在导入时**还在不在**（import:applied 的 autoRepBefore）。
+         ⚠ `newKeys` 是按**本次渲染**的 autoRepKeys 算的预判；真正的新增仍由下面的
+         updater 用 React 给的 prev 决定（`if (!n[k])`）。两者只在有别的更新抢跑时才会不同 ——
+         所以字段名写成 `newKeysFromThisRender`，⛔ 不叫 `added`。 */
+      try {
+        if (window.fapTrace) {
+          window.fapTrace('autoRep:machinePicked', {
+            keys: machineSet,
+            source: repSource,
+            newKeysFromThisRender: machineSet.filter(k => !autoRepKeys[k])
+          });
+        }
+      } catch (eTr2) {}
       setAutoRepKeys(prev => {
         let any = false;
         const n = Object.assign({}, prev);
@@ -2240,17 +2327,54 @@ function App() {
     // this function only applies it. Before the 2026-08-22 sweep this block was
     // three hand-written lines that had grown one patch at a time, and five
     // more session maps were silently surviving the import.
+    // 🪦 2026-09-10 — `setAutoMerged` / `setRecombDismissed` /
+    // `setConfirmableMerges` used to be called on the next three lines. TODO#58
+    // (2026-08-20) had deleted all three useState hooks two days BEFORE the
+    // sweep above was written, so those calls named identifiers that existed
+    // nowhere. Measured, not read (probes/20260910_01_import_reset_chromium.mjs):
+    // `ReferenceError: setAutoMerged is not defined`, thrown inside this async
+    // handler ⇒ an unhandled rejection — no banner, nothing on screen — and every
+    // line below it never ran. `setData` + `setSkipDecisions` had already gone
+    // out, so the import LANDED while `primaryLang` / `autoRepKeys` /
+    // `autoFauxKeys` / `repSourceIsLoadRef` all survived from the old config.
+    // Per-name "what was it resetting, what happens now" lives with the rule, in
+    // data.jsx's tombstone — not duplicated here.
     const __reset = window.computeImportStateReset(r.data, window.__fap);
     setSkipDecisions(__reset.skipDecisions);
-    setAutoMerged(__reset.autoMerged);
-    setRecombDismissed(__reset.recombDismissed);
-    setConfirmableMerges(__reset.confirmableMerges);
     setPrimaryLang(prev => __reset.keepPrimaryLang(prev));
     setAutoRepKeys(__reset.autoRepKeys);
     setAutoFauxKeys(__reset.autoFauxKeys);
     // Any rep the normalize pass now invents is inherited state ('load'),
     // not feedback to a gesture.
     repSourceIsLoadRef.current = true;
+    /* ── ⑤ 2026-09-10：成功路径过去【一个字都不写】 ────────────────────────
+       `fapTrace` 此前只挂在 quiet 分支（:2227）⇒ 一次正常导入在宿主侧
+       **零记录**：owner 那趟 56 秒、`12b_panel_trace` 的 total 是 0。
+       后果是「漏斗做了什么」只能靠 owner 用眼睛描述，而 2026-09-10 已实测：
+       这条缺陷在屏幕上【没有痕迹】（失配的语言码照样画成 "(auto)"，与真重置
+       逐字节同图，见 findings#stale-primary-lang-is-invisible-on-screen）
+       ⇒ 眼睛是一个【物理上读不到判别量】的通道。补这条 trace 就是给它一个能读的通道。
+
+       ⚠ 覆盖声明：它证明【漏斗跑到了这一行、带着这些值】，
+          ⛔ 证明不了【界面把它画对了】。界面那半只能靠 12c 的 DOM 读数与人眼。
+       ⚠ `primaryAfterFromThisRender` 是用【本次渲染的 prev】算出来的预测值 ——
+          真正下发的是上面那个函数式 setter。两者只在有别的更新抢跑时才会不同。
+          ⛔ 故意不把 trace 写进那个 updater 里：updater 必须是纯的
+          （2026-09-09 的 React #185 就是 updater 重放不稳定咬出来的）。
+          **实际落点**由 entry 的 `12c_panel_final_state` 读，那才是观测值。 */
+    try {
+      window.fapTrace && window.fapTrace('import:applied', {
+        path: (r && r.path) || null,
+        langs: (r.data.languages || []).map(l => l && l.code),
+        primaryBefore: primaryLang,
+        primaryAfterFromThisRender: __reset.keepPrimaryLang(primaryLang),
+        fapPrimaryUpstream: (window.__fap && window.__fap.primaryLang) || null,
+        skipBefore: Object.keys(skipDecisions || {}).length,
+        skipAfter: Object.keys(__reset.skipDecisions || {}).length,
+        autoRepBefore: Object.keys(autoRepKeys || {}).length,
+        autoFauxBefore: Object.keys(autoFauxKeys || {}).length
+      });
+    } catch (eTr) { /* 仪器永远不许成为那个把导入弄坏的东西 */ }
   };
   const handleExport = async () => {
     if (!window.__fap || typeof window.__fap.exportJson !== 'function') {
@@ -2401,12 +2525,10 @@ function App() {
   removePairingRef.current = removePairing;
 
   // ---------- unified-weight (label) card positions ------------------------
-  const labelCards = data.pairings.map((p, i) => {
-    const ms = [...p.members].sort((a, b) => langOrder[a.lang] - langOrder[b.lang]);
-    const lead = ms[0];
-    const lp = lead && portPos[`${lead.lang}:${lead.font}:${lead.node}:L`];
-    return { p, y: lp ? lp.y : (70 + i * 70) };
-  });
+  /* 🅐′ 2026-09-11：这段原本在这里就地算 y。现在它是 data.jsx 的 `labelCardLayout` ——
+     **因为测量期（recomputePorts）也要用同一个算法**。抄成两份就是第二个真相来源（`#27`），
+     而两份一旦漂，症状恰好是"线和端口对不上"—— 与我们正在修的 bug 同形，极难区分。 */
+  const labelCards = window.labelCardLayout(data, portPos);
 
   // `no-pops` is a ROOT class, not a per-element edit: the .chip-pop reveal is
   // pure-CSS `:hover` on ~8 carriers, so one ancestor class switches them all.

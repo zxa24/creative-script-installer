@@ -1,6 +1,6 @@
 ---
 title: 文件与目录
-description: 目录约定 —— 工作目录保持简单，脚本产生的一切都进 script_outputs/。目前，导入在覆盖之前会先把上一份译文文档复制到 script_outputs/backup/，复制失败则停止。
+description: 目录约定：工作目录保持简单，导出的翻译包放在文档旁边的 packages/，其余脚本产物都进 script_outputs/。后续轮次的导入在保存前把上一版译文文档复制到 script_outputs/backup/，复制失败则停止；再次导入原文档则直接替换译文文档，不做备份。
 ---
 
 # 文件与目录
@@ -16,8 +16,9 @@ description: 目录约定 —— 工作目录保持简单，脚本产生的一�
   <doc>.indd                      源文档
   <doc>.translated.indd           当前有效的输出 —— 一个固定名字
 
+  packages/                       导出的翻译包（V01D_…）及其 .zip
+
   script_outputs/                 ← 脚本的目录；你很少打开
-    package/                      导出的翻译包
     log/                          运行日志
     report/                       导入报告
     backup/                       导入在覆盖前取的副本
@@ -30,11 +31,12 @@ description: 目录约定 —— 工作目录保持简单，脚本产生的一�
 
 ## 导入对上一份输出做了什么
 
-**导入先把旧文件复制到安全处，再覆盖 —— 如果复制失败，导入就停下，而不是继续。**
+**取决于你导入到哪一份文档。**
 
-当工作目录里已经有一份 `<doc>.translated.indd`，而你再往上导入时，`1.2 Import Translation Package` 会先把那个文件复制到 `script_outputs/backup/`。只有确认副本已在磁盘上，导入才继续覆盖原件。
+- **后续轮次，导入到 `.translated.indd`**（[正常做法](/zh/folio/rounds#next-round)）：导入直接更新这份文档，保存之前先把上一版复制到 `script_outputs/backup/`。只有确认副本已在磁盘上，它才保存。
+- **已经有一份 `.translated.indd` 时，再次导入原文档：** 导入从头开始，替换掉 `.translated.indd`，**不做备份**。调整过翻译文档之后，不要这样做。
 
-如果备份做不出来，**导入中止，你磁盘上的文档原样不动**。这是有意的：另一种选择是覆盖掉一份你也许再也造不出来的文件。一次中止的导入是可以恢复的小麻烦；丢失的输出不是。
+如果备份做不出来，**导入中止，你磁盘上的文档原样不动**（[怎么办](/zh/folio/export-import#backup-failed)）。这是有意的：另一种选择是覆盖掉一份你也许再也造不出来的文件。一次中止的导入是可以恢复的小麻烦；丢失的输出不是。
 
 ### 上一版在哪
 

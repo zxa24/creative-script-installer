@@ -28,6 +28,8 @@ var indesign = require("indesign");
 var app = indesign.app;
 var RuntimePaths = require("./lib/runtime_paths.js");
 var ScriptLogPaths = require("./lib/script_log_paths.js");
+// #43 装置修：日志目录得先存在，否则 writeLog 静默丢整份日志（见 main() 里 LOG_DIR 那段）。
+var FileUtils = require("./lib/file_utils.js");
 var AutomationBridge = require("./lib/automation_bridge.js");
 
 // Phase 8D-ext-0: migrated to lib/font_mapping_* per task_plan commit fad7746.
@@ -90,7 +92,8 @@ async function main() {
     // probe logs in translation_mvp_uxp/log/ so the purge script catches
     // them on its retention sweep.
     var instanceStamp = (new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    var LOG_PATH = joinAll(MVP, "log", SCRIPT_NAME + "__" + instanceStamp + ".log");
+    var LOG_DIR = joinAll(MVP, "log");
+    var LOG_PATH = joinAll(LOG_DIR, SCRIPT_NAME + "__" + instanceStamp + ".log");
 
     var report = {
         timestamp: ts(),
@@ -98,9 +101,35 @@ async function main() {
         resolved_paths: { mvp: MVP, dev: DEV_DIR },
         steps: []
     };
+    // ── 🔴 2026-09-10: 这份日志过去会【整份静默消失】 ──────────────────────
+    // `log/` 是 gitignore 的（translation_mvp_uxp/.gitignore:14）⇒ 一个新
+    // checkout 里【根本没有这个目录】：`git worktree add` 不造它，Scripts Panel
+    // 里的安装版副本（indesign-toolkit-stable/，2026-09-08 装的那份）也没有它。
+    // 而 UXP 的 `fs.writeFileSync` 对不存在的父目录报 *no such file or directory*
+    // ⇒ 被下面 writeLog 的 try/catch 整个吞掉 ⇒ **脚本照常跑完、什么都不报，
+    // 只是一行日志都没有**。实际代价：一次 worktree 上的宿主验证只能去读【主树的
+    // 陈旧日志】，差点把别的构建的读数当成本次的（拦住它的是构建指纹对不上，
+    // 不是任何报错）。CLAUDE.md #26 同族 —— 这个宿主上「失败」的默认形状是安静。
+    //
+    // ⚠ 为什么不是一行 mkdir：UXP 没有 `fs.mkdirSync`（#26），且 `fs.statSync`
+    // 会对存在性撒谎（#26-补）⇒ 走 FileUtils.ensureDirVerifiedAsync：用 async
+    // `fs.mkdir` 建，再用 `lfs.getEntryWithUrl` 回读，只有真的解析成文件夹才算 ok。
+    // 读数进 report 本身：**这份日志读得到，就等于这一步成功了**（自证）；失败时
+    // 它带着 error 留在 report 里，供 bridge 直接读内存那一份。
+    report.log_dir = { path: LOG_DIR, ensured: null };
+    try { report.log_dir.ensured = await FileUtils.ensureDirVerifiedAsync(LOG_DIR); }
+    catch (eLD) { report.log_dir.ensured = { ok: false, error: String(eLD && eLD.message || eLD) }; }
     function writeLog() {
         try { if (typeof summariseTiming === "function") summariseTiming(); } catch (e) {}
-        try { fs.writeFileSync(LOG_PATH, JSON.stringify(report, null, 2), "utf-8"); } catch (e) {}
+        // ⚠ 诚实的边界：这条错误记进的是【内存里的 report】，所以它只会出现在
+        // 【下一次成功的写盘】里，或者被 bridge 读到。**写盘全程失败时它仍然
+        // 到不了盘上** —— 那种情况下唯一还看得见它的通道是 report.log_dir。
+        try {
+            fs.writeFileSync(LOG_PATH, JSON.stringify(report, null, 2), "utf-8");
+            report.log_write_error = null;
+        } catch (e) {
+            report.log_write_error = String(e && e.message || e);
+        }
     }
     // #71 (owner 2026-08-22: 「双击脚本后等待开面板的时间很长」+「加启动分段耗时日志」).
     // 🔴 MEASURE ONLY. Nothing here changes what the script does; the round's
@@ -862,6 +891,89 @@ async function main() {
         var tail = arr.slice(-120);
         return { available: true, session: session, truncated: truncated,
                  total: arr.length, kept: tail.length, trace: tail };
+    });
+
+    // 🔴 ⑤ 2026-09-10 —— 面板【最终状态】的观测值，不是预测值。
+    // 起因：owner 一趟 56 秒的会话在日志里只留下 trace=[] 与 doneCalled=false ——
+    // 「导入之后 primaryLang 到底是什么、picker 画成了什么」在宿主侧没有任何可核记录，
+    // 只能请 owner 用眼睛描述，而那条通道已被实测证明【读不到判别量】
+    // （失配的语言码与真重置逐字节同图，findings#stale-primary-lang-is-invisible-on-screen）。
+    // 这一步跑在 dialog 关闭之后、`dlg.remove()` 之前 ⇒ 面板 DOM 还在，直接读它。
+    // ⚠ 选择器用 getElementsByClassName / getElementsByTagName ——
+    //   本 webview 的 querySelector 后代选择器会【静默返回 null】（CLAUDE.md #23 / #13c），
+    //   拿 null 当「没有」正是这一步要防的那种谎。
+    step("12c_panel_final_state", function () {
+        var out = { ctx_available: false, dom_available: false };
+        try {
+            var ctx = (typeof window !== "undefined" && window.__fap && window.__fap.ctx) || null;
+            if (ctx) {
+                out.ctx_available = true;
+                out.primaryLang = ctx.primaryLang;
+                out.langs = (((ctx.data || {}).languages) || []).map(function (l) { return l && l.code; });
+                out.skipKeys = Object.keys(ctx.skipDecisions || {});
+                // 🔴 2026-09-11 补：pairings 的代表。owner 若在四步中途点过星，
+                // 代表会变（`setPairRep`）—— 那是「键被合法清掉」的那条路，
+                // 从这里看得见，不必再靠他回忆。
+                out.pairings = (((ctx.data || {}).pairings) || []).map(function (p) {
+                    return { id: p.id,
+                             memberCount: (p.members || []).length,
+                             rep: p.representative_by_lang || null };
+                });
+            }
+            out.fap_primaryLang_upstream = (window.__fap && window.__fap.primaryLang) || null;
+        } catch (eC) { out.ctx_error = String(eC && eC.message || eC); }
+        /* 🔴 2026-09-11 补 —— 这一节是本轮那场「owner 说有、仪器说没有」直接催生的。
+           当时我只记了 picker 的 DOM，**没记这两枚 chip 的计数**，于是
+           「导入之后那枚 auto-picked 还在不在」**只能去问 owner 的记忆**。
+           ⚠ 而 arch 列的候选里有一条正是「他看到的是 auto-added（#41 那枚 italic 的）
+           而不是 auto-picked」—— 两枚长得像。**分开计数，这个候选就自己散了。**
+           ⚠ 用 getElementsByClassName：本 webview 的 querySelector 后代选择器会
+           静默返回 null（CLAUDE.md `#23`），拿 null 当「没有」正是这里要防的谎。 */
+        try {
+            function _tagRows(cls) {
+                var els = document.getElementsByClassName(cls);
+                var rows = [];
+                for (var i = 0; i < els.length; i++) {
+                    var n = els[i];
+                    while (n && !(n.classList && n.classList.contains("node"))) n = n.parentElement;
+                    var txt = n ? (n.textContent || "") : "";
+                    // 去掉 hover 弹层的文字，剩下的才是常驻可见那半
+                    var pops = n ? n.getElementsByClassName("chip-pop") : [];
+                    for (var j = 0; j < pops.length; j++) {
+                        txt = txt.replace(pops[j].textContent || "", "");
+                    }
+                    rows.push(txt.replace(/\s+/g, " ").trim().slice(0, 40) || "(不在 .node 里)");
+                }
+                return rows;
+            }
+            out.repAutoTag_count = document.getElementsByClassName("rep-auto-tag").length;
+            out.repAutoTag_on = _tagRows("rep-auto-tag");
+            out.ivAutoTag_count = document.getElementsByClassName("iv-auto-tag").length;
+            out.ivAutoTag_on = _tagRows("iv-auto-tag");
+        } catch (eT) { out.tag_error = String(eT && eT.message || eT); }
+        try {
+            var pickers = document.getElementsByClassName("primary-lang-picker");
+            out.picker_count = pickers.length;
+            if (pickers.length) {
+                var sels = pickers[0].getElementsByTagName("select");
+                out.select_count = sels.length;
+                if (sels.length) {
+                    var sel = sels[0];
+                    var opts = [];
+                    for (var i = 0; i < sel.options.length; i++) {
+                        opts.push({ v: sel.options[i].value,
+                                    t: String(sel.options[i].textContent || "").replace(/\s+/g, " ").trim() });
+                    }
+                    out.dom_available = true;
+                    out.select_value = sel.value;
+                    out.select_selectedIndex = sel.selectedIndex;
+                    out.select_selectedText = (sel.selectedIndex >= 0 && opts[sel.selectedIndex])
+                        ? opts[sel.selectedIndex].t : null;
+                    out.select_options = opts;
+                }
+            }
+        } catch (eD) { out.dom_error = String(eD && eD.message || eD); }
+        return out;
     });
 
     // -------- Step 9: report result ----------------------------------------

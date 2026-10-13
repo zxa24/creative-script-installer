@@ -282,6 +282,51 @@ function _writeParaPreserveMark(para, targetText) {
         hasTrailingCR = (charCount > 0);  // best-effort fallback
     }
 
+    // #ANCHORED-OBJ (2026-09-22): 锚定（行内）对象靠段落里的一个 U+FFFC 挂在文字流中。
+    // 下面的整段替换 `itemByRange(0, n-2).contents = write` 会连这个 U+FFFC 一起替换掉
+    // ⇒ 【对象本身被删除】（实测 Client-A 26-0955「Let's connect」前的对话气泡 Group：
+    // story.pageItems 1 → 0）。在译文里放一个字面 U+FFFC 救不回来 —— 占位符没有对象可指。
+    // 修法：译文与原段的 U+FFFC 个数一致时，按 U+FFFC 切段、【只替换锚点两侧的文字】，
+    // 锚点字符一个都不碰 ⇒ 对象原地存活（不 detach / 不 re-anchor / 不产生副本）。
+    // 本机 build 实测：PageItem.move(spread) 抛 Error No.1 且不脱离文本流，
+    // releaseAnchoredObject 不是函数 —— detach 路线在这里走不通，所以不走。
+    // 倒序写：后面的段先写，前面各段的段内下标不会被长度变化推漂。
+    // 个数不一致 ⇒ 退回原逻辑（对象会丢），并在返回值里报出，交调用方记入 report。
+    var __FFFC = "￼";
+    var __rawBody = "";
+    try {
+        __rawBody = String(para.contents || "");
+        if (hasTrailingCR) __rawBody = __rawBody.substring(0, __rawBody.length - 1);
+    } catch (eRB) { __rawBody = ""; }
+    var __oldAnchors = __rawBody.split(__FFFC).length - 1;
+    if (__oldAnchors > 0) {
+        var __newAnchors = write.split(__FFFC).length - 1;
+        if (__newAnchors === __oldAnchors) {
+            var __oldParts = __rawBody.split(__FFFC);
+            var __newParts = write.split(__FFFC);
+            var __segs = [], __acc = 0;
+            for (var __k = 0; __k < __oldParts.length; __k++) {
+                __segs.push({ start: __acc, len: __oldParts[__k].length });
+                __acc += __oldParts[__k].length + 1;          // +1 = 锚点字符本身
+            }
+            for (var __j = __segs.length - 1; __j >= 0; __j--) {
+                var __sg = __segs[__j], __nt = __newParts[__j];
+                if (__sg.len === 0 && __nt.length === 0) continue;
+                if (__sg.len === 0) {
+                    para.insertionPoints.item(__sg.start).contents = __nt;
+                } else if (__nt.length === 0) {
+                    para.characters.itemByRange(__sg.start, __sg.start + __sg.len - 1).remove();
+                } else {
+                    para.characters.itemByRange(__sg.start, __sg.start + __sg.len - 1).contents = __nt;
+                }
+            }
+            // 段落标记从未被触碰 ⇒ 不需要下面的 #E2E-17 补标记安全网
+            return { ok: true, hadTrailingCR: hasTrailingCR, anchoredPreserved: __oldAnchors, anchoredLost: 0 };
+        }
+        // 个数对不上：继续走原逻辑，但把「会丢几个」带回去
+        var __anchoredLost = __oldAnchors;
+    }
+
     if (hasTrailingCR && charCount >= 1) {
         if (charCount === 1) {
             // Empty para (just \r) — insert before the mark.
@@ -329,7 +374,9 @@ function _writeParaPreserveMark(para, targetText) {
         } catch (eGuard) {}
     }
 
-    return { ok: true, hadTrailingCR: hasTrailingCR };
+    return { ok: true, hadTrailingCR: hasTrailingCR,
+             anchoredPreserved: 0,
+             anchoredLost: (typeof __anchoredLost === "number") ? __anchoredLost : 0 };
 }
 
 // #TABLE-MINION (Phase 3): decide whether post-`.contents=` clearParaCharOverrides
@@ -343,6 +390,16 @@ function _writeParaPreserveMark(para, targetText) {
 // [Basic Paragraph]) — there the single source font is the intended Latin base
 // and byPair still re-routes CJK→MHei on top, so the cleared-to-Minion bug is
 // avoided. Pure + Node-testable. Host-verified 20260622_01.
+// P3 (#ac-import-hardening, 2026-09-26): the package states this paragraph's
+// emphasis EXPLICITLY — a non-gated target_emphasis_runs array, or an empty one
+// the webapp's edit mode marks user_set ("this paragraph now has no emphasis").
+// Then the pipeline's old _T_c_emp runs must go before anything new is applied.
+function _statesTargetEmphasis(translation) {
+    if (!translation || !Array.isArray(translation.target_emphasis_runs)) return false;
+    if (_terIsAuto(translation)) return false;
+    return translation.target_emphasis_runs.length > 0 || translation.target_emphasis_runs_user_set === true;
+}
+
 function _shouldClearParaOverrides(paraStyleName, srcUniform) {
     if (paraStyleName === null || paraStyleName === undefined) return true;   // unreadable → clear
     if (String(paraStyleName).indexOf("_T_p_") === 0) return true;           // cluster → clear
@@ -808,7 +865,16 @@ function applyOnePara(workDoc, locateResult, sheet, plan, translation, applyResu
         return;
     }
     var seg = locateResult.seg;
-    var para = locateResult.para;
+    // #PARA-WRAPPER-BLEED (2026-09-22): re-resolve BEFORE Step 1, not only inside
+    // _writeParaPreserveMark. Paragraphs are processed in reverse; this wrapper was
+    // captured at locate time and its end sits on the NEXT paragraph's start. When the
+    // next paragraph's target is LONGER than its source, the extra chars are inserted at
+    // that boundary and the wrapper grows into it (host-traced: "…assets1\r1", 2 paras).
+    // Step 1 then assigns THIS paragraph's cluster style to the next paragraph too —
+    // Client-A 26-0955 ja/ko "$1.5T" (18pt Sub Headline) silently became 9.5pt body
+    // because "1.5兆億ドル"/"$1조 5천억" is longer than "$1.5T ". Same-length / shorter
+    // targets never trigger it, which is why zh-CN looked fine.
+    var para = _refreshParaWrapper(locateResult.para);
     var tid = seg && seg.tid;
 
     var SS = deps.lib.styleSheetBuilder;
@@ -942,8 +1008,17 @@ function applyOnePara(workDoc, locateResult, sheet, plan, translation, applyResu
             // #BRIDGE-20: shared helper preserves the paragraph mark
             // and runs the #E2E-17 safety net. Same implementation used
             // by runMinimalApply so both paths get identical \r-handling.
-            _writeParaPreserveMark(para, target);
+            var __wr = _writeParaPreserveMark(para, target);
             applyResults.targetTextWritten++;
+            // #ANCHORED-OBJ: 保住/丢掉的锚定对象进 report，丢失不能只停在日志里
+            if (__wr && __wr.anchoredPreserved) {
+                applyResults.anchoredObjectsPreserved = (applyResults.anchoredObjectsPreserved || 0) + __wr.anchoredPreserved;
+            }
+            if (__wr && __wr.anchoredLost) {
+                if (!applyResults.anchoredObjectsLost) applyResults.anchoredObjectsLost = [];
+                applyResults.anchoredObjectsLost.push({ tid: tid, count: __wr.anchoredLost,
+                    reason: "译文里的 U+FFFC 个数与原段不一致，退回整段替换，锚定对象被删" });
+            }
         } catch (eW) {
             applyResults.clusterApplyFailures.push({
                 tid: tid,
@@ -994,6 +1069,15 @@ function applyOnePara(workDoc, locateResult, sheet, plan, translation, applyResu
             try { SA.clearParaCharOverrides(para); } catch (eClr) {}
         } else {
             applyResults.nonClusterUniformClearSkipped = (applyResults.nonClusterUniformClearSkipped || 0) + 1;
+        }
+
+        // P3 (#ac-import-hardening): old _T_c_emp runs sit at the OLD text's char
+        // offsets. Clear them here — after the write, BEFORE annotations (direct
+        // overrides, Step 3) — when the package states the emphasis explicitly;
+        // the stated runs are applied later (pass 2 when deferred).
+        if (_statesTargetEmphasis(translation) && typeof SA.clearPipelineEmphasisCharStyles === "function") {
+            var __staleEmp = SA.clearPipelineEmphasisCharStyles(para);
+            if (__staleEmp) applyResults.staleEmphasisCleared = (applyResults.staleEmphasisCleared || 0) + __staleEmp;
         }
 
         // #BRIDGE-31: re-apply baseline fillColor / pointSize on translated
@@ -3910,6 +3994,9 @@ function runPipeline(workDoc, ctx, deps) {
     report.apply = {
         cluster_styles_applied: applyResults.clusterStylesApplied,
         target_text_written: applyResults.targetTextWritten,
+        // #ANCHORED-OBJ: 切段写保住的锚定对象数 / 因 U+FFFC 个数对不上而丢失的明细
+        anchored_objects_preserved: applyResults.anchoredObjectsPreserved || 0,
+        anchored_objects_lost: applyResults.anchoredObjectsLost || [],
         annotations_applied: applyResults.annotationsApplied,
         annotations_skipped: applyResults.annotationsSkipped,
         annotation_skip_reasons: applyResults.annotationSkipReasons || [],
@@ -4697,6 +4784,11 @@ function runMinimalApply(workDoc, ctx, deps) {
             }
         } else {
             applyResults.textWriteSkipped++;
+        }
+        // P3 (#ac-import-hardening): same stale-emphasis clear as applyOnePara.
+        if (textWritten && _statesTargetEmphasis(translation) && typeof SA.clearPipelineEmphasisCharStyles === "function") {
+            var __staleEmpM5 = SA.clearPipelineEmphasisCharStyles(lr.para);
+            if (__staleEmpM5) applyResults.staleEmphasisCleared = (applyResults.staleEmphasisCleared || 0) + __staleEmpM5;
         }
 
         // Apply emphasis as direct overrides. Two distinct sources, in order:

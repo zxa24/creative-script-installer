@@ -36,6 +36,7 @@
  * with v1 — HTML dialogs use `document` global, not the InDesign app).
  */
 
+var DialogBaseCss = require("./dialog_base_css.js");
 var LabelDelegate = require("./dialog_label_delegate.js");
 
 var GROUPING_DIMENSIONS = [
@@ -205,6 +206,8 @@ function _esc(s) {
 // DOM read green). Selectors moved to stable CLASSES; ids unique per show.
 var _dlgSeq = 0;
 var DIALOG_STYLES = [
+    DialogBaseCss.controlMarginReset("dialog.reorg-v2-dlg"),       // first: host-independent control margins
+    DialogBaseCss.controlMarginReset("dialog.reorg-v2-adv-dlg"),   // (lib/dialog_base_css.js)
     'dialog.reorg-v2-dlg, dialog.reorg-v2-adv-dlg {',
     '  padding: 0; border: 1px solid #494949; min-width: 460px;',
     '  background: #1f1f1f; color: #e6e6e6; color-scheme: dark;',

@@ -413,6 +413,55 @@ function _restoreDirectCharOverrideRanges(para, ranges) {
 }
 
 /**
+ * Reset the PIPELINE's own emphasis char styles (`_T_c_emp*`) in a paragraph to
+ * [None] + clear the overrides on exactly those ranges. Designer char styles are
+ * left alone (same intent as normalizeCascade's designer-range preservation).
+ *
+ * Why (task_plan #ac-import-hardening P3, measured 2026-09-26 on a 26-0955 TC copy):
+ * a rewritten paragraph inherits the OLD text's char styles BY CHARACTER POSITION,
+ * and clearOverrides() does not touch char styles — so when the package states the
+ * target emphasis explicitly, old _T_c_emp runs survive at stale offsets (an
+ * inserted "X" came out Dax Pro Bold; 「居」 came out Xbold). Setting [None] alone
+ * keeps the old look as local overrides (findings none-char-style-keeps-look-as-
+ * overrides) ⇒ clearOverrides on the same range.
+ *
+ * Call AFTER the text write and BEFORE annotations are applied (they are direct
+ * overrides and would be wiped — audit 2026-09-26). Ranges are addressed relative
+ * to the paragraph with DOM character counts (story indices break in table cells;
+ * String(contents).length breaks on special characters / surrogate pairs).
+ * Returns how many ranges were reset.
+ */
+function clearPipelineEmphasisCharStyles(para) {
+    var n = 0;
+    try {
+        var doc = para.parentStory.parent;
+        var none = doc.characterStyles.itemByName("[None]");
+        if (!none || !none.isValid) return 0;
+        var paraStart = para.index;
+        var rs = para.textStyleRanges.everyItem().getElements(), spans = [];
+        for (var i = 0; i < rs.length; i++) {
+            var nm = "";
+            try { nm = String(rs[i].appliedCharacterStyle.name); } catch (eN) { nm = ""; }
+            if (nm.indexOf("_T_c_emp") !== 0) continue;
+            try {
+                var len = rs[i].characters.length;
+                if (len > 0) spans.push([rs[i].index - paraStart, rs[i].index - paraStart + len - 1]);
+            } catch (eI) {}
+        }
+        // Collect first, then act: resetting a range re-splits the collection.
+        for (var j = 0; j < spans.length; j++) {
+            try {
+                var rg = para.characters.itemByRange(spans[j][0], spans[j][1]);
+                rg.appliedCharacterStyle = none;
+                rg.clearOverrides();
+                n++;
+            } catch (eA) {}
+        }
+    } catch (e) {}
+    return n;
+}
+
+/**
  * Strip character-level overrides on a paragraph so the just-assigned
  * paragraph style's defaults (e.g. CJK appliedFont) actually take effect.
  *
@@ -2970,6 +3019,7 @@ module.exports = {
     applyEmphasisRunsAsCharStyles: applyEmphasisRunsAsCharStyles,
     applySpaceOverridesToParagraph: applySpaceOverridesToParagraph,
     clearParaCharOverrides: clearParaCharOverrides,
+    clearPipelineEmphasisCharStyles: clearPipelineEmphasisCharStyles,
     clearTranslationStyles: clearTranslationStyles,
     // #27: exported for v2_pipeline second-pass replay after emphasis
     // runs have re-set appliedCharacterStyle (which silently wipes

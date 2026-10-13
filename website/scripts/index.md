@@ -1,80 +1,52 @@
 ---
 title: All scripts
-description: The complete numbered index of every script the indesign-toolkit installer distributes, grouped into the normal workflow path and the tools reached for when needed.
+description: Every script in Creative Script Kit. The numbered InDesign scripts in Scripts panel order and the five Illustrator scripts, each with one line on what it is for and a link to where it is explained.
+# 3.5 Save and Reveal used to be explained on this page; it is now in More
+# tools. An old link to its ids is forwarded there (site.mjs ANCHOR_MOVES).
+anchorMoves:
+  save-and-reveal: /tools/
+  save-and-reveal-details: /tools/
 ---
 
 # All scripts
 
-Everything the installer puts into your Scripts panel, in one list.
+Every script the [installer](/guide/install) puts into InDesign and
+Illustrator, with one line on what it is for and where it is explained.
 
-**Group 1 is the normal path.** Groups 2, 3 and 4 are tools — you open them
-because you have a specific problem, not because it is the next step.
+The numbers group the InDesign scripts by kind; they are not the order you run
+them in. For the order, see [For designers](/folio/designer).
 
-## Group 1 — Workflow
+## InDesign {#indesign}
 
-The normal path. → [Details](/scripts/workflow)
+In the Scripts panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
 
-| # | Script | One line |
+| Script | What it is for | Explained in |
 | --- | --- | --- |
-| `1.1` | [Export Translation Package](/scripts/workflow#export-translation-package) | Exports an offline translation package from the open document — preview PDF, segments, an empty translation template, and the id map. |
-| `1.2` | [Import Translation Package](/scripts/workflow#import-translation-package) | Reads a translated package back into a fresh copy of the source document, applies the style plan, then runs post-flight checks and repair. |
+| **1.1 Export Translation Package** | Export the text of a finished layout as a zip for the translator. | [Export and import](/folio/export-import#what-to-do) |
+| **1.2 Import Translation Package** | Bring the translated zip back into a copy of the layout. | [Export and import](/folio/export-import#what-to-do) |
+| **2.1 Apply Font Pairing** | Pick a matching font for each language and swap them in. | [Make the new language look right](/folio/fonts#apply-font-pairing) |
+| **2.2 Apply CJK Styles** | Give Chinese text Chinese line breaking and typesetting settings. | [Make the new language look right](/folio/fonts#apply-cjk-styles) |
+| **2.3 Set Selection Weight** | Set selected text to a weight, such as bold, in the brand's fonts. | [Make the new language look right](/folio/fonts#set-selection-weight) |
+| **2.4 Reorganize Styles** | Replace hundreds of near-identical paragraph styles with a small set. | [Before you export](/folio/before-export#reorganize-styles) |
+| **2.5 Repair Cluster GREP** | Stop punctuation between Latin words from showing in the Chinese font. | [Make the new language look right](/folio/fonts#repair-cluster-grep) |
+| **2.6 Convert Underline to Rule** | Turn a broken underline under mixed Chinese and Latin text into one unbroken line. | [Make the new language look right](/folio/fonts#convert-underline-to-rule) |
+| **3.1 Snapshot Before Apply** | Record the layout before a big change. Pairs with 3.2. | [Make the new language look right](/folio/fonts#snapshot-before-apply) |
+| **3.2 Repair After Apply** | Repair what the big change disturbed. Pairs with 3.1. | [Make the new language look right](/folio/fonts#repair-after-apply) |
+| **3.3 Relink Missing Links** | Find missing images and other links in the document's folder. | [Before you export](/folio/before-export#relink-missing-links) |
+| **3.4 Highlight Translation Changes** | Mark what changed in the text since the last round. | [Later rounds](/folio/rounds#highlight-translation-changes) |
+| **3.5 Save and Reveal** | Save the document and open its folder. | [More tools](/tools/#save-and-reveal) |
+| **4.1 Export Brand Preset** | Save tuned paragraph-style settings to a file. | [Sister documents](/folio/sister-documents#export-brand-preset) |
+| **4.2 Apply Brand Preset** | Apply those settings to a sister document. | [Sister documents](/folio/sister-documents#apply-brand-preset) |
 
-## Group 2 — Type & Styles
+## Illustrator {#illustrator}
 
-Tools. Not part of the normal path. → [Details](/scripts/type-and-styles)
+In the menu **File → Scripts → illustrator-toolkit-stable**.
 
-| # | Script | One line |
+| Script | What it is for | Explained in |
 | --- | --- | --- |
-| `2.1` | [Apply Font Pairing](/scripts/type-and-styles#apply-font-pairing) | Scans the document's fonts, opens a panel to pick cross-language font pairings, and applies the swaps as direct formatting — no new styles. |
-| `2.2` | [Apply CJK Styles](/scripts/type-and-styles#apply-cjk-styles) | Imports the Simplified Chinese donor paragraph style and its composition settings into the document, after an optional text cleanup pass. |
-| `2.3` | [Set Selection Weight](/scripts/type-and-styles#set-selection-weight) | Sets the selected text to a named weight, taking the concrete font and weight from the brand config, and routing mixed Han + Latin selections per script. |
-| `2.4` | [Reorganize Styles](/scripts/type-and-styles#reorganize-styles) | Clusters every paragraph by its visual fingerprint and rebuilds the document on a small set of generated paragraph styles, in place. |
-| `2.5` | [Repair Cluster GREP](/scripts/type-and-styles#repair-cluster-grep) | Rewrites the nested GREP rules in already-built cluster styles so neutral punctuation stops rendering on the wrong script's font. |
-| `2.6` | [Convert Underline to Rule](/scripts/type-and-styles#convert-underline-to-rule) | Replaces fully-underlined paragraphs' character-level underline with a paragraph rule, so the line stays continuous across CJK and Latin. |
-
-## Group 3 — Check & Repair
-
-Tools. → [Details](/scripts/check-and-repair)
-
-| # | Script | One line |
-| --- | --- | --- |
-| `3.1` | [Snapshot Before Apply](/scripts/check-and-repair#snapshot-before-apply) | Captures a "before" snapshot of every repairable story and expands frames too short to hold CJK text. Pairs with `3.2`. |
-| `3.2` | [Repair After Apply](/scripts/check-and-repair#repair-after-apply) | Reads the snapshot from `3.1`, restores the layout state that the bulk change disturbed, and writes an acceptance report. Pairs with `3.1`. |
-| `3.3` | [Relink Missing Links](/scripts/check-and-repair#relink-missing-links) | Finds broken links by filename anywhere under the document's own folder and relinks them; reports the ones it cannot find instead of guessing. |
-| `3.4` | [Highlight Translation Changes](/scripts/check-and-repair#highlight-translation-changes) | Diffs the text against a saved baseline and marks changed characters with rectangles on a dedicated layer — no text properties touched. |
-| `3.5` | [Save and Reveal](/scripts/check-and-repair#save-and-reveal) | Offers to save the active document if it has unsaved changes, then opens its folder in the system file browser. |
-
-## Group 4 — Brand Presets
-
-Tools. → [Details](/scripts/brand-presets)
-
-| # | Script | One line |
-| --- | --- | --- |
-| `4.1` | [Export Brand Preset](/scripts/brand-presets#export-brand-preset) | Captures the tuned geometry of this document's generated paragraph styles into a brand preset file. Reads the document, never writes to it. |
-| `4.2` | [Apply Brand Preset](/scripts/brand-presets#apply-brand-preset) | Applies a brand preset's geometry onto a sibling document's matching paragraph styles. Never touches fonts. |
-
-## Illustrator
-
-Five tools for Illustrator, installed only if Illustrator is on the machine.
-They appear under **File → Scripts → illustrator-toolkit-stable** and are not
-numbered: they are independent of each other and of the InDesign path, and a
-number would assert an order that does not exist.
-
-| Script | One line |
-| --- | --- |
-| Unembed All Images | Exports every embedded image to a folder and relinks it as an external file; can also remove broken placed items, including locked or hidden ones. |
-| Export Artboard PDFs | Exports each artboard as its own PDF, by duplicating it into a new document first. |
-| Export Small PDF | Exports the current document as a compact PDF, then saves or packages it. |
-| Replace Fonts | A dialog of *from → to* font pairs, applied across the whole document. |
-| CJK Composer and Mojikumi | Switches text to the CJK every-line or single-line composer and, if wanted, applies a Mojikumi and Kinsoku set — on the selection or the whole document. |
-
-::: tip They are ExtendScript, not UXP
-These are `.jsx` files that Illustrator runs directly. Nothing here talks to
-the InDesign scripts, and none of the InDesign scripts talk to these.
-:::
-
-## A note on undo
-
-Most of these scripts wrap their whole run in a single InDesign undo step, so
-one <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> reverts the entire batch rather
-than one edit at a time. Where that is the case, the script's page says so.
+| **Unembed All Images** | Turn embedded images into linked files, or clear out broken links. | [More tools](/tools/#unembed-all-images) |
+| **Export Artboard PDFs** | Save each artboard as its own PDF. | [More tools](/tools/#export-artboard-pdfs) |
+| **Export Small PDF** | Export the smallest PDF, the largest PDF, save and package, in one click. | [More tools](/tools/#export-small-pdf) |
+| **Replace Fonts** | Replace one font by another across a file or a selection. | [More tools](/tools/#replace-fonts) |
+| **CJK Composer and Mojikumi** | Set the CJK composer, Mojikumi and Kinsoku for Chinese or Japanese text. | [More tools](/tools/#cjk-composer-and-mojikumi) |
