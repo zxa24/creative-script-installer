@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://app-folio.local/schemas/project_meta.schema.json",
+  "title": "project_meta",
+  "description": "Project metadata for translation / editing workflows. Lives as loose-file `_meta.json` next to source.indd or in a package folder; later promoted into .txpkg by Phase 10. Canonical SoT (Phase 8D-ext-A0).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "project_name",
+    "source_language",
+    "workflow_mode",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Schema major version. Start at 1. Bumped only on required-field semantic changes.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "project_id": {
+      "description": "Stable id, never changes after first creation. Format: slugify(project_name) + '-' + 16 hex chars (64-bit entropy).",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?-[0-9a-f]{16}$",
+      "minLength": 18,
+      "maxLength": 128
+    },
+    "project_name": {
+      "description": "Human-readable name. Editable.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "source_language": {
+      "description": "BCP 47 tag of source content. Required. Structural validation per BCP 47 layer-1 grammar (separate fixture set).",
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "target_language": {
+      "description": "BCP 47 tag of target content. May be null only when workflow_mode == 'edit-only'. Validated by conditional oneOf below.",
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "workflow_mode": {
+      "description": "Project workflow phase. translation: src→tgt active translation. edit-only: single-lang editing pass. bilingual: parallel two-lang content without active translation pipeline.",
+      "type": "string",
+      "enum": ["translation", "edit-only", "bilingual"]
+    },
+    "created_at": {
+      "description": "ISO 8601 UTC. First-writer fills; never changes.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "description": "ISO 8601 UTC. Updated on every semantic-mutating write (per round-trip rules: skip write when in-memory == disk excluding updated_at).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "contributors": {
+      "description": "Project contributors recorded by ROLE (not a flat owner). Each role maps to a person name or null. Auto-attributed by tool/phase: webui translation work fills contributors.translator (name sourced from the browser convenience store's operator_name); InDesign export fills contributors.designer. Extensible with further roles (e.g. reviewer) later. Editable. Absent or all-null = no recorded contributors. (Phase 8D-ext-A0 roles refactor 2026-06-15, replaces flat assignee per user 2026-06-15: \"web 处理的自动作为译者(translator)，InDesign 导出的自动作为设计师(designer)\".)",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "translator": {
+          "description": "Translator (web/webui handler). Auto-filled from browser convenience store operator_name on webui translation work; null or absent = unrecorded.",
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "designer": {
+          "description": "Designer (InDesign handler). Auto-filled on InDesign export; null or absent = unrecorded.",
+          "type": ["string", "null"],
+          "maxLength": 200
+        }
+      }
+    },
+    "deadline": {
+      "description": "Project deadline, ISO 8601 date (YYYY-MM-DD) or date-time. Editable. null or absent = none. (Phase 8D-ext-A0 field add 2026-06-15.)",
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9:.+Z-]+)?$"
+    }
+  },
+  "oneOf": [
+    {
+      "description": "edit-only allows null target_language",
+      "properties": {
+        "workflow_mode": { "const": "edit-only" }
+      },
+      "required": ["workflow_mode"]
+    },
+    {
+      "description": "translation and bilingual require non-null target_language",
+      "properties": {
+        "workflow_mode": { "enum": ["translation", "bilingual"] },
+        "target_language": { "type": "string" }
+      },
+      "required": ["workflow_mode", "target_language"]
+    }
+  ]
+}

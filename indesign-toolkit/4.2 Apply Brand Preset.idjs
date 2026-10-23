@@ -1,0 +1,270 @@
+"use strict";
+
+/**
+ * apply_brand_style_preset.idjs — 8D-ext-G operator #7 (the APPLY half — the
+ * actual brand-style migration; this CLOSES the export→apply round trip).
+ *
+ * Loads a `brand_style_preset.json` (captured from Doc-1 by
+ * export_brand_style_preset.idjs) and applies its tuned geometry (size /
+ * leading / indents / spacing / justification / composer / color / rules) onto
+ * the active document's matching `_T_p_*` paragraph-style DEFINITIONS — so the
+ * designer's multi-round tuning transfers to a sibling document without redoing
+ * it by hand. FONT-FREE: it never touches appliedFont/fontStyle (baseline ①).
+ *
+ * Discovery mirrors the PINNED cross-operator contract #3 (task_plan.md:2612)
+ * IDENTICALLY by calling the SHARED glue functions the export side wrote files
+ * for — it NEVER recomputes Doc-2's stem:
+ *   (a) automationOptions.presetPath (explicit, headless) → verbatim;
+ *   (b) GLOB `<savedIndDir>/*_brand_style_preset.json` via glue.pickPreset;
+ *   (c) none → "no-preset-found" + clean exit (NOT abort).
+ *
+ * Conflict semantics (per-dimension, task_plan.md:2622-2660):
+ *   - PROTECTED dims (pointSize/leading/indents/keeps/justification/composer):
+ *     per-dim three-state reconciliation off the prior drift stamp's
+ *     applied_values + the creation baseline (in the style's `label`) →
+ *     state-1 live==last-applied → safe update to preset; state-2 live==creation
+ *     → untouched, take preset; state-3 diverged → KEEP-LOCAL + report.
+ *   - ALWAYS-APPLY dims (sB/sA + fillColor + ruleAbove/ruleBelow): no
+ *     reconstructable creation baseline → ALWAYS write the preset value, then
+ *     read-back-verify color/rule via captureColor/captureRule + #1's TOTAL norm
+ *     verdict → applied-OK / applied-FAILED (a binding "Text Color" that the
+ *     resolver returns null for, written over a local explicit, stays local →
+ *     FAILED, reported non-silently). reuse_rate is the HEADLINE (matched-
+ *     distinct-entries ÷ total — a matched entry counts even if a dim is
+ *     kept-local or applied-FAILED); applied_rate / kept_local_count /
+ *     applied_failed_count are DISTINCT coverage sub-indicators so "reuse" is
+ *     never misread as "all transported" (fable r1 gimpl3 P3).
+ *
+ * Entry (CLAUDE.md gate #4): double-click via Scripts Panel wraps the whole file
+ * in an implicit async fn — so `var app = require("indesign").app` (the bridge
+ * auto-injects it; double-click does NOT) + top-level `await main()`, NO IIFE.
+ * Dual entry: bridge (automationOptions) + manual (defaults, no input dialog —
+ * one-click suggestion UI deferred per spec :2722; coverage is a text report).
+ *
+ *   bridge: automationOptions = {
+ *     presetPath: "Z:\\…\\Client-A_brand_style_preset.json",  // GUARANTEED-(a) explicit
+ *     brandName: "Client-A",                  // disambiguates a multi-file glob (tier b)
+ *     docPath: "Z:\\…\\Client-A_Doc2.indd",   // doc to apply TO; default = activeDocument
+ *     presetWins: false                  // run-level: protected-dim conflicts take preset
+ *   }
+ *   manual: active doc → discover at the saved .indd stable anchor → apply.
+ *
+ * Output: applies styles in ONE app.doScript(ENTIRE_SCRIPT) (single undo) under
+ * force-POINTS, writes a drift stamp into the doc (sibling label
+ * `brand_style_preset_state_v1`), and a coverage report log via
+ * lib/script_log_paths.js. Returns the coverage report object.
+ *
+ * ── host-verify-pending (this file CANNOT be Node-tested — needs live InDesign) ──
+ * A host run (InDesign + an exported preset + a pipeline-built Doc-2 with
+ * `_T_p_*` styles) must confirm:
+ *   1. DISCOVERY — glob finds Doc-1's `*_brand_style_preset.json` in Doc-2's
+ *      saved .indd dir by PATTERN (basename ≠ Doc-2 stem); presetPath verbatim;
+ *      empty dir → "no-preset-found" clean exit (no abort).
+ *   2. ROUND-TRIP — tuned size/leading/indents/spacing/justification/composer/
+ *      color/rule transfer Doc-1 → Doc-2 (matched stub geometry == preset);
+ *      reuse rate ≥ 80% across a real same-series pair.
+ *   3. KEEP-LOCAL — a Doc-2 stub with a locally-edited PROTECTED dim (e.g.
+ *      leading 21→20) keeps 20 (state-3), reported; an UNTOUCHED stub takes the
+ *      preset; re-apply after a new rev updates the untouched dim, keeps the
+ *      edited one (per-dim isolation; whole-record hash only fast-paths).
+ *   4. ALWAYS-APPLY read-back — fillColor/rule overwritten every run; an
+ *      explicit color that fails to land → applied-FAILED (not counted); a
+ *      binding "Text Color" preserved → applied-OK; a binding written over a
+ *      local explicit → applied-FAILED (binding not restored).
+ *   5. FORCE-POINTS — on a non-POINTS-prefs doc (viewPreferences MM/INCHES OR a
+ *      leaked scriptPreferences.measurementUnit), numeric writes land POINTS-
+ *      correct (no 72× drift); dual-pin restore leaves prefs untouched after.
+ *   6. DRIFT STAMP — sibling label written; two same-match_key/different-FAMILY
+ *      stubs each keep their own per_style record (LIST, by stub_identity);
+ *      re-apply reconciles each independently (no cross-talk).
+ *   7. SINGLE UNDO — one undo reverts ALL `_T_p_*` geometry to baseline
+ *      (field-level diff = 0; font dims untouched throughout).
+ */
+
+// ── 8D-ext-GI: the apply CORE (load+validate+stamp+collect+applyAll doScript+
+//    coverage) now lives in lib/brand_preset_apply_runner.js so import_integrated
+//    can drive the IDENTICAL apply inline. THIS file is the thin operator shell:
+//    automation read / discovery / doc resolution / coverage-log write / the
+//    automation result up-report — the side-channel the runner deliberately
+//    does NOT own (lib入参 only takes doc + path).
+var indesign = require("indesign");
+var app = (typeof globalThis !== "undefined" && globalThis.app)
+    ? globalThis.app
+    : indesign.app;
+var fs = require("fs");
+
+var glue = require("./lib/brand_preset_export_glue.js");      // #2 — shared discovery/collection
+var aglue = require("./lib/brand_preset_apply_glue.js");      // apply-side pure orchestration
+var Runner = require("./lib/brand_preset_apply_runner.js");   // 8D-ext-GI: apply core
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+
+var AutomationBridge = null;
+try { AutomationBridge = require("./lib/automation_bridge.js"); } catch (e) {}
+
+var SCRIPT_ID = "apply_brand_style_preset";
+
+// ─── log accumulator ────────────────────────────────────────────────
+
+var _logLines = [];
+function plog(m) {
+    var line = "[apply-preset] " + m;
+    _logLines.push(line);
+    try { console.log(line); } catch (e) {}
+}
+
+function _nowIso() { try { return new Date().toISOString(); } catch (e) { return null; } }
+
+// ─── doc resolution (DOM by name, never ===; mirrors export operator) ─
+
+async function _resolveDocByPath(pathStr) {
+    if (!pathStr) return null;
+    var base = String(pathStr).replace(/^.*[\\/]/, "");
+    for (var i = 0; i < app.documents.length; i++) {
+        var d = app.documents.item(i);
+        try { if (String(d.name) === base) return d; } catch (e) {}
+    }
+    try {
+        var uxp = require("uxp");
+        var lfs = uxp.storage.localFileSystem;
+        var url = "file:///" + String(pathStr).replace(/\\/g, "/").replace(/^\/+/, "");
+        var entry = await lfs.getEntryWithUrl(url);
+        return await app.open(entry);
+    } catch (eOpen) {
+        return null;
+    }
+}
+
+// ─── brand-name resolution (SHARED glue; fs injected — gate #3) ───────
+
+function _readJsonSync(p) {
+    var raw = null;
+    try { raw = fs.readFileSync(p, "utf-8"); } catch (e) { return null; }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (eP) { return null; }
+}
+
+// ─── anchor-dir listing for the glob tier (uxp lfs; async, OUTSIDE doScript) ─
+// Returns [{name, mtimeMs}] basenames in `dir`; mtime best-effort (pickPreset
+// falls back to a deterministic lexical pick when mtime is absent).
+async function _listDir(dir) {
+    var out = [];
+    if (!dir) return out;
+    var lfs = null;
+    try { lfs = require("uxp").storage.localFileSystem; } catch (eU) { return out; }
+    if (!lfs) return out;
+    var folder = null;
+    try {
+        var url = "file:///" + String(dir).replace(/\\/g, "/").replace(/^\/+/, "");
+        folder = await lfs.getEntryWithUrl(url);
+    } catch (eF) { return out; }
+    if (!folder || !folder.isFolder) return out;
+    var entries = [];
+    try { entries = await folder.getEntries(); } catch (eE) { return out; }
+    for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (!e || !e.isFile) continue;
+        var mtime = null;
+        try { var meta = await e.getMetadata(); if (meta && meta.dateModified) mtime = meta.dateModified.getTime(); } catch (eM) {}
+        out.push({ name: String(e.name), mtimeMs: mtime });
+    }
+    return out;
+}
+
+// (drift-stamp helpers, live payload read, per-dim writes + always-apply
+//  read-back verdicts → moved to lib/brand_preset_apply_runner.js, 8D-ext-GI.)
+
+// ─── main ─────────────────────────────────────────────────────────────
+
+async function main() {
+    var opts = null;
+    if (AutomationBridge) {
+        try { opts = await AutomationBridge.readAutomationOptions(SCRIPT_ID); }
+        catch (e) { opts = null; }
+    }
+    opts = opts || {};
+    var presetWins = !!opts.presetWins;
+
+    // 1. resolve doc (by name, never ===)
+    var doc = null;
+    if (opts.docPath) { doc = await _resolveDocByPath(opts.docPath); }
+    if (!doc) { try { doc = app.activeDocument; } catch (eA) {} }
+    if (!doc) {
+        var noDoc = aglue.buildCoverageReport({ ok: false, reason: "no active document", pathSource: "none" });
+        plog("ABORT: no active document");
+        await _finish(noDoc, "");
+        return noDoc;
+    }
+    var docName = ""; try { docName = String(doc.name); } catch (eN) {}
+
+    // 2. resolve anchor dir OUTSIDE the doScript (doc.fullName is a Promise — gate #3)
+    var nativePath = null;
+    try {
+        var fn = await doc.fullName;
+        if (fn && fn.nativePath) nativePath = String(fn.nativePath);
+    } catch (eFN) { nativePath = null; }
+    var docDir = glue.dirOf(nativePath);
+
+    // 3. DISCOVERY (pinned contract #3) — presetPath → glob via shared pickPreset.
+    var brandName = glue.resolveBrandName(docDir, docName, _readJsonSync, opts.brandName);
+    var brandSlug = glue.slugify(brandName);
+    var listing = opts.presetPath ? [] : await _listDir(docDir);
+    var disc = aglue.resolveDiscovery({
+        explicitPresetPath: opts.presetPath,
+        dir: docDir,
+        listing: listing,
+        brandSlug: brandSlug
+    });
+    if (!disc.ok) {
+        // no-preset-found / unsaved-no-anchor → clean exit, NOT abort.
+        var noPreset = aglue.buildCoverageReport({
+            ok: true, reason: disc.error || ("no-preset-found: " + (disc.diagnostic || "discovery empty")),
+            pathSource: "none", discoveryDiagnostic: disc.diagnostic || disc.error || null
+        });
+        plog("DISCOVERY: " + (disc.error || ("no-preset-found (" + (disc.diagnostic || "empty") + ")")));
+        await _finish(noPreset, docDir);
+        return noPreset;
+    }
+    var presetPath = disc.path;
+    if (disc.ambiguous) plog("DISCOVERY ambiguous: " + disc.diagnostic);
+    plog("doc=" + docName + " preset=" + presetPath + " (" + disc.source + ") brand=" + (brandName || "(none)"));
+
+    // 4-8. LOAD + validate + index + stamp + collect + applyAll doScript +
+    //      coverage → all in the SHARED runner (8D-ext-GI). Side-channel (log
+    //      write + automation up-report) stays here in _finish; the runner takes
+    //      only doc + path (+ discovery metadata for the report).
+    var report = Runner.applyBrandStylePresetToDoc(doc, {
+        presetPath: presetPath,
+        presetWins: presetWins,
+        log: plog,
+        pathSource: disc.source,
+        discoveryAmbiguous: disc.ambiguous,
+        discoveryDiagnostic: disc.diagnostic
+    });
+    await _finish(report, docDir);
+    return report;
+}
+
+
+// log + automation result, best-effort.
+async function _finish(report, docDir) {
+    report.ts = report.ts || _nowIso();
+    try {
+        await ScriptLogPaths.ensureLogDirAsync(docDir);
+        var logPath = ScriptLogPaths.resolveLogPath(docDir, SCRIPT_ID);
+        var body = _logLines.join("\n") + "\n\n=== COVERAGE REPORT ===\n" + JSON.stringify(report, null, 2) + "\n";
+        fs.writeFileSync(logPath, body, "utf-8");
+        report.log_path = logPath;
+    } catch (eLog) {
+        report.log_error = String(eLog && eLog.message || eLog);
+    }
+    if (AutomationBridge && AutomationBridge.isAutomatedRun && AutomationBridge.isAutomatedRun(SCRIPT_ID)
+        && AutomationBridge.recordAutomationResult) {
+        try { await AutomationBridge.recordAutomationResult(SCRIPT_ID, { ok: !!report.ok, summary: report }); }
+        catch (eAR) {}
+    }
+}
+
+var __result = null;
+try { __result = await main(); }
+catch (eTop) { __result = { ok: false, fatal: String(eTop && (eTop.stack || eTop.message) || eTop) }; }
+module.exports = __result;

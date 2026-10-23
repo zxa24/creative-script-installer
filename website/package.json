@@ -1,0 +1,15 @@
+{
+  "name": "indesign-toolkit-website",
+  "private": true,
+  "type": "module",
+  "description": "Documentation site for the indesign-toolkit InDesign translation/localization scripts.",
+  "scripts": {
+    "llms": "node .vitepress/gen-llms.mjs",
+    "dev": "node .vitepress/gen-llms.mjs && vitepress dev .",
+    "build": "node .vitepress/gen-llms.mjs && vitepress build .",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

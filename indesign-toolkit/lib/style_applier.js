@@ -1,0 +1,3921 @@
+"use strict";
+
+/**
+ * lib/style_applier.js
+ *
+ * Phase 3 MVP — apply style sheet to paragraphs + cleanup
+ *
+ * Plan reference:
+ *   task_plan.md "Phase 3: Import 端逐段套样式"
+ *
+ * Two main entry points:
+ *
+ *   applyClusterStyleToParagraph(para, sheet, locateResult, plan, deps)
+ *     For ONE locate result whose para is non-null:
+ *     - look up the matching _T_p_* style by paragraph fingerprint
+ *     - assign para.appliedParagraphStyle
+ *     Does NOT write text (caller does para.contents = target).
+ *     Does NOT apply annotations[] (caller calls applyAnnotationsToRange).
+ *     Returns {applied: bool, paraStyleName?, reason?}
+ *
+ *   applyAnnotationsToParagraph(para, annotations, sheet, deps)
+ *     Apply translations.annotations[] (TODO #1 format) to a paragraph.
+ *     For each annotation, JIT create _T_c_annotation_* via
+ *     ensureAnnotationCharStyle and apply via characters.itemByRange.
+ *     Translator-coordinate offsets — no source run offset hack.
+ *     Returns [{ann, applied: bool, charStyleName?, reason?}, ...]
+ *
+ *   clearTranslationStyles(workDoc, options, deps)
+ *     C15 / E5c undo tool: remove all _T_*-prefixed styles. Paragraphs
+ *     that referenced removed styles fall back to options.fallbackStyle
+ *     (default: [Basic Paragraph]).
+ *     Returns {removedParaStyles: [...names], removedCharStyles: [...names],
+ *              paragraphsReset: N}
+ *
+ * UXP / ExtendScript compatibility:
+ *   - Pure module + deps injection
+ *   - var only, no ES6+
+ *   - deps:
+ *       ensureAnnotationCharStyle  — from lib/style_sheet_builder.js
+ *       fingerprintParagraph       — from lib/style_sheet_builder.js
+ *       (both passed in, not require'd, to keep this lib decoupled)
+ */
+
+// fix-faux-latin-italic: shared script-aware italic applier (CJK→faux skew,
+// Latin-with-real-italic→real italic). Pure-at-load leaf, safe to require here.
+var ItalicApply = require("./italic_apply.js");
+var FontItalicProbe = require("./font_italic_probe.js");   // univ-italic: weight-exact italic probe (OQ-2)
+var ItalicConfig = require("./italic_config.js");          // univ-italic: per-weight italic HOW config
+var AutoFormatGate = require("./auto_format_gate.js");
+
+// emphasis→combined-char-style refactor (SPEC §14): the new
+// applyEmphasisRunsAsCharStyles helper reuses pure-leaf splitter +
+// style_sheet_builder font/props helpers (via its _internal namespace).
+// Both are pure-at-load leaves, safe to require here (style_applier already
+// requires italic_apply; cross-lib require has precedent).
+var ScriptSplit = require("./script_split.js");
+var SSB = require("./style_sheet_builder.js");
+var EmphRel = require("./emphasis_relations.js");   // #ac-emphasis-relations: the one emphasis-weight rule
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function _getCollectionItem(coll, idx) {
+    if (!coll) return null;
+    if (typeof coll.item === "function") return coll.item(idx);
+    return coll[idx];
+}
+
+// ─── applyClusterStyleToParagraph ─────────────────────────────────
+
+/**
+ * Apply the matching _T_p_* style to a single paragraph.
+ *
+ * @param {Paragraph} para — workDoc Paragraph (must be non-null; caller filtered)
+ * @param {Object} sheet — return value of commitStylePlan
+ * @param {Object} locateResult — single LocateResult from segment_locator
+ * @param {Object} plan — the StylePlan that produced the sheet
+ * @param {Object} deps — { fingerprintParagraph } from style_sheet_builder
+ * @returns {Object} {applied, paraStyleName?, reason?}
+ */
+function applyClusterStyleToParagraph(para, sheet, locateResult, plan, deps, opts) {
+    if (!para) return { applied: false, reason: "para_null" };
+    if (!sheet || !sheet.paraStyleMap) return { applied: false, reason: "no_paraStyleMap" };
+    if (!locateResult || !locateResult.seg) return { applied: false, reason: "no_locateResult" };
+    if (!deps || typeof deps.fingerprintParagraph !== "function") {
+        return { applied: false, reason: "missing_fingerprint_dep" };
+    }
+    opts = opts || {};
+
+    var seg = locateResult.seg;
+    if (!seg.format_snapshot || !seg.paragraph_snapshot) {
+        return { applied: false, reason: "missing_snapshots" };
+    }
+
+    var fp;
+    try {
+        // Use plan's fingerprint config so apply-time hashes match build-time
+        // hashes when caller restricted dimensions (e.g. only font/size/color).
+        var fpOpts = (plan && plan.fingerprintOpts) || { tolerance: undefined, dimensions: null };
+        fp = deps.fingerprintParagraph(seg.paragraph_snapshot, seg.format_snapshot.baseline, fpOpts.tolerance, fpOpts.dimensions);
+        // #28: when splitMasterFromBody is enabled, the build-time cluster
+        // keys are prefixed with "M:" or "B:" based on seg.is_master.
+        // Apply must prepend the same prefix so paraStyleMap lookup hits.
+        if (fp && fpOpts.splitMasterFromBody) {
+            fp = (seg.is_master ? "M:" : "B:") + fp;
+        }
+    } catch (e) {
+        return { applied: false, reason: "fingerprint_failed: " + e.message };
+    }
+
+    var paraStyleObj = sheet.paraStyleMap[fp];
+    if (!paraStyleObj) {
+        return { applied: false, reason: "no_para_style_match", fingerprint: fp };
+    }
+
+    try {
+        para.appliedParagraphStyle = paraStyleObj;
+    } catch (e) {
+        return { applied: false, reason: "appliedParagraphStyle_failed: " + e.message };
+    }
+
+    // Cascade normalization (opts.normalizeCascade — used by reorganize):
+    // After assigning the new paragraph style, the source paragraph may
+    // still have an applied character style (e.g. "Character Style 1") and
+    // direct character overrides (font/size/color) layered on top. These
+    // can leak through and contradict the new style — the canonical case
+    // is the master-page "client-b.example" issue where Character Style 1's
+    // 13pt Black + cleared direct overrides made text become 13pt black
+    // even though the new style defined 10pt Paper.
+    //
+    // Since the new style was BUILT from the captured visual (already the
+    // resolved cascade output), normalizing chars to "[None]" + clearing
+    // direct overrides yields a paragraph whose visual exactly matches
+    // what was captured.
+    //
+    // Phase 8B: a uniform=false paragraph that was processed by
+    // applyEmphasisExtraction now carries `emphasisRuns` describing the
+    // per-character overrides that need to be restored AFTER cascade
+    // normalize via applyEmphasisRunsToParagraph. So normalize is safe
+    // when:
+    //   - uniform === true (the only-pre-8B case), OR
+    //   - emphasisRuns exists  (8B promoted overrides into char styles)
+    // The remaining "uniform=false without emphasisRuns" branch is the
+    // legacy-capture / failed-extraction case — keep the runs as-is.
+    var fs = seg.format_snapshot;
+    var canNormalize = !!opts.normalizeCascade && fs && (fs.uniform !== false || (fs.emphasisRuns !== undefined));
+    var preserveStats = { captured: 0, restored: 0, failed: [] };
+    var directOverrideStats = { captured: 0, restored: 0, failed: [] };
+    if (canNormalize) {
+        // Designer-applied character styles (anything NOT prefixed with `_T_`
+        // and NOT `[None]`) MUST be preserved across normalize. The extractor
+        // (lib/emphasis_extractor.js _isSelfMarkedHint) deliberately skips
+        // these ranges so they're "preserve as-is" — which means our normalize
+        // wipe followed by emphasisRuns re-apply would otherwise clobber them
+        // (the runs only describe pipeline-managed _T_c_*, not designer
+        // styles). Snapshot ranges before wipe + restore after.
+        var preservedRanges = _captureDesignerCharStyleRanges(para);
+        preserveStats.captured = preservedRanges.length;
+
+        // #27: ALSO capture direct character overrides (capitalization /
+        // fillColor / pointSize) before normalize wipes them. The cluster
+        // pipeline doesn't carry these properties in fingerprintDimensions
+        // → they fall through normalize+apply with no replacement. Without
+        // this capture: ALL_CAPS char overrides on `[None]`-styled chars
+        // become NORMAL after apply (lost the visual all-caps), and Paper
+        // fillColor overrides on top of designer char styles fall back to
+        // the char style's defined Black (lost the white-on-dark link).
+        // See DEV_LOG fix #27 for the bottom-strip + client-b.example cases.
+        var directOverrideRanges = _captureDirectCharOverrideRanges(para);
+        directOverrideStats.captured = directOverrideRanges.length;
+
+        try {
+            var doc = null;
+            try { doc = para.parentStory.parent; } catch (eDoc) {}
+            if (doc) {
+                var noneCS = null;
+                try { noneCS = doc.characterStyles.itemByName("[None]"); } catch (eCS) {}
+                if (noneCS && noneCS.isValid) {
+                    try { para.texts.everyItem().appliedCharacterStyle = noneCS; } catch (eAcs) {}
+                }
+            }
+        } catch (eNorm1) {}
+        try { para.texts.everyItem().clearOverrides(); } catch (eNorm2) {}
+
+        // Restore designer ranges. Done AFTER clearOverrides so the
+        // re-applied char style wins (clearOverrides also strips a freshly
+        // assigned char style, hence the ordering).
+        var restoreResult = _restoreDesignerCharStyleRanges(para, preservedRanges);
+        preserveStats.restored = restoreResult.restored;
+        preserveStats.failed = restoreResult.failed;
+
+        // #27: replay direct char overrides AFTER designer char styles are
+        // restored. Order matters because assigning a char style itself
+        // resets per-char direct overrides on that range; replaying the
+        // overrides last makes them stick. Note these are stamped as
+        // character-level overrides on top of whatever char style the
+        // restore just set (or [None]) — InDesign treats them as design-
+        // intentional rather than auto-managed.
+        var directRestoreResult = _restoreDirectCharOverrideRanges(para, directOverrideRanges);
+        directOverrideStats.restored = directRestoreResult.restored;
+        directOverrideStats.failed = directRestoreResult.failed;
+    }
+    // Note: caller may also call clearParaCharOverrides() AFTER content
+    // rewrite (translation pipeline path) — same goal, different timing.
+
+    return {
+        applied: true,
+        paraStyleName: paraStyleObj.name,
+        designerCharStylesPreserved: preserveStats.captured,
+        designerCharStylesRestored: preserveStats.restored,
+        designerCharStylesFailed: preserveStats.failed,
+        directOverridesPreserved: directOverrideStats.captured,
+        directOverridesRestored: directOverrideStats.restored,
+        directOverridesFailed: directOverrideStats.failed,
+        // #27: surface captured override ranges so the caller (v2_pipeline)
+        // can re-apply them AFTER applyEmphasisRunsToParagraph, which sets
+        // appliedCharacterStyle on subranges and thereby resets the direct
+        // overrides we just restored. Without this second-pass replay,
+        // emp char styles silently wipe ALL_CAPS / Paper / pointSize.
+        directOverrideRanges: (canNormalize ? directOverrideRanges : null)
+    };
+}
+
+// Walk a paragraph and group consecutive characters by their applied
+// character-style name. Yields ranges only for non-pipeline names, i.e.
+// skip `[None]` and any `_T_*` (those are pipeline-managed and will be
+// re-set by applyEmphasisRunsToParagraph or by normalize itself).
+//
+// Returns: [{startOffset, endOffset, styleName, styleRef}, ...]
+//   - offsets are paragraph-relative (0..para.characters.length-1, inclusive)
+//   - styleRef captured at scan time so later restore avoids itemByName lookup
+function _captureDesignerCharStyleRanges(para) {
+    var out = [];
+    if (!para) return out;
+    var chars;
+    try { chars = para.characters; } catch (e) { return out; }
+    var n;
+    try { n = chars.length; } catch (e) { return out; }
+    if (!n) return out;
+
+    var run = null;  // { start, end, name, ref }
+    for (var i = 0; i < n; i++) {
+        var name = "";
+        var ref = null;
+        try {
+            ref = chars.item(i).appliedCharacterStyle;
+            name = String(ref && ref.name);
+        } catch (eC) { name = ""; }
+
+        var keep = name && name !== "[None]" && name.indexOf("_T_") !== 0;
+        if (run && keep && name === run.name) {
+            run.end = i;
+            continue;
+        }
+        if (run) { out.push(run); run = null; }
+        if (keep) {
+            run = { start: i, end: i, name: name, ref: ref };
+        }
+    }
+    if (run) out.push(run);
+    return out;
+}
+
+// Re-apply each captured designer range to the paragraph. Uses
+// itemByRange on para.characters with the saved offsets. Failures are
+// captured per-range so the caller can surface them (they indicate
+// data loss, not a benign warning).
+function _restoreDesignerCharStyleRanges(para, ranges) {
+    var stats = { restored: 0, failed: [] };
+    if (!para || !ranges || !ranges.length) return stats;
+    for (var i = 0; i < ranges.length; i++) {
+        var r = ranges[i];
+        if (!r || !r.ref) {
+            stats.failed.push({ start: r ? r.start : -1, end: r ? r.end : -1, styleName: r ? r.name : "", reason: "no_ref" });
+            continue;
+        }
+        try {
+            var range = para.characters.itemByRange(r.start, r.end);
+            range.appliedCharacterStyle = r.ref;
+            stats.restored++;
+        } catch (e) {
+            stats.failed.push({ start: r.start, end: r.end, styleName: r.name, reason: (e && e.message) || String(e) });
+        }
+    }
+    return stats;
+}
+
+// #27: Capture direct character-level overrides for properties the
+// cluster pipeline doesn't carry through (fingerprintDimensions misses
+// these; normalize wipes them; apply doesn't restore them).
+//
+// Properties tracked:
+//   - capitalization  (NORMAL / ALL_CAPS / SMALL_CAPS / CAP_TO_SMALL_CAPS)
+//   - fillColor       (Swatch ref — captured by reference so post-apply
+//                      doesn't have to itemByName)
+//   - pointSize       (Number — char-level size override on top of para)
+//
+// Group consecutive characters sharing the same {capitalization,
+// fillColorId, pointSize} into one run. Ranges of "everything default"
+// (NORMAL caps + para-style fillColor + para-style pointSize) are
+// emitted too, but the restore is a no-op-equivalent (re-stamps same
+// values) — cheap and safe. Returns [{ start, end, capitalization,
+// fillColorRef, pointSize }, ...].
+function _captureDirectCharOverrideRanges(para) {
+    var out = [];
+    if (!para) return out;
+    var chars;
+    try { chars = para.characters; } catch (e) { return out; }
+    var n;
+    try { n = chars.length; } catch (e) { return out; }
+    if (!n) return out;
+
+    function _read(i) {
+        var caps = "", fcRef = null, fcId = "", pt = null;
+        var ch = chars.item(i);
+        try { caps = String(ch.capitalization); } catch (eCp) {}
+        try {
+            fcRef = ch.fillColor;
+            if (fcRef && fcRef.isValid) {
+                try { fcId = String(fcRef.id); } catch (eFid) { fcId = String(fcRef.name || ""); }
+            }
+        } catch (eFc) {}
+        try { pt = ch.pointSize; } catch (ePt) {}
+        return { caps: caps, fcRef: fcRef, fcId: fcId, pt: pt };
+    }
+
+    var run = null;
+    for (var i = 0; i < n; i++) {
+        var v = _read(i);
+        var sigSame = run && run.caps === v.caps && run.fcId === v.fcId && run.pt === v.pt;
+        if (sigSame) {
+            run.end = i;
+            continue;
+        }
+        if (run) out.push(run);
+        run = { start: i, end: i, caps: v.caps, fcRef: v.fcRef, fcId: v.fcId, pt: v.pt };
+    }
+    if (run) out.push(run);
+    return out;
+}
+
+// Re-apply captured direct char overrides AFTER normalize+apply (and
+// AFTER designer char styles are restored, since assigning a char
+// style resets character-level overrides on that range — replaying
+// last makes overrides stick).
+//
+// Each property is set independently so a single failure (e.g.
+// fillColor swatch became invalid) doesn't block the other two.
+//
+// Capitalization caveat: InDesign's `capitalization` property is a
+// Capitalization enum, not a string. Setting `range.capitalization =
+// "ALL_CAPS"` is silently rejected (or coerces to NORMAL) in UXP —
+// the property writer requires the actual enum value. We resolve the
+// enum lazily through `require("indesign").Capitalization`, falling
+// back to a string assignment for environments where the require
+// returns nothing (test harness mocks).
+var _CapitalizationEnum = null;
+function _resolveCapitalizationEnum() {
+    if (_CapitalizationEnum) return _CapitalizationEnum;
+    try {
+        var idsn = require("indesign");
+        if (idsn && idsn.Capitalization) { _CapitalizationEnum = idsn.Capitalization; return _CapitalizationEnum; }
+    } catch (e) {}
+    // Some UXP runtimes expose enums via app properties or globals
+    try { if (typeof Capitalization !== "undefined" && Capitalization) { _CapitalizationEnum = Capitalization; return _CapitalizationEnum; } } catch (eG) {}
+    return null;
+}
+
+function _restoreDirectCharOverrideRanges(para, ranges) {
+    var stats = { restored: 0, failed: [] };
+    if (!para || !ranges || !ranges.length) return stats;
+    var capsEnum = _resolveCapitalizationEnum();
+    for (var i = 0; i < ranges.length; i++) {
+        var r = ranges[i];
+        if (!r) continue;
+        var range = null;
+        try { range = para.characters.itemByRange(r.start, r.end); }
+        catch (eIB) {
+            stats.failed.push({ start: r.start, end: r.end, reason: "itemByRange:" + ((eIB && eIB.message) || String(eIB)) });
+            continue;
+        }
+        var anyOk = false;
+        var fails = [];
+        if (r.caps) {
+            // Resolve the enum value dynamically — the captured string
+            // looks like "ALL_CAPS" / "NORMAL" / "SMALL_CAPS" /
+            // "CAP_TO_SMALL_CAPS" and maps directly to enum keys.
+            try {
+                var enumVal = (capsEnum && capsEnum[r.caps]);
+                if (enumVal !== undefined && enumVal !== null) {
+                    range.capitalization = enumVal;
+                    anyOk = true;
+                } else {
+                    // Fallback: try string assignment (works in some test mocks)
+                    range.capitalization = r.caps;
+                    anyOk = true;
+                }
+            } catch (eC) { fails.push("caps:" + ((eC && eC.message) || String(eC))); }
+        }
+        if (r.fcRef) {
+            try {
+                if (r.fcRef.isValid) { range.fillColor = r.fcRef; anyOk = true; }
+            } catch (eF) { fails.push("fillColor:" + ((eF && eF.message) || String(eF))); }
+        }
+        if (r.pt !== null && r.pt !== undefined) {
+            try { range.pointSize = r.pt; anyOk = true; }
+            catch (ePt) { fails.push("pointSize:" + ((ePt && ePt.message) || String(ePt))); }
+        }
+        if (anyOk) { stats.restored++; }
+        if (fails.length) {
+            stats.failed.push({ start: r.start, end: r.end, reason: fails.join("; ") });
+        }
+    }
+    return stats;
+}
+
+/**
+ * Reset the PIPELINE's own emphasis char styles (`_T_c_emp*`) in a paragraph to
+ * [None] + clear the overrides on exactly those ranges. Designer char styles are
+ * left alone (same intent as normalizeCascade's designer-range preservation).
+ *
+ * Why (task_plan #ac-import-hardening P3, measured 2026-09-26 on a DocX-2 TC copy):
+ * a rewritten paragraph inherits the OLD text's char styles BY CHARACTER POSITION,
+ * and clearOverrides() does not touch char styles — so when the package states the
+ * target emphasis explicitly, old _T_c_emp runs survive at stale offsets (an
+ * inserted "X" came out Dax Pro Bold; 「居」 came out Xbold). Setting [None] alone
+ * keeps the old look as local overrides (findings none-char-style-keeps-look-as-
+ * overrides) ⇒ clearOverrides on the same range.
+ *
+ * Call AFTER the text write and BEFORE annotations are applied (they are direct
+ * overrides and would be wiped — audit 2026-09-26). Ranges are addressed relative
+ * to the paragraph with DOM character counts (story indices break in table cells;
+ * String(contents).length breaks on special characters / surrogate pairs).
+ * Returns how many ranges were reset.
+ */
+// D3b (owner 2026-10-01 ①A: rewritten paragraphs keep their paragraph formatting).
+// `textRange.clearOverrides()` with NO argument is OverrideType.ALL, and on a range of
+// characters it ALSO resets the PARAGRAPH's own overrides. Host probe 2026-10-01 (DocX-1
+// Product-6 phone paragraph, style 0/9, paragraph 0.06/18): no argument ⇒ 0/9;
+// CHARACTER_ONLY ⇒ 0.06/18 kept. Every character-level clear goes through here.
+// `OT` is injectable for Node tests; without an OverrideType (Node) it falls back to the
+// plain call, exactly like source_format_restore_host's _overrideCharOnly.
+function _clearCharOverrides(range, OT) {
+    var ot = OT;
+    if (!ot) { try { ot = require("indesign").OverrideType; } catch (e) { ot = null; } }
+    if (ot && ot.CHARACTER_ONLY !== undefined) return range.clearOverrides(ot.CHARACTER_ONLY);
+    return range.clearOverrides();
+}
+
+function clearPipelineEmphasisCharStyles(para) {
+    var n = 0;
+    try {
+        var doc = para.parentStory.parent;
+        var none = doc.characterStyles.itemByName("[None]");
+        if (!none || !none.isValid) return 0;
+        var paraStart = para.index;
+        var rs = para.textStyleRanges.everyItem().getElements(), spans = [];
+        for (var i = 0; i < rs.length; i++) {
+            var nm = "";
+            try { nm = String(rs[i].appliedCharacterStyle.name); } catch (eN) { nm = ""; }
+            if (nm.indexOf("_T_c_emp") !== 0) continue;
+            try {
+                var len = rs[i].characters.length;
+                if (len > 0) spans.push([rs[i].index - paraStart, rs[i].index - paraStart + len - 1]);
+            } catch (eI) {}
+        }
+        // Collect first, then act: resetting a range re-splits the collection.
+        for (var j = 0; j < spans.length; j++) {
+            try {
+                var rg = para.characters.itemByRange(spans[j][0], spans[j][1]);
+                rg.appliedCharacterStyle = none;
+                _clearCharOverrides(rg);   // D3b: never the paragraph's own overrides
+                n++;
+            } catch (eA) {}
+        }
+    } catch (e) {}
+    return n;
+}
+
+/**
+ * Strip character-level overrides on a paragraph so the just-assigned
+ * paragraph style's defaults (e.g. CJK appliedFont) actually take effect.
+ *
+ * Without this, source content's Latin font sticks on the new characters
+ * via inherit-from-prior-run semantics → CJK chars render as tofu and
+ * the line never breaks correctly (frame goes overset).
+ *
+ * Uses para.texts.everyItem().clearOverrides() rather than
+ * para.clearOverrides() — the para-level call accepts an OverrideType
+ * argument that requires an enum, while the text-collection call
+ * unconditionally clears character overrides.
+ */
+function clearParaCharOverrides(para) {
+    if (!para) return false;
+    try {
+        var texts = para.texts;
+        if (texts && texts.length > 0) {
+            texts.everyItem().clearOverrides();
+            return true;
+        }
+    } catch (e) {}
+    // Fallback: per-character clear (slow but reliable)
+    try {
+        var chars = para.characters;
+        for (var i = 0; i < chars.length; i++) {
+            try { chars.item(i).clearOverrides(); } catch (eC) {}
+        }
+        return true;
+    } catch (e2) {}
+    return false;
+}
+
+// ─── applyAnnotationsToParagraph ──────────────────────────────────
+
+/**
+ * Apply translations.annotations[] to a paragraph. annotation.offset/length
+ * are in TARGET text coordinates (per TODO #1 design).
+ *
+ * @param {Paragraph} para — workDoc Paragraph (already has target text written)
+ * @param {Array} annotations — array of {type, action, offset, length, value?}
+ * @param {Document} workDoc — needed for ensureAnnotationCharStyle
+ * @param {Object} sheet — return value of commitStylePlan
+ * @param {Object} deps — { ensureAnnotationCharStyle, [colorSpace, position] }
+ * @returns {Array} per-annotation result objects
+ */
+function applyAnnotationsToParagraph(para, annotations, workDoc, sheet, deps) {
+    if (!annotations || annotations.length === 0) return [];
+    if (!deps || typeof deps.ensureAnnotationCharStyle !== "function") {
+        throw new Error("applyAnnotationsToParagraph: deps.ensureAnnotationCharStyle required");
+    }
+
+    var results = [];
+    var paraCharCount;
+    try { paraCharCount = para.characters.length; } catch (e) { paraCharCount = 0; }
+
+    for (var i = 0; i < annotations.length; i++) {
+        var ann = annotations[i];
+        // Cross-repo policy gate: AI / heuristic annotations (ann._auto ===
+        // true) are NOT translator-confirmed → never applied. The webapp
+        // markers path projects marker-derived emphasis onto annotations[]
+        // with _auto:true expecting the import pipeline to drop them. This is
+        // the single chokepoint for the main annotation-apply path; the two
+        // doc-wide passes (BRIDGE-39 / BRIDGE-41) gate via the same predicate.
+        // See lib/auto_format_gate.js + CLAUDE.md「跨仓政策」.
+        if (AutoFormatGate.isAutoAnnotation(ann)) {
+            results.push({ ann: ann, applied: false, reason: "auto_skipped" });
+            continue;
+        }
+        if (!ann || ann.type !== "format") {
+            results.push({ ann: ann, applied: false, reason: "not_format_annotation" });
+            continue;
+        }
+        // TODO#15 B2: cross-repo no-auto-propagation policy. Annotations the
+        // translator did NOT manually mark carry `_auto: true` (an AI/heuristic
+        // echo of the SOURCE format). Treat them as unset — the SAME gate the
+        // emphasis path applies via `target_emphasis_runs_auto` (v2_pipeline.js
+        // :683). Without this, an `_auto` size/format annotation leaks past the
+        // policy (it was only ever "saved" by the size action being unimplemented;
+        // once B1 makes size apply, an `_auto` size would WRONGLY override). The
+        // per-annotation `_auto` field was previously never read anywhere.
+        if (ann._auto === true) {
+            results.push({ ann: ann, applied: false, reason: "auto_skipped" });
+            continue;
+        }
+        if (typeof ann.offset !== "number" || typeof ann.length !== "number") {
+            results.push({ ann: ann, applied: false, reason: "invalid_offset_length" });
+            continue;
+        }
+        if (ann.length <= 0) {
+            results.push({ ann: ann, applied: false, reason: "zero_length" });
+            continue;
+        }
+        // Bound-check: offset must be within paragraph
+        if (ann.offset < 0 || ann.offset >= paraCharCount) {
+            results.push({
+                ann: ann,
+                applied: false,
+                reason: "offset_out_of_range",
+                offset: ann.offset,
+                paraCharCount: paraCharCount
+            });
+            continue;
+        }
+        // Truncate range to paragraph length (translator may have miscounted)
+        var safeEnd = Math.min(ann.offset + ann.length, paraCharCount);
+        if (safeEnd <= ann.offset) {
+            results.push({ ann: ann, applied: false, reason: "empty_safe_range" });
+            continue;
+        }
+
+        // #33 (G1 import-side): "link" annotations from webapp are
+        // doc-level Hyperlink objects, NOT character styles. Resolve
+        // the text range, find / create a URL destination, create
+        // HyperlinkTextSource + Hyperlink at that range. Skip the
+        // ensureAnnotationCharStyle path entirely for this action.
+        if (ann.action === "link") {
+            var url = (ann.url || "").trim();
+            if (!url) {
+                results.push({ ann: ann, applied: false, reason: "link_missing_url" });
+                continue;
+            }
+            var lnkRange = null;
+            try { lnkRange = para.characters.itemByRange(ann.offset, safeEnd - 1); }
+            catch (eLR) {}
+            if (!lnkRange) {
+                results.push({ ann: ann, applied: false, reason: "link_range_failed" });
+                continue;
+            }
+            // Find / create URL destination (idempotent by URL string).
+            var destObj = null;
+            try {
+                var dests = workDoc.hyperlinkURLDestinations;
+                for (var __di = 0; __di < dests.length; __di++) {
+                    try {
+                        var dCand = dests.item(__di);
+                        if (String(dCand.destinationURL) === url) { destObj = dCand; break; }
+                    } catch (eDi) {}
+                }
+                if (!destObj) {
+                    destObj = workDoc.hyperlinkURLDestinations.add({
+                        destinationURL: url,
+                        name: "_T_HL_dest_" + ((Date.now() + i) >>> 0)
+                    });
+                }
+            } catch (eD) {
+                results.push({ ann: ann, applied: false, reason: "link_dest_failed: " + (eD && eD.message ? eD.message : eD) });
+                continue;
+            }
+            // Create source + hyperlink. Wrap each in its own try so we can
+            // surface which step failed (range vs source vs link) for the
+            // partial-failure summary.
+            //
+            // #E2E-9 idempotency: when the source doc already carries a
+            // Hyperlink whose source covers (a superset of) our intended
+            // range with the same URL, InDesign refuses
+            // `hyperlinkTextSources.add(lnkRange)` with "The object you have
+            // chosen is already in use by another hyperlink." This happens
+            // on identity translations and on incremental re-imports where
+            // a prior pass already created the hyperlink. Detect it and
+            // reuse the existing source instead of failing the annotation.
+            var srcObj = null;
+            var reusedExisting = false;
+            try {
+                srcObj = workDoc.hyperlinkTextSources.add(lnkRange, {
+                    name: "_T_HL_src_" + ((Date.now() + i) >>> 0)
+                });
+            } catch (eS) {
+                // Try to find an existing HyperlinkTextSource overlapping
+                // lnkRange with a matching URL. If found, reuse it (treat
+                // the annotation as already applied — no Hyperlink needs
+                // to be re-created).
+                var existingHl = null;
+                try {
+                    // #E2E-9b: Derive range bounds directly from para start +
+                    // annotation offset/length. The earlier approach used
+                    // `lnkRange.characters.length` which silently returns 0
+                    // in UXP for a freshly-created itemByRange ref, making
+                    // rangeEnd = -1 and breaking the overlap test.
+                    var rangeStart = -1, rangeEnd = -1;
+                    try {
+                        var paraStartIdx = para.characters.item(0).index;
+                        rangeStart = paraStartIdx + ann.offset;
+                        rangeEnd   = paraStartIdx + safeEnd - 1;
+                    } catch (eIdx) {}
+                    if (rangeStart >= 0 && rangeEnd >= rangeStart) {
+                        // #E2E-9c: accept ANY same-URL hyperlink that
+                        // overlaps our range. Source docs sometimes split
+                        // one logical link into multiple Hyperlink objects
+                        // (e.g., Client-A Product-3: "Client-A Product-3..." + "®*万事达卡®*"
+                        // are two hyperlinks with the same URL). The merge
+                        // step in export emits ONE combined source_link, so
+                        // by the time we apply the annotation we hit BOTH
+                        // existing hyperlinks — neither fully covers the
+                        // merged range. Treat the presence of ANY same-URL
+                        // hyperlink overlapping our range as "already
+                        // linked"; we'll stamp underline + char style on
+                        // the FULL range so the visual matches even at
+                        // points the original hyperlinks didn't cover.
+                        for (var __hi = 0; __hi < workDoc.hyperlinks.length; __hi++) {
+                            var hCand = workDoc.hyperlinks.item(__hi);
+                            var hUrl = "";
+                            try { hUrl = String(hCand.destination.destinationURL); } catch (eHU) {}
+                            if (hUrl !== url) continue;
+                            var hSrc = null;
+                            try { hSrc = hCand.source.sourceText; } catch (eHS) {}
+                            if (!hSrc) continue;
+                            var hStart = -1, hEnd = -1;
+                            try {
+                                hStart = hSrc.characters.item(0).index;
+                                var hc = hSrc.characters.length;
+                                hEnd = hSrc.characters.item(hc - 1).index;
+                            } catch (eHIdx) {}
+                            if (hStart < 0 || hEnd < hStart) continue;
+                            // Any overlap with our range counts.
+                            var overlapsAny = !(hEnd < rangeStart || hStart > rangeEnd);
+                            if (overlapsAny) {
+                                existingHl = hCand;
+                                break;
+                            }
+                        }
+                    }
+                } catch (eScan) {}
+                // #E2E-DIAG: capture scan diagnostics
+                var scanDiag = { rangeStart: rangeStart, rangeEnd: rangeEnd, hyperlinkCount: 0, urlMatches: 0, rangeMatches: 0, candidates: [] };
+                try {
+                    scanDiag.hyperlinkCount = workDoc.hyperlinks.length;
+                    for (var __hi2 = 0; __hi2 < workDoc.hyperlinks.length; __hi2++) {
+                        var hCand2 = workDoc.hyperlinks.item(__hi2);
+                        var hUrl2 = ""; try { hUrl2 = String(hCand2.destination.destinationURL); } catch(e){}
+                        var hSrc2 = null; try { hSrc2 = hCand2.source.sourceText; } catch(e){}
+                        var hStart2 = -1, hEnd2 = -1;
+                        try {
+                            hStart2 = hSrc2.characters.item(0).index;
+                            var hc2 = hSrc2.characters.length;
+                            hEnd2 = hSrc2.characters.item(hc2 - 1).index;
+                        } catch(e){}
+                        var urlMatch = hUrl2 === url;
+                        var rangeCover = hStart2 <= rangeStart && hEnd2 >= rangeEnd;
+                        if (urlMatch) scanDiag.urlMatches++;
+                        if (rangeCover) scanDiag.rangeMatches++;
+                        if (urlMatch || (hStart2 >= 0 && Math.abs(hStart2 - rangeStart) < 100)) {
+                            scanDiag.candidates.push({ idx: __hi2, url: hUrl2.slice(0, 60), hStart: hStart2, hEnd: hEnd2, urlMatch: urlMatch, rangeCover: rangeCover });
+                        }
+                    }
+                } catch(eDg) { scanDiag.error = String(eDg); }
+                // Persist last diag for inspection
+                try { workDoc._lastE2EScanDiag = scanDiag; } catch(eP) {}
+                if (existingHl) {
+                    // #E2E-9d: Re-resolve range fresh before stamping. The
+                    // earlier lnkRange ref may have been invalidated by the
+                    // failed `hyperlinkTextSources.add` attempt or by the
+                    // characterStyles.add() inside this branch (UXP DOM
+                    // refs can become stale across structural operations).
+                    var freshRangeR = null;
+                    try { freshRangeR = para.characters.itemByRange(ann.offset, safeEnd - 1); }
+                    catch (eFR) {}
+                    var reuseDiag = { csCreated: false, csApplied: false, underlineSet: false, errors: [] };
+                    if (freshRangeR) {
+                        // Ensure _T_c_link char style exists FIRST (before
+                        // touching the range) so the add() can't invalidate
+                        // the range we're about to write to.
+                        var linkCsR = null;
+                        try {
+                            var csNameR = "_T_c_link";
+                            try { linkCsR = workDoc.characterStyles.itemByName(csNameR); } catch (eCsLkR) {}
+                            try { if (!linkCsR || !linkCsR.isValid) linkCsR = null; } catch (eCsLkR2) { linkCsR = null; }
+                            if (!linkCsR) {
+                                linkCsR = workDoc.characterStyles.add({ name: csNameR });
+                                try { linkCsR.underline = true; reuseDiag.csCreated = true; }
+                                catch (eUlR) { reuseDiag.errors.push("csUnderline: " + eUlR.message); }
+                            }
+                        } catch (eCsR) { reuseDiag.errors.push("csLookup: " + eCsR.message); }
+
+                        // Re-fetch range AGAIN after potential char style add.
+                        var freshRangeR2 = null;
+                        try { freshRangeR2 = para.characters.itemByRange(ann.offset, safeEnd - 1); }
+                        catch (eFR2) { reuseDiag.errors.push("refetchRange: " + eFR2.message); }
+                        var targetRange = freshRangeR2 || freshRangeR;
+
+                        if (linkCsR) {
+                            try { targetRange.appliedCharacterStyle = linkCsR; reuseDiag.csApplied = true; }
+                            catch (eAppCsR) { reuseDiag.errors.push("applyCs: " + eAppCsR.message); }
+                        }
+                        // Direct underline override AFTER char style — survives
+                        // even if a later step swaps the char style.
+                        try { targetRange.underline = true; reuseDiag.underlineSet = true; }
+                        catch (eDirU2) { reuseDiag.errors.push("underline: " + eDirU2.message); }
+                    } else {
+                        reuseDiag.errors.push("no freshRangeR");
+                    }
+                    results.push({
+                        ann: ann,
+                        applied: true,
+                        hyperlinkName: String(existingHl.name),
+                        url: url,
+                        reused: true,
+                        reuseDiag: reuseDiag,
+                        truncatedRange: (safeEnd < ann.offset + ann.length)
+                    });
+                    continue;
+                }
+                results.push({
+                    ann: ann, applied: false,
+                    reason: "link_source_failed: " + (eS && eS.message ? eS.message : eS),
+                    scanDiag: scanDiag
+                });
+                continue;
+            }
+            try {
+                var hlName = "_T_HL_" + ((Date.now() + i) >>> 0);
+                var newHl = workDoc.hyperlinks.add(srcObj, destObj, { name: hlName });
+                // #33: apply a visible char style to the source range —
+                // InDesign Hyperlink objects DO NOT alter text appearance
+                // by themselves (the URL is metadata for PDF/EPUB export
+                // only). Without a char style assignment the translator
+                // who marked the link in the webapp wouldn't see any
+                // visual feedback. Find/create `_T_c_link` with
+                // underline=true and assign to source range + to the
+                // hyperlink's source.appliedCharacterStyle so future
+                // reorganize / cluster-style passes preserve it via
+                // the #3 designer-char-style preserve channel.
+                var linkCs = null;
+                try {
+                    var csName = "_T_c_link";
+                    try { linkCs = workDoc.characterStyles.itemByName(csName); } catch (eCsLk) {}
+                    try { if (!linkCs || !linkCs.isValid) linkCs = null; } catch (eCsLk2) { linkCs = null; }
+                    if (!linkCs) {
+                        linkCs = workDoc.characterStyles.add({ name: csName });
+                        try { linkCs.underline = true; } catch (eUl) {}
+                    }
+                } catch (eCs) {}
+                if (linkCs) {
+                    try { lnkRange.appliedCharacterStyle = linkCs; } catch (eAppCs) {}
+                    // Also stamp on the hyperlink's source itself so it
+                    // round-trips through any subsequent export/re-apply.
+                    try { if (newHl && newHl.source) newHl.source.appliedCharacterStyle = linkCs; } catch (eHCs) {}
+                }
+                // #E2E-6: Belt-and-braces — also stamp underline directly on
+                // the range as a character-level local override. If reorganize
+                // later removes or renames `_T_c_link` (we saw this in the
+                // Client-A e2e: the char style was absent post-import), the direct
+                // property survives independently of char-style cleanup.
+                // Without this, links lose their underline visual when their
+                // paragraph cluster's winner is `under:false`.
+                try { lnkRange.underline = true; } catch (eDirU) {}
+                results.push({
+                    ann: ann,
+                    applied: true,
+                    hyperlinkName: hlName,
+                    url: url,
+                    charStyleName: linkCs ? linkCs.name : null,
+                    truncatedRange: (safeEnd < ann.offset + ann.length)
+                });
+            } catch (eH) {
+                // Clean up the dangling source so we don't litter the doc.
+                try { srcObj.remove(); } catch (eClean) {}
+                results.push({ ann: ann, applied: false, reason: "link_add_failed: " + (eH && eH.message ? eH.message : eH) });
+            }
+            continue;
+        }
+
+        // #BRIDGE-40: apply non-link annotations as DIRECT character
+        // overrides instead of single-CS-per-annotation. Previous strategy
+        // (one CS per annotation, `range.appliedCharacterStyle = cs`)
+        // OVERWROTE the prior CS on the same range — InDesign chars carry
+        // exactly one appliedCharacterStyle. When the translator marked the
+        // same range with multiple annotations (e.g. link + color +
+        // underline + italic at chars 0..13), only the LAST CS survived;
+        // the link's underline visual, the blue color, etc. were all lost.
+        //
+        // Direct overrides layer on top of whatever CS is present and on
+        // top of each other, so multiple annotations on one range compose
+        // naturally. The `link` action above still creates a Hyperlink
+        // object + `_T_c_link` CS (kept for click-through + visible CS
+        // signal in the Character Styles panel); subsequent color/
+        // underline annotations on the same range now layer onto it as
+        // direct overrides rather than wiping it.
+        //
+        // For `italic` (fix-faux-latin-italic): script-aware. CJK runs get
+        // faux skew=15 (no fontStyle=Italic → no missing-font tofu); non-CJK
+        // runs whose font has a real italic variant (e.g. Whitney Book Italic)
+        // get REAL italic, the rest faux skew. The old code stamped skew on the
+        // whole range — over-slanting / downgrading Latin in mixed CJK+Latin
+        // annotations. See lib/italic_apply.js.
+        try {
+            var range = para.characters.itemByRange(ann.offset, safeEnd - 1);
+            var applied = false;
+            var detail = null;
+            if (ann.action === "bold") {
+                // #ac-emphasis-relations: bold is landed ONCE, by the final #BRIDGE-41
+                // restamp, through SA.applyRelationBold (a char style; Chinese weight from
+                // the pairing table). ⛔ No direct `fontStyle = "Bold"` here any more
+                // (importfix inventory #9, owner 2026-10-01 design-intent §8: Chinese
+                // weights from the table, no exceptions; and a hand weight without a
+                // char style can render as Myriad — findings 3c2e8b7). The restamp
+                // always runs after this site in runPipeline (the only caller).
+                applied = true; detail = "bold_deferred_to_relation_landing";
+            } else if (ann.action === "italic") {
+                // #ac-emphasis-relations I-5 / R-0 N8: translator italic lands ONCE, in the
+                // final restamp (SA.applyRelationItalic, R-5 phase 3, after bold). Pass 1
+                // writes no italic — the char keeps what the paragraph / cluster / carried
+                // emphasis gave it until then.
+                applied = true; detail = "italic_deferred_to_relation_landing";
+            } else if (ann.action === "underline") {
+                try { range.underline = true; applied = true; detail = "underline=true"; } catch (eU) { detail = "underline_failed: " + eU.message; }
+            } else if (ann.action === "superscript") {
+                if (deps && deps.position && deps.position.SUPERSCRIPT) {
+                    try { range.position = deps.position.SUPERSCRIPT; applied = true; detail = "position=SUPERSCRIPT"; } catch (eSp) { detail = "superscript_failed: " + eSp.message; }
+                } else {
+                    detail = "no_position_enum";
+                }
+            } else if (ann.action === "color") {
+                // Resolve / build the swatch (same logic as
+                // ensureAnnotationCharStyle's color branch).
+                var colorVal = ann.value || ann.color;
+                if (colorVal && deps && deps.colorSpace) {
+                    var swatch = null;
+                    try { swatch = workDoc.swatches.itemByName(colorVal); } catch (eSw) {}
+                    if (!swatch || !swatch.isValid) {
+                        var hex = String(colorVal).replace(/^#/, "");
+                        if (hex.length === 6) {
+                            var r = parseInt(hex.substring(0, 2), 16);
+                            var g = parseInt(hex.substring(2, 4), 16);
+                            var b = parseInt(hex.substring(4, 6), 16);
+                            var swatchName = "_T_c_color_" + hex;
+                            try { swatch = workDoc.colors.itemByName(swatchName); } catch (eSwL) {}
+                            if (!swatch || !swatch.isValid) {
+                                try { workDoc.colors.add({ name: swatchName, space: deps.colorSpace.RGB, colorValue: [r, g, b] }); }
+                                catch (eAdd) { detail = "color_create_failed: " + eAdd.message; }
+                                // Re-fetch after add — fresh references from
+                                // colors.add() can be silently rejected by
+                                // range.fillColor when InDesign hasn't
+                                // committed the swatch yet. itemByName /
+                                // swatches lookup returns a stable handle.
+                                try { swatch = workDoc.colors.itemByName(swatchName); } catch (eSwL2) {}
+                                if ((!swatch || !swatch.isValid)) {
+                                    try { swatch = workDoc.swatches.itemByName(swatchName); } catch (eSwL3) {}
+                                }
+                            }
+                        }
+                    }
+                    if (swatch && swatch.isValid) {
+                        try {
+                            range.fillColor = swatch;
+                            applied = true;
+                            var __readBack = "?";
+                            try {
+                                var __ch0 = range.characters.item(0);
+                                var __fc = __ch0.fillColor;
+                                var __nm = "", __id = "", __sw = "";
+                                try { __nm = String(__fc.name); } catch (eN) {}
+                                try { __id = String(__fc.id); } catch (eI) {}
+                                try { __sw = String(swatch.id); } catch (eS) {}
+                                __readBack = "name=" + __nm + " id=" + __id + " swId=" + __sw + " match=" + (__id === __sw);
+                            } catch (eRB) { __readBack = "err:" + eRB.message; }
+                            detail = "fillColor=" + colorVal + " | " + __readBack;
+                        } catch (eFc) { detail = "fillColor_set_failed: " + eFc.message; }
+                    } else if (!detail) {
+                        detail = "color_unresolved";
+                    }
+                } else {
+                    detail = "color_missing_value_or_deps";
+                }
+            } else if (ann.action === "size") {
+                // TODO#15 B1: per-run point-size override (e.g. a title run
+                // bigger than its paragraph baseline). The value is in
+                // `ann.size` (pt), NOT `ann.value` — the prior code fell into
+                // the unknown-action fallback and called ensureAnnotationCharStyle
+                // with `ann.value` (undefined) + no `size` branch → an EMPTY
+                // `_T_c_annotation_size` char style (drift-hazards.md:21). Apply
+                // directly as a character pointSize override (no char style).
+                var __sz = Number(ann.size);
+                if (isFinite(__sz) && __sz > 0) {
+                    try { range.pointSize = __sz; applied = true; detail = "pointSize=" + __sz; }
+                    catch (eSz) { detail = "size_failed: " + eSz.message; }
+                } else {
+                    detail = "size_missing_value";
+                }
+            } else {
+                // Unknown action — fall back to the legacy CS path so we
+                // don't silently drop annotations we haven't taught the
+                // direct-override branch about yet.
+                try {
+                    var legacyCs = deps.ensureAnnotationCharStyle(workDoc, sheet, ann.action, ann.value, deps);
+                    if (legacyCs) {
+                        range.appliedCharacterStyle = legacyCs;
+                        applied = true;
+                        detail = "legacy_cs:" + legacyCs.name;
+                    } else {
+                        detail = "unknown_action_no_cs";
+                    }
+                } catch (eLegacy) {
+                    detail = "unknown_action_cs_failed: " + eLegacy.message;
+                }
+            }
+            results.push({
+                ann: ann,
+                applied: applied,
+                reason: applied ? undefined : detail,
+                detail: detail,
+                truncatedRange: (safeEnd < ann.offset + ann.length)
+            });
+        } catch (e) {
+            results.push({ ann: ann, applied: false, reason: "direct_override_failed: " + e.message });
+        }
+    }
+    return results;
+}
+
+// ─── applyEmphasisRunsToParagraph (Phase 8B) ──────────────────────
+
+/**
+ * Re-apply Phase 8B emphasis character styles to a paragraph after the
+ * paragraph style has been assigned and cascade-normalized.
+ *
+ * Reorganize flow only — the source paragraph text is unchanged so the
+ * emphasisRun offsets (captured at export time) still index the same
+ * characters. The translation flow must NOT call this: target text is
+ * different from source, and translator-supplied annotations[] (handled
+ * by applyAnnotationsToParagraph) carry the formatting intent for the
+ * new text.
+ *
+ * @param {Paragraph} para       — workDoc paragraph
+ * @param {Object}    sheet      — return value of commitStylePlan
+ *                                 (must have empCharStyleMap)
+ * @param {Object}    plan       — return value of buildStylePlan
+ *                                 (must have empRunsBySegment)
+ * @param {string}    segTid     — segment tid to look up apply records
+ * @returns {Object} { applied: int, skippedNoStyle: int, skippedRangeFailed: int,
+ *                     results: [{ start, end, charStyleName?, reason? }, ...] }
+ */
+function applyEmphasisRunsToParagraph(para, sheet, plan, segTid) {
+    var summary = { applied: 0, skippedNoStyle: 0, skippedRangeFailed: 0, results: [] };
+    if (!para) return summary;
+    if (!sheet || !sheet.empCharStyleMap) return summary;
+    if (!plan || !plan.empRunsBySegment) return summary;
+
+    var apply = plan.empRunsBySegment[segTid];
+    if (!apply || !apply.length) return summary;
+
+    var paraCharCount;
+    try { paraCharCount = para.characters.length; } catch (e) { paraCharCount = 0; }
+    // The trailing CR is part of para.characters; emphasisRun ends never
+    // include it (visual_snapshot strips trailing CR). itemByRange clamps
+    // its right edge to characters - 1 so we just guard zero-len para.
+    if (paraCharCount === 0) return summary;
+
+    for (var i = 0; i < apply.length; i++) {
+        var r = apply[i];
+        var styleObj = sheet.empCharStyleMap[r.empFingerprint];
+        if (!styleObj) {
+            summary.skippedNoStyle++;
+            summary.results.push({ start: r.start, end: r.end, reason: "no_emp_style", fingerprint: r.empFingerprint });
+            continue;
+        }
+        var endIdx = Math.min(r.end - 1, paraCharCount - 1);
+        if (endIdx < r.start) {
+            summary.skippedRangeFailed++;
+            summary.results.push({ start: r.start, end: r.end, reason: "range_collapsed_after_clamp" });
+            continue;
+        }
+        try {
+            var range = para.characters.itemByRange(r.start, endIdx);
+            range.appliedCharacterStyle = styleObj;
+            // read-back verify (#ac-overset-widen part B): appliedCharacterStyle=
+            // SILENTLY no-ops on chars in a frame's overset region. Compare each
+            // char's live CS by NAME (UXP: never === a host object); a mismatch or
+            // read-throw is a silent drop. Mirrors _applyOneEmphasisSubRun.
+            var dropCount = 0;
+            var targetCsName = styleObj.name;
+            for (var k = r.start; k <= endIdx; k++) {
+                var got = "";
+                try {
+                    var liveCs = para.characters.item(k).appliedCharacterStyle;
+                    got = (liveCs && liveCs.name) ? String(liveCs.name) : "";
+                } catch (eRb) { got = ""; }
+                if (got !== targetCsName) dropCount++;
+            }
+            summary.applied++;
+            summary.results.push({ start: r.start, end: r.end, charStyleName: styleObj.name });
+            if (dropCount > 0) {
+                summary.skippedRangeFailed += dropCount;
+                summary.results.push({ start: r.start, end: r.end, reason: "overset_silent_drop", droppedChars: dropCount });
+            }
+        } catch (e) {
+            summary.skippedRangeFailed++;
+            summary.results.push({ start: r.start, end: r.end, reason: "applyCharStyle_failed: " + (e && e.message ? e.message : e) });
+        }
+    }
+    return summary;
+}
+
+// ─── applySpaceOverridesToParagraph (Phase 9) ─────────────────────
+
+/**
+ * Re-apply Phase 9 paragraph-level spaceBefore/spaceAfter overrides
+ * after the paragraph style + cascade normalize.
+ *
+ * Format-preserving merge means: clusters that differ only in sB/sA
+ * collapse into ONE _T_p_* style with the most-paragraphs-wins values.
+ * Segments whose original sB/sA didn't match the winner have their
+ * original values stored as paragraph-level overrides — InDesign shows
+ * a "+" mark in the paragraph styles panel for those paragraphs, which
+ * is correct semantics: the paragraph deviates from its style on these
+ * dimensions only.
+ *
+ * Reorganize-flow + translation-flow both call this; offsets refer to
+ * the paragraph itself (not text characters), so target-text rewrites
+ * during translation don't break the apply.
+ *
+ * @param {Paragraph} para
+ * @param {Object}    plan   — must have spaceOverridesBySegment
+ * @param {string}    segTid
+ * @returns {Object} { applied, skipped, fields: ["spaceBefore", ...] }
+ */
+function applySpaceOverridesToParagraph(para, plan, segTid) {
+    var summary = { applied: 0, skipped: 0, fields: [] };
+    if (!para) return summary;
+    if (!plan || !plan.spaceOverridesBySegment) return summary;
+    var override = plan.spaceOverridesBySegment[segTid];
+    if (!override) return summary;
+    if (override.spaceBefore !== undefined && override.spaceBefore !== null) {
+        try {
+            para.spaceBefore = override.spaceBefore;
+            summary.fields.push("spaceBefore");
+            summary.applied++;
+        } catch (e) { summary.skipped++; }
+    }
+    if (override.spaceAfter !== undefined && override.spaceAfter !== null) {
+        try {
+            para.spaceAfter = override.spaceAfter;
+            summary.fields.push("spaceAfter");
+            summary.applied++;
+        } catch (e) { summary.skipped++; }
+    }
+    return summary;
+}
+
+// ─── clearTranslationStyles ───────────────────────────────────────
+
+/**
+ * Remove all `_T_*`-prefixed styles. Paragraphs that referenced removed
+ * styles fall back to options.fallbackStyle.
+ *
+ * Use cases:
+ *   - C15 undo: rollback an import
+ *   - E5c standalone tool: clean up before re-running with new config
+ *
+ * @param {Document} workDoc
+ * @param {Object} options — { prefix?, fallbackStyle? }
+ *                           prefix default: "_T_"
+ *                           fallbackStyle default: try "[Basic Paragraph]"
+ * @returns {Object} {removedParaStyles, removedCharStyles, paragraphsReset}
+ */
+function clearTranslationStyles(workDoc, options) {
+    if (!workDoc) throw new Error("clearTranslationStyles: workDoc required");
+    var opts = options || {};
+    var prefix = opts.prefix || "_T_";
+    var paraPrefix = opts.paraPrefix || prefix + "p_";
+    var latinPrefix = opts.latinPrefix || prefix + "Latin_";
+    var charAnnPrefix = opts.charAnnPrefix || prefix + "c_annotation_";
+    var charEmpPrefix = opts.charEmpPrefix || prefix + "c_emp_";
+
+    var removedParaStyles = [];
+    var removedCharStyles = [];
+    var paragraphsReset = 0;
+
+    // Step 1: find fallback paragraph style for unset
+    var fallback = null;
+    try {
+        var fbName = opts.fallbackStyle || "[Basic Paragraph]";
+        fallback = workDoc.paragraphStyles.itemByName(fbName);
+        if (fallback && !fallback.isValid) fallback = null;
+    } catch (e) { fallback = null; }
+
+    // Step 2: find all paragraphs whose style starts with paraPrefix → reset them
+    if (fallback) {
+        try {
+            var stories = workDoc.stories;
+            for (var s = 0; s < stories.length; s++) {
+                var story = _getCollectionItem(stories, s);
+                if (!story || !story.isValid) continue;
+                var paras = story.paragraphs;
+                if (!paras || typeof paras.length !== "number") continue;
+                for (var p = 0; p < paras.length; p++) {
+                    var para = _getCollectionItem(paras, p);
+                    if (!para || !para.isValid) continue;
+                    try {
+                        var psName = String(para.appliedParagraphStyle.name || "");
+                        if (psName.indexOf(paraPrefix) === 0) {
+                            para.appliedParagraphStyle = fallback;
+                            paragraphsReset++;
+                        }
+                    } catch (eP) {}
+                }
+            }
+        } catch (eStories) {}
+    }
+
+    // Step 3: remove paragraph styles (in reverse to avoid index shift)
+    try {
+        var psList = workDoc.paragraphStyles.everyItem().getElements();
+        for (var i = psList.length - 1; i >= 0; i--) {
+            try {
+                var name = String(psList[i].name || "");
+                if (name.indexOf(paraPrefix) === 0) {
+                    removedParaStyles.push(name);
+                    psList[i].remove();
+                }
+            } catch (eRm) {}
+        }
+    } catch (eL) {}
+
+    // Step 4: remove character styles (Latin + annotation_*)
+    try {
+        var csList = workDoc.characterStyles.everyItem().getElements();
+        for (var j = csList.length - 1; j >= 0; j--) {
+            try {
+                var cname = String(csList[j].name || "");
+                if (cname.indexOf(latinPrefix) === 0 ||
+                    cname.indexOf(charAnnPrefix) === 0 ||
+                    cname.indexOf(charEmpPrefix) === 0) {
+                    removedCharStyles.push(cname);
+                    csList[j].remove();
+                }
+            } catch (eRmC) {}
+        }
+    } catch (eC) {}
+
+    return {
+        removedParaStyles: removedParaStyles,
+        removedCharStyles: removedCharStyles,
+        paragraphsReset: paragraphsReset,
+        fallback_used: fallback ? String(fallback.name) : null
+    };
+}
+
+// ─── applyEmphasisRunsAsOverrides (skip-cleanup mode) ─────────────
+//
+// Apply emphasis runs as DIRECT character overrides — no cluster sheet,
+// no _T_c_emp_* character style pool. Used when the import flow is set
+// to "skip style cleanup": writes emphasis the way a designer would
+// hand-tweak overrides on the paragraph.
+//
+// Compared to applyEmphasisRunsToParagraph which routes diffs through
+// commitStylePlan-built character styles (deduped pool, named, listed
+// in the panel), this path leaves no trace in the styles panel —
+// emphasis lives only as character-level overrides on the run.
+//
+// Color resolution: swatches are looked up by name; RGB color values
+// get a one-time `_T_emp_rgb_<r>_<g>_<b>` swatch created (or reused)
+// so the same triplet across multiple runs deduplicates to one entry
+// in the swatches panel.
+//
+// @param {Paragraph} para
+// @param {Array}     emphasisRuns  — [{ start, end, diff: {...} }, ...]
+// @param {Document}  workDoc
+// @param {Object}    deps          — { ColorModel, ColorSpace } for swatch creation
+// @returns {Object} { applied, failed, results: [{ start, end, reason? }, ...] }
+function applyEmphasisRunsAsOverrides(para, emphasisRuns, workDoc, deps) {
+    var summary = { applied: 0, failed: 0, results: [] };
+    if (!para || !emphasisRuns || !emphasisRuns.length) return summary;
+    var paraCharCount;
+    try { paraCharCount = para.characters.length; } catch (e) { paraCharCount = 0; }
+    // #E2E-11c: guard against malformed paraCharCount (UXP can return NaN
+    // or non-finite values for stale refs). Without this, downstream Math.min
+    // returns NaN and itemByRange(-Infinity, NaN) can crash InDesign's C++
+    // layer (we saw it on the double-translated `.translated.translated.indd`
+    // re-import path).
+    if (!Number.isFinite(paraCharCount) || paraCharCount <= 0) return summary;
+
+    for (var i = 0; i < emphasisRuns.length; i++) {
+        var run = emphasisRuns[i];
+        if (!run || !run.diff) continue;
+        // #E2E-11c: strict offset validation BEFORE any DOM call. Reject
+        // runs with non-finite start/end, negative offsets, or end<=start
+        // — these would otherwise feed bad indices to itemByRange.
+        if (typeof run.start !== "number" || typeof run.end !== "number") {
+            summary.failed++;
+            summary.results.push({ start: run.start, end: run.end, reason: "non_numeric_offsets" });
+            continue;
+        }
+        if (!Number.isFinite(run.start) || !Number.isFinite(run.end)) {
+            summary.failed++;
+            summary.results.push({ start: run.start, end: run.end, reason: "non_finite_offsets" });
+            continue;
+        }
+        // Negative start is unambiguous garbage — surface separately.
+        if (run.start < 0) {
+            summary.failed++;
+            summary.results.push({ start: run.start, end: run.end, reason: "start_out_of_range", paraCharCount: paraCharCount });
+            continue;
+        }
+        // Skip empty-diff runs (nothing to apply).
+        var diffKeys = [];
+        try {
+            for (var dk in run.diff) {
+                if (Object.prototype.hasOwnProperty.call(run.diff, dk)) diffKeys.push(dk);
+            }
+        } catch (eDK) {}
+        if (diffKeys.length === 0) {
+            // Not a failure, just nothing to do — don't pollute counters.
+            continue;
+        }
+        // #BRIDGE-16: when start >= paraCharCount the run's range is
+        // empty after clamping to the paragraph's last char. Surface as
+        // "range_collapsed_after_clamp" rather than "start_out_of_range"
+        // — the test suite expects the clamp-derived reason for any
+        // post-clamp empty range, including starts beyond the
+        // paragraph end, so the same diagnostic covers all collapse
+        // shapes. (Negative start still uses "start_out_of_range"
+        // above because that's a callsite bug, not a clamp outcome.)
+        var startIdx = run.start;
+        var endIdx = Math.min(run.end - 1, paraCharCount - 1);
+        if (endIdx < startIdx || startIdx >= paraCharCount) {
+            summary.failed++;
+            summary.results.push({ start: run.start, end: run.end, reason: "range_collapsed_after_clamp", paraCharCount: paraCharCount });
+            continue;
+        }
+        try {
+            var range = para.characters.itemByRange(startIdx, endIdx);
+            if (!range) {
+                summary.failed++;
+                summary.results.push({ start: run.start, end: run.end, reason: "itemByRange_null" });
+                continue;
+            }
+            var propFails = _applyDiffToRange(range, run.diff, workDoc, deps);
+            if (propFails.length === 0) {
+                summary.applied++;
+                summary.results.push({ start: run.start, end: run.end });
+            } else {
+                // Partial / total failure — caller wants to see WHICH dim
+                // failed (commonly "fontStyle: not available" when the doc's
+                // font catalog hasn't loaded that variant).
+                summary.failed++;
+                summary.results.push({
+                    start: run.start, end: run.end,
+                    reason: "property_write_failed",
+                    failedProps: propFails
+                });
+            }
+        } catch (e2) {
+            summary.failed++;
+            summary.results.push({ start: run.start, end: run.end, reason: "applyDiff_failed: " + (e2 && e2.message ? e2.message : e2) });
+        }
+    }
+    return summary;
+}
+
+// ─── applyEmphasisRunsAsCharStyles (SPEC §14 net design v5) ────────
+//
+// Faithful CJK+Latin emphasis runs → NAMED COMBINED CHARACTER STYLES,
+// one per per-script sub-run. The style encodes the run's full diff:
+// the resolved (per-script) font weight PLUS every non-weight dim
+// (fillColor / pointSize / underline / strikeThru / tracking /
+// baselineShift / scale / skew / position). Never fabricates a ghost
+// font (always validates the resolved face is INSTALLED, case-exact) and
+// never silently drops a dim (route B: all diff dims land on the CS).
+//
+// This SUPERSEDES the raw-override path (applyEmphasisRunsAsOverrides,
+// retained) for the faithful runPipeline / B1 / M5 call sites.
+//
+// Family source by script (SPEC §13.1/§14.1, two-sided grounded):
+//   - CJK sub-run : live `para.characters.item(absIdx).appliedFont.name`
+//                   (= the byPair-mapped target CJK psFont, A1 host-verified)
+//                   → deps.cjkEmphasisWeight(family, srcWeight) → dstWeight.
+//   - Latin sub-run: SOURCE root family (Latin isn't byPair-mapped), via
+//                   precedence ① run.diff.fontFamily (codec-preserved, must
+//                   be non-CJK) > ② _resolveLatinFontForCluster(seg)
+//                   (scriptByFont.LATIN else baseline root) with _isCJKFont
+//                   guard so a CJK-dominant baseline never feeds the Latin
+//                   sub-run. weight = run.diff.fontStyle (un-remapped).
+//
+// @param {Paragraph} para     — workDoc paragraph (target text already written)
+// @param {Array}     runs     — UN-remapped source-diff emphasis runs
+//                               [{ start, end, diff: {...} }, ...]
+// @param {Document}  workDoc
+// @param {Object}    deps      — { cjkEmphasisWeight, ColorSpace, ColorModel, Position }
+// @param {Object}    seg       — locate segment (for _resolveLatinFontForCluster)
+// @returns {Object} { applied, skipped, surfaced, results:[{start,end,subRuns:[...]}] }
+function applyEmphasisRunsAsCharStyles(para, runs, workDoc, deps, seg) {
+    var summary = { applied: 0, skipped: 0, surfaced: [], results: [] };
+    if (!para || !runs || !runs.length) return summary;
+    deps = deps || {};
+
+    var paraCharCount;
+    try { paraCharCount = para.characters.length; } catch (e) { paraCharCount = 0; }
+    if (!Number.isFinite(paraCharCount) || paraCharCount <= 0) return summary;
+
+    var I = (SSB && SSB._internal) || {};
+
+    for (var i = 0; i < runs.length; i++) {
+        var run = runs[i];
+        if (!run || !run.diff) continue;
+        // Malformed offsets: surface + count (mirror applyEmphasisRunsAsOverrides),
+        // don't drop silently — a bad codec offset must be debuggable.
+        if (typeof run.start !== "number" || typeof run.end !== "number") {
+            summary.skipped++;
+            summary.surfaced.push({ start: run.start, end: run.end, reason: "non_numeric_offsets" });
+            continue;
+        }
+        if (!Number.isFinite(run.start) || !Number.isFinite(run.end)) {
+            summary.skipped++;
+            summary.surfaced.push({ start: run.start, end: run.end, reason: "non_finite_offsets" });
+            continue;
+        }
+        if (run.start < 0) {
+            summary.skipped++;
+            summary.surfaced.push({ start: run.start, end: run.end, reason: "start_out_of_range" });
+            continue;
+        }
+        // Skip empty-diff runs (nothing to apply).
+        var diffKeyCount = 0;
+        try { for (var dk in run.diff) { if (Object.prototype.hasOwnProperty.call(run.diff, dk)) diffKeyCount++; } } catch (eDK) {}
+        if (diffKeyCount === 0) continue;
+
+        var startIdx = run.start;
+        var endIdx = Math.min(run.end - 1, paraCharCount - 1);
+        if (endIdx < startIdx || startIdx >= paraCharCount) {
+            summary.skipped++;
+            summary.surfaced.push({ start: run.start, end: run.end, reason: "range_collapsed_after_clamp" });
+            continue;
+        }
+
+        var runResult = { start: run.start, end: run.end, subRuns: [] };
+        summary.results.push(runResult);
+
+        // ── per-script split (SPEC §12.1 step2) ──
+        // Read the run's range contents as a STRING; if the length disagrees
+        // with the offset span (UXP tag-ification / supplementary plane), do
+        // NOT trust offsets → fall back to ONE whole-run sub-run (treated as
+        // CJK iff first char classifies CJK; pure-Latin desync → skip+surface,
+        // mirroring font_mapping_apply_to_doc.js:198 desync guard, SPEC §12.8.5).
+        var contents = "";
+        try { contents = String(para.characters.itemByRange(startIdx, endIdx).contents); } catch (eC0) {}
+        var expectedLen = endIdx - startIdx + 1;
+        var subRunsSplit;
+        if (contents.length === expectedLen && contents.length > 0) {
+            subRunsSplit = ScriptSplit.splitRunsByScript(contents);
+        } else {
+            // desync → whole-run; classify by first char (CJK safe).
+            var firstIsCJK = false;
+            try { firstIsCJK = ScriptSplit._isCJKChar(contents.charAt(0)); } catch (eFC) {}
+            if (!firstIsCJK) {
+                // pure-Latin desync: offsets untrusted → can't reliably source
+                // the Latin family per-char → surface, don't guess.
+                summary.skipped++;
+                var surfDesync = { start: run.start, end: run.end, reason: "desync_latin_skip" };
+                summary.surfaced.push(surfDesync);
+                runResult.subRuns.push({ script: "LATIN", outcome: "skip", reason: "desync_latin_skip" });
+                continue;
+            }
+            subRunsSplit = [{ startOffset: 0, len: expectedLen, isCJK: true }];
+        }
+
+        for (var si = 0; si < subRunsSplit.length; si++) {
+            var sr = subRunsSplit[si];
+            var subStart = startIdx + sr.startOffset;
+            var subEnd = subStart + sr.len - 1;
+            if (subEnd < subStart) continue;
+            var subResult = _applyOneEmphasisSubRun(
+                para, run.diff, sr.isCJK, subStart, subEnd, workDoc, deps, seg, I
+            );
+            runResult.subRuns.push(subResult);
+            if (subResult.outcome === "applied") {
+                summary.applied++;
+                // batch 5 ⓪ (K3): record what THIS run carried, so the translator-bold landing
+                // can tell a carried span from a left-over one (never by the style name)
+                if (deps && deps.carriedRegistry && seg && seg.tid && subResult.styleName) {
+                    var __reg = deps.carriedRegistry[seg.tid] || (deps.carriedRegistry[seg.tid] = []);
+                    __reg.push({ s: subStart, e: subEnd, diff: run.diff || {}, styleName: String(subResult.styleName) });
+                }
+                // SPEC §12.1c: a partially-collided sub-run still surfaces the
+                // skipped (collided) char count so the report sees them.
+                if (subResult.skippedCharCount > 0) {
+                    summary.skipped += subResult.skippedCharCount;
+                    summary.surfaced.push({
+                        start: subStart, end: subEnd,
+                        script: subResult.script,
+                        reason: subResult.partialReason || "collision_skipped_chars",
+                        skippedChars: subResult.skippedCharCount
+                    });
+                }
+                // univ-italic (OQ-1 / 乙): an italic-marked run applied UPRIGHT because
+                // its weight is unconfigured (surface) or real-but-no-exact-italic
+                // (OQ-2 block) — surface it non-silently so the operator sees italic
+                // intent that did not land. block also flags fail-closed (don't save).
+                if (subResult.italicSurface) {
+                    summary.surfaced.push({
+                        start: subStart, end: subEnd, script: subResult.script,
+                        reason: "italic_unconfigured_surface:" + subResult.italicSurface.reason,
+                        italicWeight: subResult.italicSurface.weight
+                    });
+                }
+                // univ-italic AC④': a run left on the real italic face it already had.
+                // Counted, not surfaced — it is not a problem to report, but without a
+                // counter the report cannot distinguish "N real italic runs preserved"
+                // from "there were none", which is exactly the claim AC④' makes.
+                if (subResult.italicKept) {
+                    summary.italicKept = (summary.italicKept || 0) + 1;
+                }
+                if (subResult.italicBlock) {
+                    summary.italicBlocked = (summary.italicBlocked || 0) + 1;
+                    summary.surfaced.push({
+                        start: subStart, end: subEnd, script: subResult.script,
+                        reason: "italic_real_no_exact_BLOCK:" + subResult.italicBlock.reason,
+                        italicWeight: subResult.italicBlock.weight, block: true
+                    });
+                }
+            } else {
+                summary.skipped++;
+                summary.surfaced.push({
+                    start: subStart, end: subEnd,
+                    script: subResult.script, reason: subResult.reason
+                });
+            }
+        }
+        // owner 2026-10-01 (app-folio design-intent §8, acca722): a piece heavier than
+        // its body but lighter than Medium is landed AS THE SOURCE HAS IT (above) and
+        // reported for owner to choose "follow the source" vs "brand bump". Shared
+        // contract with importfix (word for word): kind "low_contrast_weight".
+        var __lc = _lowContrastEntry(run, contents, runResult.subRuns, deps, seg, I);
+        if (__lc) {
+            summary.lowContrast = summary.lowContrast || [];
+            summary.lowContrast.push(__lc);
+            if (deps && Array.isArray(deps.lowContrastSink)) deps.lowContrastSink.push(__lc);
+        }
+    }
+    return summary;
+}
+
+// → the "low_contrast_weight" report entry for one carried emphasis run, or null.
+// Trigger (shared contract): rank(piece) > rank(body) AND rank(piece) < rank("Medium").
+// follow_source = what was landed (Latin unchanged, CJK = pairing(source weight));
+// brand_bump = Latin Medium, CJK = pairing(Medium). The Latin family / body weight are
+// the source paragraph's (snapshot), the CJK family is the one the CJK part landed in.
+function _lowContrastEntry(run, contents, subRuns, deps, seg, I) {
+    var diff = run && run.diff;
+    if (!diff || typeof diff.fontStyle !== "string" || !diff.fontStyle || diff.__wholeParaItalic) return null;
+    var rank = (I && typeof I._rankWeight === "function") ? I._rankWeight : null;
+    var body = null;
+    try { body = (I && typeof I._resolveLatinFontForCluster === "function" && seg) ? I._resolveLatinFontForCluster(seg) : null; } catch (eB) {}
+    if (!rank || !body || !body.fontFamily) return null;
+    var lc = EmphRel.carriedEmphasisWeight(diff.fontStyle, body.fontStyle || "Regular", rank);
+    if (!lc.lowContrast) return null;
+    var isCJKFont = (typeof I._isCJKFont === "function") ? I._isCJKFont : function () { return false; };
+    var latinFamily = (diff.fontFamily && !isCJKFont(String(diff.fontFamily))) ? String(diff.fontFamily) : String(body.fontFamily);
+    var cjkFamily = null, cjkLanded = null;
+    (subRuns || []).forEach(function (r) {
+        if (!cjkFamily && r && r.script === "CJK" && r.family) { cjkFamily = String(r.family); cjkLanded = r.outcome === "applied" && r.style ? String(r.style) : null; }
+    });
+    // follow_source.cjk = what actually landed (pairing(source weight), or the B1
+    // fallback when the config lacks the pairing); the table answer if it did not land.
+    var follow = cjkLanded || (cjkFamily ? _cjkWeightFromTable(deps, cjkFamily, lc.pieceWeight, latinFamily).weight : null);
+    var bump = cjkFamily ? _cjkWeightFromTable(deps, cjkFamily, "Medium", latinFamily).weight : null;
+    return {
+        kind: "low_contrast_weight",
+        tid: (seg && seg.tid) || null,
+        piece: String(contents || ""),
+        body_weight: lc.bodyWeight,
+        piece_weight: lc.pieceWeight,
+        latin_family: latinFamily,
+        cjk_family: cjkFamily,
+        follow_source: { latin: lc.pieceWeight, cjk: follow || null },
+        brand_bump: { latin: "Medium", cjk: bump || null }
+    };
+}
+
+// owner 2026-10-01 B1: record a "config has no pairing" fallback. Pushes into the
+// shared sink (deps.missingPairSink — runPipeline's applyResults.configMissingPairs)
+// when one is given, and returns the entry for the row / sub-run result either way.
+function _noteMissingPair(deps, entry) {
+    if (deps && Array.isArray(deps.missingPairSink)) deps.missingPairSink.push(entry);
+    return entry;
+}
+// Ask the pairing table for a CJK weight. → { weight, how } where how is
+// "exact" | "weight_only" | "conflict" | "none" | "no_config". Resolvers built by
+// font_mapping_pairs.makeCjkEmphasisWeightResolver carry .explain (#6: the source
+// Latin font picks the row); plain 2-arg stubs are read as exact-or-none.
+function _cjkWeightFromTable(deps, cjkFamily, srcStyle, srcFont) {
+    var fn = deps && deps.cjkEmphasisWeight;
+    if (typeof fn !== "function") return { weight: null, how: "no_config" };
+    try {
+        if (typeof fn.explain === "function") return fn.explain(cjkFamily, srcStyle, srcFont);
+        var w = fn(cjkFamily, srcStyle, srcFont);
+        return w ? { weight: String(w), how: "exact" } : { weight: null, how: "none" };
+    } catch (e) { return { weight: null, how: "none" }; }
+}
+
+// The SOURCE (Latin) font a CJK sub-run's weight came from: the run's own family if
+// it is not CJK, else the paragraph's Latin body family (source snapshot).
+function _sourceLatinFamily(diff, seg, I) {
+    var isCJKFont = (I && typeof I._isCJKFont === "function") ? I._isCJKFont : function () { return false; };
+    if (diff && diff.fontFamily && !isCJKFont(String(diff.fontFamily))) return String(diff.fontFamily);
+    try {
+        var c = (I && typeof I._resolveLatinFontForCluster === "function" && seg) ? I._resolveLatinFontForCluster(seg) : null;
+        if (c && c.fontFamily) return String(c.fontFamily);
+    } catch (e) {}
+    return null;
+}
+
+// ─── #ac-emphasis-relations batch 1 (task_plan §7.6): translator bold ───
+//
+// Lands ONE translator `bold` annotation through the brand config's emphasis
+// relations, replacing the old `range.fontStyle = "Bold"` direct override
+// (site α + the #BRIDGE-41 restamp bold arm). Two reasons it can no longer be a
+// direct override:
+//   1. the relation names a SPECIFIC face (Dax Pro Light → Medium, not Bold), and
+//   2. findings.md#manual-weight-without-char-style-can-render-as-myriad — a hand
+//      weight with no char style can render as Myriad while every property reads
+//      correct. So every landing goes through a `_T_c_emp_w_<family>_<style>` char
+//      style; with an empty diff that is the SAME name the emphasis path gives a
+//      pure-weight run, i.e. an existing same-looking emphasis style is reused.
+//
+// Per script sub-run (the same split the emphasis path uses):
+//   relation → the related face (Latin keeps the source family; CJK via the pairing)
+//   anything else → the pre-relation behaviour, "just bold": Latin (body family,
+//     "Bold"), CJK (live family, the brand pair weight for Bold) — still via a char
+//     style — and the row says which rule applied and why.
+// Chars already carrying a char style are NOT overwritten:
+//   `_T_c_emp_*` other than the target  → carried emphasis kept (owner OD-E11)
+//   any other named style (link/designer) → kept (spec default 「保留并报告」)
+// Both are counted on the row. A face that is not installed lands nothing and
+// says so — never a ghost face.
+//
+// @param rel { ER, config, relations, srcLang, dstLang }
+// @returns Array of rows { start, end, script, text, rule, outcome, reason?, from?,
+//   to?, family?, style?, styleName?, landedChars, carriedKept, foreignKept,
+//   readbackDrop, landed }
+function applyRelationBold(para, startIdx, endIdx, workDoc, deps, seg, rel) {
+    var I = (SSB && SSB._internal) || {};
+    var rows = [];
+    var contents = "";
+    try { contents = String(para.characters.itemByRange(startIdx, endIdx).contents); } catch (eC0) {}
+    var expectedLen = endIdx - startIdx + 1;
+    if (contents.length !== expectedLen || !contents.length) {
+        rows.push({ start: startIdx, end: endIdx, script: "?", text: contents, rule: "none",
+            outcome: "desync_skip", reason: "range contents length " + contents.length + " != " + expectedLen,
+            landedChars: 0, carriedKept: 0, foreignKept: 0, readbackDrop: 0, landed: false });
+        return rows;
+    }
+    var srcIsCjk = rel && rel.ER && rel.ER._internal && rel.ER._internal.isCjkLang(rel.srcLang);
+    var bodyCluster = null;
+    try {
+        bodyCluster = srcIsCjk ? I._resolveCJKFontForCluster(seg) : I._resolveLatinFontForCluster(seg);
+    } catch (eBc) { bodyCluster = null; }
+    if (!bodyCluster || !bodyCluster.fontFamily) {
+        var b0 = seg && seg.format_snapshot && seg.format_snapshot.baseline;
+        bodyCluster = b0 ? { fontFamily: b0.fontFamily, fontStyle: b0.fontStyle } : null;
+    }
+    var body = (bodyCluster && bodyCluster.fontFamily && bodyCluster.fontStyle)
+        ? _bodyKey(bodyCluster) : null;
+    // batch 5 ④ (L14 / N9): the source ranges decide when they are there
+    var bodyUnranked = null, __fromRanges = _bodyKeyFromRanges(seg);
+    if (__fromRanges && __fromRanges.unranked) { bodyUnranked = __fromRanges.unranked; body = { font: __fromRanges.family, weight: null }; }
+    else if (__fromRanges && __fromRanges.body) body = __fromRanges.body;
+
+    var split = ScriptSplit.splitRunsByScript(contents);
+    for (var si = 0; si < split.length; si++) {
+        var sr = split[si];
+        var s = startIdx + sr.startOffset, e = s + sr.len - 1;
+        if (e < s) continue;
+        var row = { start: s, end: e, script: sr.isCJK ? "CJK" : "LATIN",
+            text: contents.substr(sr.startOffset, sr.len), body: body,
+            landedChars: 0, carriedKept: 0, foreignKept: 0, readbackDrop: 0, landed: false };
+        if (bodyUnranked) row.weight_unranked = bodyUnranked;   // ④ N9: why the body key is unavailable
+        rows.push(row);
+
+        var r = null;
+        try {
+            r = rel.ER.resolveEmphasis({ config: rel.config, relations: rel.relations, body: body,
+                srcLang: rel.srcLang, dstLang: rel.dstLang, script: sr.isCJK ? "cjk" : "latin", kind: "bold" });
+        } catch (eRes) { r = { outcome: "resolver_threw", reason: String(eRes && eRes.message || eRes) }; }
+        row.outcome = r.outcome;
+        if (r.reason) row.reason = r.reason;
+        var family = null, style = null;
+        if (r.outcome === "relation") {
+            row.rule = "relation";
+            row.from = r.from; row.to = r.to;
+            row.toIdx = r.toIdx;   // the card bold arrived at = the italic phase's start (R-5)
+            family = r.family; style = r.weight;
+        } else {
+            row.rule = "fallback_bold";
+            if (sr.isCJK) {
+                try {
+                    var af = para.characters.item(s).appliedFont;
+                    if (af && typeof af === "object") family = af.fontFamily ? String(af.fontFamily) : String(af.name || "").split("\t")[0];
+                    else if (typeof af === "string") family = af.split("\t")[0];
+                } catch (eAf) {}
+                // owner 2026-10-01 (design-intent §8): Chinese weights come from the
+                // pairing table; B1: with no pairing for it in the config (or no config),
+                // fall back to Bold BUT list it ("配置缺配对"). ⛔ never edits the config.
+                // #6: the body's Latin font picks the row; a conflict it cannot settle
+                // is NOT landed (⛔ never first-write-wins) and is listed.
+                var __rx = family ? _cjkWeightFromTable(deps, family, "Bold", body ? body.font : null) : { weight: null, how: "none" };
+                style = __rx.weight ? String(__rx.weight) : null;
+                if (!style && __rx.how === "conflict") {
+                    row.family = family;
+                    row.reason = (row.reason ? row.reason + "; " : "") + "cjk_weight_conflict";
+                    row.configMissingPair = _noteMissingPair(deps, { reason: "conflict",
+                        srcFont: body ? body.font : null, srcWeight: "Bold", cjkFamily: family, tid: seg && seg.tid });
+                    continue;
+                }
+                if (!style) {
+                    style = "Bold";
+                    row.configMissingPair = _noteMissingPair(deps, {
+                        reason: __rx.how === "no_config" ? "no_config" : "no_pair",
+                        srcFont: body ? body.font : null, srcWeight: "Bold", cjkFamily: family,
+                        tid: seg && seg.tid });
+                }
+            } else {
+                family = body ? body.font : null;
+                style = "Bold";
+            }
+        }
+        if (!family) { row.reason = (row.reason ? row.reason + "; " : "") + "family_unresolved"; continue; }
+        var resolved = _resolveInstalledFaceCaseTolerant(workDoc, family, style, I);
+        if (!resolved) {
+            row.family = family; row.style = style;
+            row.reason = (row.reason ? row.reason + "; " : "") + "face_not_installed";
+            continue;
+        }
+        row.family = resolved.family; row.style = resolved.fontStyle;
+
+        // batch 5 ⓪ (R-4 ②③④): every char goes into exactly ONE bucket by its character
+        // style (the only char read on the chain — the STYLE, R-0), then one row per run of
+        // same-bucket chars (R-7: one code per row). Each row records what it did (`spans`)
+        // so the italic phase reads that record, never the live char (A1).
+        var plainName = null;
+        try { plainName = String(_ensureEmphasisCharStyle(workDoc, {}, resolved.family, resolved.fontStyle, deps, I, 0).name); } catch (ePn) {}
+        var groups = [], cur = null;
+        for (var ci = s; ci <= e; ci++) {
+            // OD-E17 does not apply to a CJK body paragraph's Latin sub-run (R-1: it starts from the source Latin key)
+            var bk = _boldBucketOf(para, ci, sr.isCJK, seg, body, plainName, deps, !!(srcIsCjk && !sr.isCJK));
+            if (!cur || cur.key !== bk.key) {
+                var gcs = null;
+                try { gcs = para.characters.item(ci).appliedCharacterStyle; } catch (eGc) {}
+                cur = { key: bk.key, b: bk, s: ci, e: ci, cs: gcs, csName: (gcs && gcs.name) ? String(gcs.name) : "" }; groups.push(cur);
+            }
+            else cur.e = ci;
+        }
+        rows.pop();   // the sub-run row becomes one row per group
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi], B = g.b;
+            var gr = {};
+            for (var rk in row) if (Object.prototype.hasOwnProperty.call(row, rk)) gr[rk] = row[rk];
+            gr.start = g.s; gr.end = g.e; gr.text = contents.substr(g.s - startIdx, g.e - g.s + 1);
+            gr.landedChars = 0; gr.directChars = 0; gr.readbackDrop = 0; gr.landed = false;
+            rows.push(gr);
+            if (B.unranked) gr.weight_unranked = B.unranked;
+            if (B.bucket === 3) {
+                // ③ carried / designer bold: untouched, the translator bold does not stack (OD-E11)
+                gr.rule = "carried_overlap_kept";
+                gr.carriedKey = B.carriedKey;
+                gr.spans = [{ s: g.s, e: g.e, how: "overlap_kept", family: B.carriedKey.family, style: B.carriedKey.weight }];
+                continue;
+            }
+            // ② OD-E17: a char of another family in this paragraph — the config decides
+            var face = resolved;
+            if (B.foreign) {
+                var ffMode = rel && rel.foreignFamily;
+                if (!ffMode) {
+                    // undecided: nothing written (a fallback Bold would land on the char's own family
+                    // = choosing "own" for the owner); reported with both families + CTA
+                    gr.rule = "foreign_family_undecided"; gr.family = B.foreign.family; gr.body_family = body ? body.font : null;
+                    // #144 (owner 2026-10-07): what the designer needs to choose, COMPUTED NOT WRITTEN —
+                    // where it is, what weight the char has, and the face each answer would land on.
+                    gr.foreign_style = B.foreign.weight || null;
+                    gr.page = _pageNameOfPara(para);
+                    gr.body_would_be = { family: resolved.family, style: resolved.fontStyle, installed: true };
+                    gr.own_would_be = _ownWouldBe(rel, B, workDoc, I, body, sr);
+                    delete gr.style; delete gr.from; delete gr.to; delete gr.toIdx;
+                    gr.spans = [{ s: g.s, e: g.e, how: "undecided", family: B.foreign.family, style: B.foreign.weight }];
+                    continue;
+                }
+                if (ffMode === "own") {
+                    var rOwn = null;
+                    try {
+                        rOwn = rel.ER.resolveEmphasis({ config: rel.config, relations: rel.relations, body: body,
+                            srcLang: rel.srcLang, dstLang: rel.dstLang, script: sr.isCJK ? "cjk" : "latin", kind: "bold",
+                            startMember: { lang: rel.srcLang, font: B.foreign.family, weight: B.foreign.weight },
+                            latinFamily: B.foreign.family });   // a Latin char keeps ITS family on the target card
+                    } catch (eOwn) { rOwn = { outcome: "resolver_threw", reason: String(eOwn && eOwn.message || eOwn) }; }
+                    var ownFam = B.foreign.family, ownSty = "Bold";
+                    if (rOwn && rOwn.outcome === "relation") {
+                        gr.rule = "relation"; gr.outcome = "relation"; gr.from = rOwn.from; gr.to = rOwn.to; gr.toIdx = rOwn.toIdx;
+                        ownFam = rOwn.family; ownSty = rOwn.weight;
+                    } else {
+                        gr.rule = "fallback_bold"; gr.outcome = rOwn ? rOwn.outcome : "no_relation";
+                        if (rOwn && rOwn.reason) gr.reason = rOwn.reason;
+                        delete gr.from; delete gr.to; delete gr.toIdx;
+                    }
+                    gr.foreign_family = "own";
+                    face = _resolveInstalledFaceCaseTolerant(workDoc, ownFam, ownSty, I);
+                    if (!face) {
+                        gr.family = ownFam; gr.style = ownSty;
+                        gr.reason = (gr.reason ? gr.reason + "; " : "") + "face_not_installed";
+                        continue;
+                    }
+                    gr.family = face.family; gr.style = face.fontStyle;
+                } else {
+                    gr.foreign_family = "body";
+                }
+            }
+            // ① R-5 arbitration 4: chars that were italic in the SOURCE (judged from source data
+            // and style definitions only — L1) get that italic re-implemented on the face bold
+            // writes now: the carried-path engine decision on (family, NEW weight). ⛔ never the
+            // old weight's angle (N10: the replay below skips skew for these chars).
+            var srcIt = (B.diff && /italic|oblique/i.test(String(B.diff.fontStyle || ""))) ? "carried run"
+                : _sourceItalicOf(para, { own: B.bucket !== 4, cs: g.cs, csName: g.csName }, gr.script, seg, body, I);
+            var writeStyle = face.fontStyle, writeAngle = 0;
+            if (srcIt) {
+                var dIt = _italicDecisionOn(workDoc, deps, face.family, face.fontStyle);
+                writeStyle = dIt.style; writeAngle = dIt.angle;
+                gr.source_italic = { realization: dIt.realization, face: dIt.face, source: srcIt };
+                if (dIt.realization === "faux") gr.source_italic.angle = dIt.angle;
+            }
+            if (B.bucket === 4) {
+                // ④ link / annotation / light designer style: style kept, the face as a DIRECT override
+                if (gr.rule === "relation") gr.rule = "relation_direct";
+                gr.spans = [{ s: g.s, e: g.e, how: "direct", family: face.family, style: writeStyle }];
+                if (writeAngle) gr.spans[0].angle = writeAngle;
+                try {
+                    var rgD = para.characters.itemByRange(g.s, g.e);
+                    rgD.appliedFont = face.family + "\t" + writeStyle;
+                    if (srcIt) rgD.skew = writeAngle;   // the only writer of this dimension (N10)
+                    // ⑤ read back: only what the char really shows counts as written
+                    var rbD = _readbackDirect(para, g.s, g.e, face.family, writeStyle, srcIt ? writeAngle : undefined);
+                    gr.directChars = rbD.ok; gr.readbackDrop += rbD.drop;
+                } catch (eDir) { gr.reason = (gr.reason ? gr.reason + "; " : "") + "direct_override_failed"; }
+                gr.landed = gr.directChars > 0 && gr.readbackDrop === 0;
+                continue;
+            }
+            // ① / ② : the relation style — for a carried NON-bold-class span (②c) the carried
+            // appearance + the relation weight (same diff ⇒ same hashed name as the carried style
+            // family uses), so its colour / underline / size survive
+            var diffUse = B.diff || {};
+            var styleObj = null;
+            try { styleObj = _ensureEmphasisCharStyle(workDoc, diffUse, face.family, writeStyle, deps, I, writeAngle); }
+            catch (eEns) { gr.reason = (gr.reason ? gr.reason + "; " : "") + "ensure_style_failed"; continue; }
+            if (!styleObj) { gr.reason = (gr.reason ? gr.reason + "; " : "") + "ensure_style_null"; continue; }
+            var target = String(styleObj.name);
+            gr.styleName = target;
+            if (B.diff) gr.diff = B.diff;
+            gr.spans = [{ s: g.s, e: g.e, how: "style", family: face.family, style: writeStyle, styleName: target }];
+            if (writeAngle) gr.spans[0].angle = writeAngle;
+            var captured = _captureSubRangeOverrides(para, g.s, g.e);
+            try {
+                var spanRange = para.characters.itemByRange(g.s, g.e);
+                // direct override > char style: drop the competing direct font
+                // (byPair sweep / a stale bold) so the style's face shows.
+                // D3b (arch 2026-10-01): CHARACTER_ONLY — never the paragraph's own overrides
+                try { _clearCharOverrides(spanRange); } catch (eClr) {}
+                spanRange.appliedCharacterStyle = styleObj;
+            } catch (eApply) {
+                gr.reason = (gr.reason ? gr.reason + "; " : "") + "applyCharStyle_failed";
+                continue;
+            }
+            for (var vk = g.s; vk <= g.e; vk++) {
+                var got = "";
+                try { var vCs = para.characters.item(vk).appliedCharacterStyle; got = (vCs && vCs.name) ? String(vCs.name) : ""; }
+                catch (eVk) { got = ""; }
+                if (got === target) gr.landedChars++; else gr.readbackDrop++;
+            }
+            _replaySubRangeOverrides(para, g.s, g.e, captured, {}, !!srcIt);   // N10: a re-implemented italic owns skew
+            gr.landed = gr.landedChars > 0;
+        }
+    }
+    return rows;
+}
+
+// batch 5 ⑤ (AC74 direct part): read a DIRECT write back, char by char — the effective font
+// must be (family, style), and the effective skew must equal `skew` when skew was written
+// (undefined ⇒ not compared). A write the host silently ignored (overset, locked text) shows
+// up here and nowhere else. @returns { ok, drop }
+function _readbackDirect(para, s, e, family, style, skew) {
+    var ok = 0, drop = 0;
+    for (var ci = s; ci <= e; ci++) {
+        var good = false;
+        try {
+            var ch = para.characters.item(ci), af = ch.appliedFont;
+            var nm = (af && typeof af === "object") ? String(af.name || "") : String(af || "");
+            var parts = nm.split("\t");
+            good = parts[0] === String(family) && parts[1] === String(style);
+            if (good && skew !== undefined) { var sk = Number(ch.skew); good = isFinite(sk) && Math.abs(sk - Number(skew)) < 0.01; }
+        } catch (eRb) { good = false; }
+        if (good) ok++; else drop++;
+    }
+    return { ok: ok, drop: drop };
+}
+function _foldFam(f) { return String(f || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "").toLowerCase(); }
+
+// batch 5 ⓪ — which R-4 bucket a char of a translator-bold sub-run is in.
+// ① no style / the plain relation style / a _T_c_emp_* residue not landed by THIS run's
+//   carried landing ⇒ the relation style
+// ② a this-run carried span that is NOT bold-class (its diff has no weight heavier than the
+//   body: colour / underline / size / italic-only) ⇒ the carried appearance + relation weight
+// ③ this-run carried bold (ⓐ), a designer style DEFINING a heavier weight (ⓑ), or — on an
+//   8A-folded segment's Latin sub-run — a GREP Latin face heavier than the body key (ⓒ);
+//   a weight the rank table cannot place ⇒ ③ too, + weight_unranked (⛔ no guessing)
+// ④ any other style (link, annotation fall-back, a designer style not heavier) ⇒ direct
+// The registry (K3) is what tells "this run carried" from "left over": ⛔ never the name.
+// @returns { bucket, key, diff?, carriedKey?, unranked? }
+function _boldBucketOf(para, ci, isCJK, seg, body, plainName, deps, noForeign) {
+    var EX = require("./emphasis_extractor.js");
+    var RANK = (EX._internal && EX._internal.WEIGHT_RANK) || {};
+    function ranked(w) {
+        if (Object.prototype.hasOwnProperty.call(RANK, w)) return true;
+        for (var k in RANK) if (Object.prototype.hasOwnProperty.call(RANK, k) && k.toLowerCase() === String(w).toLowerCase()) return true;
+        return false;
+    }
+    var bodyW = body ? EX.parseFontStyle(body.weight).weight : "Regular";
+    // heavier than the body? either side unranked ⇒ treated as heavier (conservative ③)
+    function heavier(w, family, side) {
+        if (w === bodyW) return { yes: false };
+        if (!ranked(w)) return { yes: true, unranked: { weight: w, family: family, side: side } };
+        if (!ranked(bodyW)) return { yes: true, unranked: { weight: bodyW, family: body ? body.font : null, side: "body key" } };
+        return { yes: EX.rankWeight(w) > EX.rankWeight(bodyW) };
+    }
+    var cs = null, csName = "";
+    try { cs = para.characters.item(ci).appliedCharacterStyle; csName = (cs && cs.name) ? String(cs.name) : ""; } catch (eCs) {}
+    var bodyFam = body ? body.font : null;
+    // the registry first: a carried Bold span's style can carry the SAME name as the plain
+    // relation style (same appearance ⇒ same name, #111) — the name cannot tell them apart
+    var regHit = null;
+    if (csName.indexOf("_T_c_emp_") === 0) {
+        var reg0 = (deps && deps.carriedRegistry && seg && deps.carriedRegistry[seg.tid]) || [];
+        for (var i0 = 0; i0 < reg0.length; i0++) if (reg0[i0] && reg0[i0].s <= ci && reg0[i0].e >= ci && reg0[i0].styleName === csName) { regHit = reg0[i0]; break; }
+    }
+    if (!regHit && (!csName || csName === "[None]" || csName === plainName)) {
+        // ⓒ 8A-folded segment, Latin sub-run: the source Latin face lives only in the GREP style
+        var fs = seg && seg.format_snapshot, lat = fs && fs.scriptByFont && fs.scriptByFont.scriptToFont && fs.scriptByFont.scriptToFont.LATIN;
+        var base = fs && fs.baseline;
+        if (!isCJK && lat && base && lat.fontFamily) {
+            var lw = EX.parseFontStyle(lat.fontStyle).weight;
+            var bw = EX.parseFontStyle(base.fontStyle).weight;
+            var hv = (lw === bw) ? { yes: false }
+                : (!ranked(lw) ? { yes: true, unranked: { weight: lw, family: String(lat.fontFamily), side: "latin face" } }
+                : (!ranked(bw) ? { yes: true, unranked: { weight: bw, family: String(base.fontFamily), side: "body key" } }
+                : { yes: EX.rankWeight(lw) > EX.rankWeight(bw) }));
+            if (hv.yes) return { bucket: 3, key: "3|" + lat.fontFamily + "|" + lw, carriedKey: { family: String(lat.fontFamily), weight: lw }, unranked: hv.unranked };
+        }
+        return { bucket: 1, key: "1" };
+    }
+    if (csName.indexOf("_T_c_emp_") === 0) {
+        var hit = regHit;
+        if (!hit) return { bucket: 1, key: "1" };   // residue ⇒ replaced (AC⑰)
+        var d = hit.diff || {};
+        var fam = d.fontFamily ? String(d.fontFamily) : bodyFam;
+        if (d.fontStyle) {
+            var w = EX.parseFontStyle(d.fontStyle).weight;
+            var h = heavier(w, fam, "carried run");
+            if (h.yes) return { bucket: 3, key: "3|" + fam + "|" + w + "|" + csName, carriedKey: { family: fam, weight: w }, unranked: h.unranked };
+        } else if (d.fontFamily) {
+            // a family swap with no fontStyle: its weight is not readable without cutting the
+            // family name (not done, arch 2026-10-01) ⇒ conservatively bold-class + reported
+            return { bucket: 3, key: "3|" + fam + "|?|" + csName, carriedKey: { family: fam, weight: null },
+                unranked: { weight: null, family: fam, side: "carried run (family swap)" } };
+        }
+        var b2 = { bucket: 2, key: "2|" + csName, diff: d };
+        if (!noForeign && d.fontFamily && _foldFam(d.fontFamily) !== _foldFam(bodyFam))
+            b2.foreign = { family: String(d.fontFamily), weight: d.fontStyle ? EX.parseFontStyle(d.fontStyle).weight : bodyW };
+        return b2;
+    }
+    if (csName.indexOf("_T_c_") !== 0) {
+        // a designer style: read its DEFINITION (not the char) — NOTHING / "" = not defined
+        var def = null, defFam = null;
+        try { def = cs.fontStyle; } catch (eDf) {}
+        try { var af = cs.appliedFont; defFam = (af && typeof af === "object") ? String(af.fontFamily || String(af.name || "").split("\t")[0]) : (af ? String(af).split("\t")[0] : null); } catch (eAf) {}
+        def = (def === null || def === undefined) ? "" : String(def);
+        if (def && def !== "NOTHING") {
+            var dw = EX.parseFontStyle(def).weight;
+            var dfam = defFam || bodyFam;
+            var dh = heavier(dw, dfam, "designer style");
+            if (dh.yes) return { bucket: 3, key: "3|" + dfam + "|" + dw + "|" + csName, carriedKey: { family: dfam, weight: dw }, unranked: dh.unranked };
+        }
+        // OD-E17 ⓑ: the style DEFINES another family than the body
+        if (!noForeign && defFam && _foldFam(defFam) !== _foldFam(bodyFam))
+            return { bucket: 4, key: "4|" + csName, foreign: { family: defFam, weight: (def && def !== "NOTHING") ? EX.parseFontStyle(def).weight : bodyW } };
+    }
+    return { bucket: 4, key: "4|" + csName };
+}
+
+// ─── #ac-emphasis-relations batch 4d (task_plan §7.6 I-5 / R-5 phase 3): translator italic ───
+//
+// Lands ONE translator `italic` annotation through the card-to-card italic relation,
+// AFTER bold (same restamp). Per script sub-run the START card is (R-5 K7):
+//   bold landed by relation        → the card bold arrived at (its OWN italic line, no chain)
+//   bold landed as fallback Bold   → the card holding (landing lang, family, "Bold")
+//   fallback Bold face missing     → nothing: italic_fallback_face_missing
+//   no bold / bold not landed      → the body's card (italic only)
+// and for chars sitting under a CARRIED emphasis style (OD-E13 = A) → the card of the weight
+// that style DEFINES (style definition read, never the live char).
+// The italic card's member for the landing language / family is the face:
+//   real face → that face; italic copy → its upright copy_of + skew = angle (faux).
+// Landing: [None] / the bold style just landed → a `_T_c_emp_w_<family>_<face>[_it<angle>]`
+// char style (same reason as bold: a hand face without a style can render as Myriad);
+// a carried / link / designer style is kept and the face is a DIRECT override on top.
+// Not landed (any code) ⇒ phase 3 writes NOTHING (N8): the char keeps phase 2's result /
+// what it already had — incl. any source italic (OD-E16 = A).
+// @param boldRows rows applyRelationBold returned for this paragraph's annotations
+// @returns rows { dimension:"italic", start, end, script, text, outcome_italic, start_from,
+//   realization?, angle?, family?, style?, styleName?, landedChars, directChars, readbackDrop, landed }
+function applyRelationItalic(para, startIdx, endIdx, workDoc, deps, seg, rel, boldRows) {
+    var I = (SSB && SSB._internal) || {};
+    var rows = [];
+    var contents = "";
+    try { contents = String(para.characters.itemByRange(startIdx, endIdx).contents); } catch (eC0) {}
+    if (contents.length !== endIdx - startIdx + 1 || !contents.length) {
+        rows.push({ dimension: "italic", start: startIdx, end: endIdx, script: "?", text: contents,
+            outcome_italic: "apply_failed", reason: "range contents length " + contents.length + " != " + (endIdx - startIdx + 1),
+            landedChars: 0, directChars: 0, readbackDrop: 0, landed: false });
+        return rows;
+    }
+    var srcIsCjk = rel && rel.ER && rel.ER._internal && rel.ER._internal.isCjkLang(rel.srcLang);
+    var bodyCluster = null;
+    try { bodyCluster = srcIsCjk ? I._resolveCJKFontForCluster(seg) : I._resolveLatinFontForCluster(seg); } catch (eBc) {}
+    if (!bodyCluster || !bodyCluster.fontFamily) {
+        var b0 = seg && seg.format_snapshot && seg.format_snapshot.baseline;
+        bodyCluster = b0 ? { fontFamily: b0.fontFamily, fontStyle: b0.fontStyle } : null;
+    }
+    var body = (bodyCluster && bodyCluster.fontFamily && bodyCluster.fontStyle)
+        ? _bodyKey(bodyCluster) : null;
+    // batch 5 ④ (L14 / N9): the source ranges decide when they are there
+    var bodyUnranked = null, __fromRanges = _bodyKeyFromRanges(seg);
+    if (__fromRanges && __fromRanges.unranked) { bodyUnranked = __fromRanges.unranked; body = { font: __fromRanges.family, weight: null }; }
+    else if (__fromRanges && __fromRanges.body) body = __fromRanges.body;
+    var latinFamily = _sourceLatinFamily(null, seg, I) || (body && body.font) || null;
+    var CODE = { no_relation: "italic_no_relation", projection_unmapped: "italic_projection_unmapped",
+        projection_conflict: "italic_projection_conflict", body_key_unavailable: "body_key_unavailable" };
+
+    function resolveFrom(start, script) {
+        var o = { config: rel.config, relations: rel.relations, body: body, srcLang: rel.srcLang, dstLang: rel.dstLang,
+            script: script, kind: "italic", latinFamily: latinFamily };
+        if (start.pairings) o.startPairings = start.pairings;
+        if (start.member) o.startMember = start.member;
+        if (start.latinFamily) o.latinFamily = start.latinFamily;
+        try { return rel.ER.resolveEmphasis(o); }
+        catch (eR) { return { outcome: "resolver_threw", reason: String(eR && eR.message || eR) }; }
+    }
+
+    var split = ScriptSplit.splitRunsByScript(contents);
+    for (var si = 0; si < split.length; si++) {
+        var sr = split[si];
+        var s = startIdx + sr.startOffset, e = s + sr.len - 1;
+        if (e < s) continue;
+        var script = sr.isCJK ? "CJK" : "LATIN";
+        // a per-sub-run row for the start decision; split into one row per char group below
+        // (R-7: exactly one code per row per dimension — an own and a carried group differ)
+        var row = { dimension: "italic", start: s, end: e, script: script, text: contents.substr(sr.startOffset, sr.len),
+            landedChars: 0, directChars: 0, readbackDrop: 0, landed: false };
+
+        // batch 5 ⓪: the bold row covering a char (same script) — bold rows are one per R-4
+        // bucket group now, so the start is decided per char group from that row's RECORD (A1)
+        function boldRowAt(ci) {
+            for (var bi = 0; bi < (boldRows || []).length; bi++) {
+                var br = boldRows[bi];
+                if (br && br.script === script && br.start <= ci && br.end >= ci) return br;
+            }
+            return null;
+        }
+        function startFor(bold) {
+            if (bold && bold.rule === "foreign_family_undecided")
+                return { start: { label: "body" }, early: "foreign_family_undecided" };   // R-7: both dimensions
+            if (bold && bold.foreign_family === "own" && (bold.rule === "relation" || bold.rule === "relation_direct") && bold.landed && bold.toIdx !== undefined)
+                return { start: { pairings: [bold.toIdx], label: "bold relation", latinFamily: bold.family }, onFallback: false };
+            if (bold && (bold.rule === "relation" || bold.rule === "relation_direct") && bold.landed && bold.toIdx !== undefined)
+                return { start: { pairings: [bold.toIdx], label: "bold relation" }, onFallback: false };
+            if (bold && bold.rule === "carried_overlap_kept" && bold.carriedKey && bold.carriedKey.family && bold.carriedKey.weight)
+                // OD-E13 = A: the translator bold did not stack ⇒ start from the weight it kept
+                return { start: { member: { lang: rel.dstLang, font: String(bold.carriedKey.family), weight: String(bold.carriedKey.weight) }, label: "carried weight" }, onFallback: false };
+            if (bold && bold.rule === "fallback_bold" && /face_not_installed/.test(String(bold.reason || "")))
+                return { start: { label: "fallback Bold" }, early: "italic_fallback_face_missing" };
+            if (bold && bold.rule === "fallback_bold" && bold.landed && bold.family)
+                return { start: { member: { lang: rel.dstLang, font: String(bold.family), weight: "Bold" }, label: "fallback Bold" }, onFallback: true };
+            return { start: { label: "body" }, early: (body && body.weight) ? null : "body_key_unavailable" };
+        }
+
+        // per-char groups: own (style-landable) chars vs each carried / foreign style; a char
+        // is "own" when it has no style or wears the style its covering bold row put there
+        var groups = [], cur = null;
+        for (var ci = s; ci <= e; ci++) {
+            var csObj = null, csName = "";
+            try { csObj = para.characters.item(ci).appliedCharacterStyle; csName = (csObj && csObj.name) ? String(csObj.name) : ""; } catch (eCs) {}
+            var bAt = boldRowAt(ci);
+            var own = !csName || csName === "[None]" || !!(bAt && bAt.styleName && csName === String(bAt.styleName));
+            var key = (own ? "<own>" : csName) + "|" + (bAt ? bAt.start : "-");
+            if (!cur || cur.key !== key) { cur = { key: key, own: own, s: ci, e: ci, cs: csObj, csName: csName, bold: bAt }; groups.push(cur); }
+            else cur.e = ci;
+        }
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            var sf = startFor(g.bold);
+            var start = sf.start, onFallback = !!sf.onFallback, early = sf.early || null;
+            if (!g.bold && !early) {
+                // italic only, on a char of another family (OD-E17): the same key decides
+                var fb = _boldBucketOf(para, g.s, script === "CJK", seg, body, null, deps, !!(srcIsCjk && script === "LATIN"));
+                if (fb.foreign && fb.bucket !== 3) {
+                    if (!rel.foreignFamily) early = "foreign_family_undecided";
+                    else if (rel.foreignFamily === "own") {
+                        start = { member: { lang: rel.srcLang, font: fb.foreign.family, weight: fb.foreign.weight }, label: "own family", latinFamily: fb.foreign.family };
+                        onFallback = false;
+                    }
+                }
+            }
+            row = { dimension: "italic", start: g.s, end: g.e, script: script,
+                text: contents.substr(g.s - startIdx, g.e - g.s + 1), start_from: start.label,
+                landedChars: 0, directChars: 0, readbackDrop: 0, landed: false };
+            if (!g.own) row.kept_style = g.csName;
+            if (bodyUnranked) row.weight_unranked = bodyUnranked;   // ④ N9
+            rows.push(row);
+            // I-5 (OD-E16 = A): a char carrying SOURCE italic gets what the carried route would give,
+            // side by side — always when the translator italic did not land (that italic stays), and
+            // when it landed only if the two differ (the translator's wins)
+            var carried = null;
+            if (_sourceItalicOf(para, g, script, seg, body, I)) { try { carried = _carriedItalicFor(para, g, workDoc, deps); } catch (eCar) {} }
+            if (carried) row.italic_carried = carried;
+            if (early) { row.outcome_italic = early; continue; }
+            var gStart = start, gOnFallback = onFallback;
+            if (!g.own && gStart.label !== "carried weight" && gStart.label !== "own family" && g.csName.indexOf("_T_c_emp_") === 0) {
+                // OD-E13 = A: carried emphasis — start from the weight the STYLE DEFINES
+                var dFam = null, dSty = null;
+                try {
+                    var af = g.cs.appliedFont;
+                    dFam = (af && typeof af === "object") ? (af.fontFamily ? String(af.fontFamily) : String(af.name || "").split("\t")[0])
+                         : (typeof af === "string" ? af.split("\t")[0] : null);
+                    dSty = g.cs.fontStyle ? String(g.cs.fontStyle) : null;
+                } catch (eDef) {}
+                if (dFam && dSty && dSty !== "NOTHING") { gStart = { member: { lang: rel.dstLang, font: dFam, weight: _stripItalicToken(dSty) }, label: "carried weight" }; gOnFallback = false; }
+            }
+            var r = resolveFrom(gStart, script === "CJK" ? "cjk" : "latin");
+            row.start_from = gStart.label;
+            if (r.outcome !== "relation") { row.outcome_italic = CODE[r.outcome] || r.outcome; if (r.reason) row.reason = r.reason; continue; }
+            var faux = r.realization === "faux";
+            var resolved = _resolveInstalledFaceCaseTolerant(workDoc, r.family, r.weight, I);
+            row.realization = r.realization; if (faux) row.angle = r.angle;
+            row.from = r.from; row.to = r.to;
+            if (!resolved) { row.outcome_italic = "italic_face_not_installed"; row.family = r.family; row.style = r.weight; continue; }
+            row.family = resolved.family; row.style = resolved.fontStyle;
+            row.outcome_italic = gOnFallback ? "italic_on_fallback" : "italic_relation";
+            if (g.own) {
+                var styleObj = null;
+                // ② span: keep the carried appearance the bold row landed (same diff)
+                var itDiff = (g.bold && g.bold.diff) ? g.bold.diff : {};
+                try { styleObj = _ensureEmphasisCharStyle(workDoc, itDiff, resolved.family, resolved.fontStyle, deps, I, faux ? r.angle : 0); } catch (eEns) {}
+                if (!styleObj) { row.outcome_italic = "apply_failed"; row.reason = "ensure_style_failed"; continue; }
+                row.styleName = String(styleObj.name);
+                var captured = _captureSubRangeOverrides(para, g.s, g.e);
+                try {
+                    var rg = para.characters.itemByRange(g.s, g.e);
+                    try { _clearCharOverrides(rg); } catch (eClr) {}   // D3b: CHARACTER_ONLY
+                    rg.appliedCharacterStyle = styleObj;
+                } catch (eAp) { row.outcome_italic = "apply_failed"; row.reason = "applyCharStyle_failed"; continue; }
+                _replaySubRangeOverrides(para, g.s, g.e, captured, {}, true);   // skipSkew: the style's skew must show
+                for (var vk = g.s; vk <= g.e; vk++) {
+                    var got = "";
+                    try { var vCs = para.characters.item(vk).appliedCharacterStyle; got = (vCs && vCs.name) ? String(vCs.name) : ""; } catch (eV) {}
+                    if (got === row.styleName) row.landedChars++; else row.readbackDrop++;
+                }
+            } else {
+                // carried / link / designer style kept; the face as a direct override on top
+                try {
+                    var rgd = para.characters.itemByRange(g.s, g.e);
+                    rgd.appliedFont = resolved.family + "\t" + resolved.fontStyle;
+                    rgd.skew = faux ? r.angle : 0;
+                    // ⑤ read back (font + skew): only what the char really shows counts
+                    var rbI = _readbackDirect(para, g.s, g.e, resolved.family, resolved.fontStyle, faux ? r.angle : 0);
+                    row.directChars += rbI.ok; row.readbackDrop += rbI.drop;
+                } catch (eDir) { row.outcome_italic = "apply_failed"; row.reason = "direct_override_failed"; continue; }
+            }
+            row.landed = g.own ? (row.landedChars + row.directChars) > 0 : (row.directChars > 0 && row.readbackDrop === 0);
+            if (row.landed && carried && _sameItalic(carried, { realization: row.realization,
+                    face: row.family + "\t" + row.style, angle: row.angle })) delete row.italic_carried;
+        }
+    }
+    return rows;
+}
+// The body key (R-1, C6): the paragraph body's family + weight with the italic token DROPPED
+// — an italic body paragraph locates its card by the upright spelling; the raw style is kept
+// (rawWeight) because "was the body italic" is a source-italic criterion (R-5 L12).
+// The body key from the SOURCE ranges (R-1 L14 / N9) when the segment kept `_allRanges` with
+// props (the criterion is only that — not `uniform`): the body FAMILY = extractEmphasis's family
+// winner (most chars, fixed settings); its weight = the LIGHTEST visible weight OF THAT FAMILY
+// (K12: another family's weights never mix in). ⛔ no guessing: ≥2 distinct weights (italic
+// token stripped) with any not in WEIGHT_RANK ⇒ the key is unavailable + weight_unranked.
+// @returns null (no usable ranges ⇒ caller keeps the cluster / baseline key)
+//        | { body: {font, weight, rawWeight?} } | { family, unranked: {weight:null, weights, family, side} }
+function _bodyKeyFromRanges(seg) {
+    var fs = seg && seg.format_snapshot, ar = fs && fs._allRanges;
+    if (!ar || !ar.length || !ar[0] || !ar[0].props) return null;
+    var EX = require("./emphasis_extractor.js");
+    var fam = null;
+    try {
+        var ex = EX.extractEmphasis(ar, fs.baseline || null, { targetLanguage: null, editMode: false });
+        fam = ex && ex.baselineWinners ? ex.baselineWinners.fontFamily : null;
+        // arch 2026-10-06 (L14): an exact tie for the body family is NOT decided by order —
+        // the key is unavailable (⛔ no guessing), reported with the tied families and counts.
+        if (ex && ex.stats && ex.stats.fontFamilyTie && ex.stats.fontFamilyTie.length >= 2) {
+            var tie = ex.stats.fontFamilyTie;
+            return { family: null, unranked: { weight: null, weights: null, side: "body_key_family_tie",
+                family: tie.map(function (t) { return t.family; }).join(" / "), families: tie } };
+        }
+    } catch (eEx) { fam = null; }
+    if (!fam) return null;
+    var RANK = (EX._internal && EX._internal.WEIGHT_RANK) || {};
+    function ranked(w) {
+        if (Object.prototype.hasOwnProperty.call(RANK, w)) return true;
+        for (var k in RANK) if (Object.prototype.hasOwnProperty.call(RANK, k) && k.toLowerCase() === String(w).toLowerCase()) return true;
+        return false;
+    }
+    var seen = [], raw = {};
+    for (var i = 0; i < ar.length; i++) {
+        var r = ar[i];
+        if (!r || !r.props || String(r.props.fontFamily) !== String(fam)) continue;
+        if (!/\S/.test(String(r.text || ""))) continue;   // visible ranges only
+        var w = EX.parseFontStyle(r.props.fontStyle).weight;
+        if (seen.indexOf(w) < 0) { seen.push(w); raw[w] = String(r.props.fontStyle || "Regular"); }
+    }
+    if (!seen.length) return null;
+    if (seen.length >= 2 && seen.some(function (x) { return !ranked(x); }))
+        return { family: String(fam), unranked: { weight: null, weights: seen, family: String(fam), side: "body_key_candidates" } };
+    var best = seen[0];
+    for (var j = 1; j < seen.length; j++) if (EX.rankWeight(seen[j]) < EX.rankWeight(best)) best = seen[j];
+    var key = { font: String(fam), weight: best };
+    if (raw[best] !== best) key.rawWeight = raw[best];
+    return { body: key };
+}
+function _bodyKey(cl) {
+    var raw = String(cl.fontStyle);
+    var w = require("./emphasis_extractor.js").parseFontStyle(raw).weight;
+    var k = { font: String(cl.fontFamily), weight: w };
+    if (w !== raw) k.rawWeight = raw;
+    return k;
+}
+// The CJK gate the carried-italic engine decision uses (a CJK family shipping a
+// probe-nameable italic face must not reach keep). Shared with I-5's italic_carried.
+function _isCjkFamilyName(family) {
+    var f = String(family || "");
+    return /[⺀-鿿豈-﫿]/.test(f)
+        || /mhei|heiti|songti|mingti|gothic|kai|fangsong|source han|noto sans (sc|tc|jp|kr)|pingfang|yahei|simhei|simsun/i.test(f);
+}
+// I-5 / R-5 L12: does this char group carry SOURCE italic? Decided from the source snapshot
+// and style DEFINITIONS only (L1 — never the char's effective values):
+//   a carried / designer char style whose definition is italic (fontStyle token or skew ≠ 0) ·
+//   the body key before stripping (uniform italic paragraph) · the paragraph style's own
+//   faux skew · a GREP-dispatched Latin face (8A-folded segment) that is italic.
+// @returns a short tag naming the source, or null
+function _sourceItalicOf(para, g, script, seg, body, I) {
+    var IT = /\b(?:italic|oblique)\b/i;
+    if (!g.own && g.cs) {
+        try {
+            var dSt = g.cs.fontStyle ? String(g.cs.fontStyle) : "";
+            if (dSt && dSt !== "NOTHING" && IT.test(dSt)) return "char style " + g.csName;
+            var dSk = g.cs.skew;
+            if (typeof dSk === "number" && dSk !== 0) return "char style " + g.csName;
+        } catch (eD) {}
+    }
+    if (body && IT.test(String(body.rawWeight || body.weight || ""))) return "body";
+    try {
+        var ps = para.appliedParagraphStyle, pSk = ps ? ps.skew : null;
+        if (typeof pSk === "number" && pSk !== 0) return "paragraph style";
+    } catch (eP) {}
+    if (script === "LATIN") {
+        var lat = seg && seg.format_snapshot && seg.format_snapshot.scriptByFont
+            && seg.format_snapshot.scriptByFont.scriptToFont && seg.format_snapshot.scriptByFont.scriptToFont.LATIN;
+        if (lat && IT.test(String(lat.fontStyle || ""))) return "latin face";
+    }
+    return null;
+}
+// I-5: what the carried-italic route (the same engine decision as _applyOneEmphasisSubRun's
+// isItalicSrc branch) would give on the face the group sits on after phase 2. The face is read
+// off the char — a REPORT value only, nothing is written from it.
+// @returns { realization: real|faux|keep|block|surface, face, angle? }
+function _carriedItalicFor(para, g, workDoc, deps) {
+    var fam = null, sty = null;
+    try {
+        var af = para.characters.item(g.s).appliedFont;
+        var nm = (af && typeof af === "object") ? String(af.name || "") : String(af || "");
+        fam = nm.split("\t")[0] || null; sty = nm.split("\t")[1] || null;
+    } catch (eF) {}
+    if (!fam || !sty) return null;
+    var d = _italicDecisionOn(workDoc, deps, fam, sty);
+    var out = { realization: d.realization, face: d.face };
+    if (d.realization === "faux") out.angle = d.angle;
+    return out;
+}
+// The carried-italic engine decision (= _applyOneEmphasisSubRun's isItalicSrc branch) on one
+// face: lookup on the derived view keyed by the face as-is, the weight-exact italic probe, the
+// CJK gate. Shared by I-5 (italic_carried) and R-5 arbitration 4 (re-implementing a source
+// italic on the face a translator bold just wrote).
+// @returns { realization: faux|real|keep|block|surface, face, style (what to write), angle (0 unless faux) }
+function _italicDecisionOn(workDoc, deps, fam, sty) {
+    var base = _stripItalicToken(sty);
+    var icfg = (deps && deps.italicConfig) ? ItalicConfig.lookup(deps.italicConfig, fam, sty) : null;
+    var exactIt = null;
+    try { exactIt = FontItalicProbe.findExactItalicStyleName(workDoc, fam, base); } catch (eEx) {}
+    var dec = ItalicConfig.resolveItalicRealization(icfg, !!exactIt, !!exactIt && !_isCjkFamilyName(fam));
+    if (dec.kind === "faux") return { realization: "faux", face: fam + "\t" + base, style: base, angle: dec.angle };
+    if (dec.kind === "real" || dec.kind === "keep") { var f = exactIt || sty; return { realization: dec.kind, face: fam + "\t" + f, style: f, angle: 0 }; }
+    return { realization: dec.kind, face: fam + "\t" + base, style: base, angle: 0 };
+}
+// Same visible result? keep and real both mean "on the real italic face".
+function _sameItalic(a, b) {
+    function k(x) { return (x.realization === "keep" ? "real" : x.realization) + "|" + x.face + "|" + (x.realization === "faux" ? x.angle : ""); }
+    return k(a) === k(b);
+}
+function _stripItalicToken(w) {
+    return String(w || "").replace(/\s*\b(?:italic|oblique)\b\s*/ig, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "") || "Regular";
+}
+
+// Resolve a per-script sub-run to an INSTALLED face, build (or reuse) a
+// combined `_T_c_emp_w_*` character style carrying the full run diff, and
+// apply it to the sub-range with direct-override capture/replay (SPEC §12/§13/§14).
+// Returns { script, family?, style?, styleName?, outcome, reason? }.
+// 🪦 _weightTokenFromFamily (cut the weight out of a family NAME, "Whitney Semibold"
+// → "Semibold") — removed 2026-10-01 (#ac-emphasis-relations ①, arch: no string
+// surgery on font names). A family swap now looks up the pairing row whose source
+// face IS that face (see the faceSwap block in _applyOneEmphasisSubRun).
+
+function _applyOneEmphasisSubRun(para, diff, isCJK, subStart, subEnd, workDoc, deps, seg, I) {
+    var script = isCJK ? "CJK" : "LATIN";
+    var out = { script: script, outcome: "skip" };
+
+    // P0: only treat fontStyle as a SOURCE weight when the diff actually carries
+    // it. emphasis_extractor.diffProps emits fontStyle ONLY when it differs from
+    // baseline — a color-/underline-/size-/superscript-ONLY run has NO fontStyle.
+    // For those, the run must NOT change the weight: we use the char's LIVE
+    // weight as the face style (applied DIRECTLY, never via cjkEmphasisWeight,
+    // because the live weight is already the resolved target — not a source).
+    var hasSrcWeight = !!(diff && typeof diff.fontStyle === "string" && diff.fontStyle);
+    var srcWeight = hasSrcWeight ? diff.fontStyle : "Regular";
+
+    // CJK faux-italic (SPEC §6 revision — host bug 20260624, user "中文应斜体的部分未斜体"):
+    // a source italic token on a CJK run has NO real italic face (MHei/SHS etc. ship
+    // upright only). The weight branch keeps the live upright weight (italic stripped
+    // off the weight resolve); THIS flag separately drives a faux-skew slant (per
+    // writable span, below) so the source's italic intent stays visible — e.g. the
+    // [FA] editorial notes. Latin runs keep REAL italic (resolved face), so the skew
+    // is CJK-only. Detect on the raw srcWeight so "Italic" AND "Bold Italic" qualify.
+    // TODO#26 part 2: include `oblique` — a source run on an "… Oblique" face carries
+    // the same slant intent, and an oblique-blind gate here silently bypassed the
+    // per-weight config (the run kept the oblique face verbatim, config never
+    // consulted), diverging from italic_apply whose `_wasItalic` matches both. Also
+    // flips `skipSkew` on for oblique runs (:1765) — the realization owns the slant,
+    // so a stale captured skew must not be replayed on top (that WOULD double-slant).
+    var isItalicSrc = hasSrcWeight && /italic|oblique/i.test(srcWeight);
+
+    // #ac-emphasis-relations: the paragraph body's SOURCE weight, for the single
+    // carried-emphasis weight rule (EmphRel.carriedEmphasisWeight — owner T1–T6).
+    var __bodyW = null;
+    try {
+        var __bc = (typeof I._resolveLatinFontForCluster === "function" && seg) ? I._resolveLatinFontForCluster(seg) : null;
+        __bodyW = (__bc && __bc.fontFamily) ? String(__bc.fontStyle || "Regular") : null;
+    } catch (eBw0) { __bodyW = null; }
+    var __rank = (I && typeof I._rankWeight === "function") ? I._rankWeight : null;
+
+    // ── (a) family source by script (SPEC §14.1) ──
+    var family = null;
+    var liveWeight = null;   // live face style for the weight-absent path
+    if (isCJK) {
+        // CJK: live per-char appliedFont.name (absolute index — A1 host-verified).
+        try {
+            var ch0 = para.characters.item(subStart);
+            var af = ch0.appliedFont;
+            if (af && typeof af === "object") {
+                if (af.fontFamily) family = String(af.fontFamily);
+                else if (af.name) family = String(af.name).split("\t")[0];
+                // live weight = the style half of the Font object / its name.
+                try { if (af.fontStyle) liveWeight = String(af.fontStyle); } catch (eLfsO) {}
+                if (!liveWeight && af.name && String(af.name).indexOf("\t") >= 0) {
+                    liveWeight = String(af.name).split("\t")[1];
+                }
+            } else if (typeof af === "string") {
+                family = String(af).split("\t")[0];
+                if (String(af).indexOf("\t") >= 0) liveWeight = String(af).split("\t")[1];
+            }
+        } catch (eCJK) {}
+        if (!family) { out.reason = "cjk_family_unreadable"; return out; }
+    } else {
+        // Latin: source root family. ① run.diff.fontFamily (must be non-CJK)
+        // > ② _resolveLatinFontForCluster(seg) (scriptByFont.LATIN else baseline).
+        var isCJKFont = (typeof I._isCJKFont === "function") ? I._isCJKFont : function () { return false; };
+        // Latin live weight (for the weight-absent path) ALWAYS comes from the
+        // cluster's live Latin weight — Latin is GREP-routed, so it does NOT
+        // surface on char.appliedFont (A3). Resolve it UNCONDITIONALLY so BOTH
+        // family-source branches (① diff.fontFamily, ② _resolveLatinFontForCluster)
+        // preserve the live weight when the run carries no source fontStyle.
+        var latCluster = null;
+        if (typeof I._resolveLatinFontForCluster === "function" && seg) {
+            try { latCluster = I._resolveLatinFontForCluster(seg); } catch (eL) {}
+        }
+        if (latCluster && latCluster.fontStyle) liveWeight = String(latCluster.fontStyle);
+
+        if (diff && diff.fontFamily && !isCJKFont(String(diff.fontFamily))) {
+            family = String(diff.fontFamily);
+        } else if (latCluster && latCluster.fontFamily) {
+            // _isCJKFont guard: never feed a CJK family to a Latin sub-run.
+            if (isCJKFont(String(latCluster.fontFamily))) {
+                out.reason = "latin_family_resolved_cjk";
+                return out;
+            }
+            family = String(latCluster.fontFamily);
+        }
+        if (!family) { out.reason = "latin_family_unresolved"; return out; }
+    }
+    out.family = family;
+
+    // ── (b) resolve to an INSTALLED real face (case-tolerant; never ghost) ──
+    var resolved = null;
+    if (isCJK) {
+        var dstWeight;
+        // CJK has NO real italic — italic is faux-skew (SPEC §6, out-of-scope here).
+        // So strip any italic token off the source style and resolve only the WEIGHT
+        // component. An italic-ONLY run (fontStyle="Italic", common on [FA] designer
+        // notes) has no weight component → it must NOT be run through cjkEmphasisWeight
+        // (which would map "Italic"→a brand weight, e.g. Xbold, wrongly bolding the
+        // whole italic note — host bug 20260624). Treat italic-only like weight-absent.
+        var _stripIt = (I && typeof I._stripItalicForWeightOnly === "function")
+            ? I._stripItalicForWeightOnly
+            : function (s) { return String(s || "").replace(/\s*(?:italic|oblique)\s*/ig, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, ""); };
+        var weightWord = hasSrcWeight ? _stripIt(srcWeight) : "";
+        // host bug 20260624 (page-2 slide titles): a run with NO fontStyle but a
+        // fontFamily swap to a HEAVIER Latin family ("Whitney Semibold") encodes its
+        // weight in the family NAME, not fontStyle. Recover that token so the CJK side
+        // still gets the brand-paired heavier weight. GATE: only when the family's
+        // weight outranks the live baseline (a swap to a heavier face = emphasis; a
+        // lighter/equal swap is NOT bolded — §1 lightest-wins). fontStyle-carrying
+        // runs skip this entirely (their explicit weight already won above).
+        // #ac-emphasis-relations ① (arch 2026-10-01): a run with NO fontStyle that
+        // swaps to another Latin FAMILY (e.g. "Whitney Semibold"). The weight used to be
+        // cut out of the family NAME ("…Semibold") and looked up by that word — the
+        // wrong row when the config spells the face "Whitney Semibold" + "Regular" —
+        // and a lighter answer was silently raised to the live weight. Now: look up the
+        // row whose SOURCE face IS this face (name-exact; ⏳ 待接 identity — same
+        // PostScript name once importfix's font_name_identity is on main), take its CJK
+        // member; no row ⇒ owner B1 (keep the live weight, list "配置缺配对"). §1 stays:
+        // a table answer lighter than the paragraph body's own CJK weight is LANDED as
+        // the table says and REPORTED as a conflict for owner — never silently raised.
+        var faceSwap = false;
+        var isCJKFontF = (typeof I._isCJKFont === "function") ? I._isCJKFont : function () { return false; };
+        if (!weightWord && diff && diff.fontFamily && !isCJKFontF(String(diff.fontFamily))) {
+            var __faceFont = String(diff.fontFamily), __faceStyle = "Regular";
+            var __fx = _cjkWeightFromTable(deps, family, __faceStyle, __faceFont);
+            if (__fx.how === "exact") {
+                faceSwap = true;
+                dstWeight = String(__fx.weight);
+                out.faceLookup = { srcFont: __faceFont, srcWeight: __faceStyle, cjkWeight: dstWeight };
+                var __bodyFont = null;
+                try { var __bc2 = I._resolveLatinFontForCluster(seg); __bodyFont = __bc2 && __bc2.fontFamily; } catch (eBf) {}
+                var __bx = (__bodyFont && __bodyW) ? _cjkWeightFromTable(deps, family, __bodyW, __bodyFont) : { weight: null };
+                if (__bx.weight && __rank && __rank(dstWeight) < __rank(__bx.weight)) {
+                    out.lighterThanBody = _noteMissingPair(deps, { reason: "lighter_than_body",
+                        srcFont: __faceFont, srcWeight: __faceStyle, cjkFamily: family,
+                        dstWeight: dstWeight, bodyWeight: __bx.weight, tid: seg && seg.tid });
+                }
+            } else if (__fx.how === "conflict") {
+                out.reason = "cjk_weight_conflict:" + family + "|" + __faceFont + "|" + __faceStyle;
+                _noteMissingPair(deps, { reason: "conflict", srcFont: __faceFont, srcWeight: __faceStyle, cjkFamily: family, tid: seg && seg.tid });
+                return out;
+            } else {
+                out.configMissingPair = _noteMissingPair(deps, {
+                    reason: __fx.how === "no_config" ? "no_config" : "no_pair",
+                    srcFont: __faceFont, srcWeight: __faceStyle, cjkFamily: family, tid: seg && seg.tid });
+                // (falls through to the weight-absent branch: live weight kept)
+            }
+        }
+        if (faceSwap) {
+            // dstWeight set above from the face's own row
+        } else if (weightWord) {
+            // owner 2026-10-01 (design-intent §8, acca722): follow the source — ⛔ no
+            // "at least Medium" raise (the 9-30 default is withdrawn). A low-contrast
+            // pair is reported at run level (applyEmphasisRunsAsCharStyles) for owner.
+            // run carries a real SOURCE weight → resolve via brand pairing (Semibold→Xbold).
+            dstWeight = weightWord;
+            // owner 2026-10-01 (design-intent §8): Chinese weights come from the pairing
+            // table; the SOURCE Latin font picks the row (#6). B1: no pairing ⇒ fall back
+            // to the source weight's name but LIST it ("配置缺配对"); a conflict the source
+            // font cannot settle ⇒ not landed + listed (⛔ never first-write-wins).
+            var __srcFontC = _sourceLatinFamily(diff, seg, I);
+            var __tx = _cjkWeightFromTable(deps, family, weightWord, __srcFontC);
+            if (__tx.weight) dstWeight = String(__tx.weight);
+            else if (__tx.how === "conflict") {
+                out.reason = "cjk_weight_conflict:" + family + "|" + (__srcFontC || "?") + "|" + weightWord;
+                _noteMissingPair(deps, { reason: "conflict", srcFont: __srcFontC, srcWeight: weightWord, cjkFamily: family, tid: seg && seg.tid });
+                return out;
+            } else {
+                out.configMissingPair = _noteMissingPair(deps, {
+                    reason: __tx.how === "no_config" ? "no_config" : "no_pair",
+                    srcFont: __srcFontC, srcWeight: weightWord, cjkFamily: family,
+                    tid: seg && seg.tid });
+            }
+        }
+        if (faceSwap || weightWord) {
+            // (resolved above)
+        } else {
+            // weight-absent OR italic-only run → KEEP the live weight (no brand-weight
+            // change). Applied DIRECTLY (it's already the resolved target, not a source).
+            dstWeight = (liveWeight && liveWeight !== "NOTHING") ? liveWeight : "Regular";
+        }
+        resolved = _resolveInstalledFaceCaseTolerant(workDoc, family, dstWeight, I);
+    } else {
+        // Latin: source weight as-is when present; else keep the live Latin weight.
+        // EXCEPTION (audit P2): ④'s whole-paragraph baseline-italic synthesis tags its
+        // diff `__wholeParaItalic` and carries a bare "Italic" token meaning "italic at
+        // the LIVE baseline weight", NOT a Regular-weight per-run emphasis. Keep the live
+        // Latin weight for it — else embedded non-regular Latin (e.g. Semibold ASCII in a
+        // uniform Bold-Italic paragraph) collapses to Regular. Real per-run emphasis
+        // (no flag) keeps its own source weight exactly as before.
+        var latStyle;
+        if (diff && diff.__wholeParaItalic) {
+            latStyle = (liveWeight && liveWeight !== "NOTHING") ? liveWeight : "Regular";
+        } else {
+            latStyle = hasSrcWeight ? srcWeight
+                : ((liveWeight && liveWeight !== "NOTHING") ? liveWeight : "Regular");
+            // owner 2026-10-01 (§8, acca722): Latin keeps the source weight — ⛔ no
+            // raise; low-contrast pairs are reported at run level for owner to choose.
+        }
+        resolved = _resolveInstalledFaceCaseTolerant(workDoc, family, latStyle, I);
+    }
+    if (!resolved) {
+        out.reason = "face_not_installed";   // skip + surface, NO ghost
+        return out;
+    }
+    out.family = resolved.family;
+    out.style = resolved.fontStyle;
+
+    // ── univ-italic (task_plan §7 · 乙 STRICT): italic realization = operator-config-gated ──
+    // Replaces the old unconditional carrier-#1 skew=15 (removed below). For an
+    // italic-marked run, resolve HOW it slants from the per-weight brand_config
+    // (italic_by_weight) and carry the decision in the emphasis CS BODY (faux skew /
+    // real italic fontStyle) so it survives clearOverrides (probe 20260625_01).
+    //   faux   → upright weight fontStyle + CS-body skew=angle
+    //   real   → the weight-EXACT installed italic face + skew=0
+    //   block  → OQ-2 fail-closed (real configured but no weight-exact italic): upright + surfaced
+    //   surface→ 乙 unconfigured: upright + surfaced (THE Latin landmine cut — an unconfigured
+    //            Latin italic run that today auto-resolves to "Book Italic" is overridden upright here)
+    // Non-italic runs are untouched (_emphStyle = resolved.fontStyle, no skew).
+    var _emphStyle = resolved.fontStyle;
+    var _emphSkew = 0;
+    if (isItalicSrc) {
+        var _stripItWO = (I && typeof I._stripItalicForWeightOnly === "function")
+            ? I._stripItalicForWeightOnly
+            : function (s) { return String(s || "").replace(/\s*(?:italic|oblique)\s*/ig, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, ""); };
+        var _baseWeight = _stripItWO(resolved.fontStyle) || "Regular";
+        // DECISION-0 ④ keyW split: key on the resolved face as-is (slant token kept by
+        // lookup's normaliser); `_baseWeight` stays stripped — it is the upright literal.
+        var _icfg = (deps && deps.italicConfig)
+            ? ItalicConfig.lookup(deps.italicConfig, resolved.family, resolved.fontStyle || _baseWeight) : null;
+        var _exactIt = null;
+        try { _exactIt = FontItalicProbe.findExactItalicStyleName(workDoc, resolved.family, _baseWeight); } catch (eEx) {}
+        // The run is ALREADY on a real italic face when its weight has that exact
+        // face installed — a real italic is a WEIGHT the source already uses, not
+        // an implementation the operator must authorise (charter §7.4 2026-08-07).
+        // Unconfigured + already-italic → keep verbatim; unconfigured + no italic
+        // face → still surfaced upright (乙-strict, narrowed to the case it was
+        // written for).
+        // CJK gate (symmetry with italic_apply, which gates its probe on !isCJK):
+        // a CJK family shipping a probe-nameable face must not reach keep.
+        var _isCjkFam2 = _isCjkFamilyName(resolved.family);
+        var _dec = ItalicConfig.resolveItalicRealization(_icfg, !!_exactIt, !!_exactIt && !_isCjkFam2);
+        if (_dec.kind === "faux") {
+            _emphStyle = _baseWeight; _emphSkew = _dec.angle;
+        } else if (_dec.kind === "real" || _dec.kind === "keep") {
+            _emphStyle = _exactIt || resolved.fontStyle; _emphSkew = 0;
+            // A run that moves from `surface` to `keep` leaves the surfaced list. If
+            // nothing counts it on the way in, the report cannot tell "7 real italic
+            // runs were preserved" from "there were none" — and AC④' would only be
+            // checkable by eye. Count it.
+            if (_dec.kind === "keep") {
+                out.italicKept = { family: resolved.family, weight: _baseWeight, face: _emphStyle, reason: _dec.reason };
+            }
+        } else if (_dec.kind === "block") {
+            _emphStyle = _baseWeight; _emphSkew = 0;
+            out.italicBlock = { family: resolved.family, weight: _baseWeight, reason: _dec.reason };
+        } else { // surface (乙 unconfigured)
+            _emphStyle = _baseWeight; _emphSkew = 0;
+            out.italicSurface = { family: resolved.family, weight: _baseWeight, reason: _dec.reason };
+        }
+        out.style = _emphStyle;
+        out.italicKind = _dec.kind;
+    }
+
+    // ── (c) collision gate (SPEC §12.1c) — PER-CHAR ──
+    // A char already carrying a NON-_T_c_emp_ named appliedCharacterStyle
+    // (annotation / designer / link CS) must NOT be clobbered. Rather than drop
+    // the WHOLE sub-run, split it into maximal contiguous spans of NON-colliding
+    // chars (mirrors _writeSpansSkippingEmp in font_mapping_apply_to_doc.js) and
+    // apply the emphasis CS only to those; the colliding chars are skipped and
+    // their count surfaced.
+    var writableSpans = [];   // [{ s, e }, ...]
+    var collidedChars = 0;
+    var spanStart = -1;
+    for (var ci = subStart; ci <= subEnd; ci++) {
+        var csName = "";
+        try {
+            var cs = para.characters.item(ci).appliedCharacterStyle;
+            csName = (cs && cs.name) ? String(cs.name) : "";
+        } catch (eCs) { csName = ""; }
+        var collide = !!(csName && csName !== "[None]" && csName.indexOf("_T_c_emp_") !== 0);
+        if (collide) {
+            collidedChars++;
+            if (spanStart >= 0) { writableSpans.push({ s: spanStart, e: ci - 1 }); spanStart = -1; }
+        } else {
+            if (spanStart < 0) spanStart = ci;
+        }
+    }
+    if (spanStart >= 0) writableSpans.push({ s: spanStart, e: subEnd });
+
+    out.skippedCharCount = collidedChars;
+    if (writableSpans.length === 0) {
+        // every char collided → nothing writable.
+        out.reason = "collision_existing_char_style";
+        return out;
+    }
+
+    // ── (d) build the combined character style ONCE (span-independent) ──
+    var styleObj = null;
+    try {
+        styleObj = _ensureEmphasisCharStyle(workDoc, diff, resolved.family, _emphStyle, deps, I, _emphSkew);
+    } catch (eEns) {
+        out.reason = "ensure_style_failed:" + (eEns && eEns.message ? eEns.message : eEns);
+        return out;
+    }
+    if (!styleObj) { out.reason = "ensure_style_null"; return out; }
+    out.styleName = styleObj.name;
+
+    // ── (e) per span: capture overrides (FULL matrix) → apply CS → replay ──
+    // (SPEC §13.2: appliedCharacterStyle= resets direct overrides on the range;
+    //  capture via the full-matrix _readCharOverrides primitive, replay-filtered.)
+    var anyApplied = false;
+    var spanFailChars = 0;      // chars in spans whose CS write THREW (left unstyled)
+    var readbackDropChars = 0;  // chars whose CS write SILENTLY dropped (overset region)
+    var _targetCsName = styleObj.name;  // hoisted: one host read, not one per char
+    for (var spi = 0; spi < writableSpans.length; spi++) {
+        var sp = writableSpans[spi];
+        var captured = _captureSubRangeOverrides(para, sp.s, sp.e);
+        try {
+            var spanRange = para.characters.itemByRange(sp.s, sp.e);
+            // HOST-CONFIRMED root-cause fix (probe 20260624_03): a pre-existing
+            // DIRECT font override on the range (the baseline cluster's MHei
+            // Bold / Whitney byPair font) WINS over the emphasis character style
+            // in InDesign's cascade (direct override > char style), so the char
+            // style's resolved face (MHei Xbold / Whitney Semibold) never shows —
+            // the char keeps rendering the baseline weight. clearOverrides() on
+            // the span FIRST drops the competing direct override (the char style
+            // assignment that follows survives it); then the char style's font
+            // takes effect. The captured non-font dims are replayed below; the
+            // FONT dim is intentionally NOT replayed (it now belongs to the CS).
+            // D3b: CHARACTER_ONLY — the no-argument call also resets the PARAGRAPH's own
+            // overrides (host probe 2026-10-01: phone paragraph 0.06/18 → style 0/9)
+            try { _clearCharOverrides(spanRange); } catch (eClr) {}
+            spanRange.appliedCharacterStyle = styleObj;
+        } catch (eApply) {
+            // record the first failure reason but keep trying other spans. Count
+            // the failed span's chars so a LATER successful span can't mask this
+            // span's silent drop — the caller surfaces skippedCharCount.
+            if (!out.reason) out.reason = "applyCharStyle_failed:" + (eApply && eApply.message ? eApply.message : eApply);
+            spanFailChars += (sp.e - sp.s + 1);
+            continue;
+        }
+        // ── read-back verify (SPEC #ac-overset-widen part B / AC3) ──
+        // appliedCharacterStyle= SILENTLY fails (no throw) on chars pushed into a
+        // frame's OVERSET region — the emphasis lands only on the in-frame prefix
+        // while the report shows failed:0 and the tail keeps baseline weight. Read
+        // each char's live appliedCharacterStyle back and compare by NAME (UXP:
+        // never === a host object); a mismatch is a silent drop → count + surface
+        // below as overset_silent_drop. The overset-widen pass (part A, v2_pipeline)
+        // prevents these in the normal path; this net makes any residual drop honest.
+        for (var vk = sp.s; vk <= sp.e; vk++) {
+            var vGot = "";
+            try {
+                var vCs = para.characters.item(vk).appliedCharacterStyle;
+                vGot = (vCs && vCs.name) ? String(vCs.name) : "";
+            } catch (eVk) { vGot = ""; }
+            if (vGot !== _targetCsName) readbackDropChars++;
+        }
+        // univ-italic: carrier #1 (the old `if (isCJK && isItalicSrc) skew=15`
+        // direct override) is REMOVED — italic skew now lives in the emphasis CS
+        // BODY (set in _ensureEmphasisCharStyle, angle from config). For an
+        // italic-marked run the realization OWNS the skew, so the replay must NOT
+        // restore any captured skew as a direct override (it would clobber the
+        // CS-body skew for faux, or re-introduce a stale skew over a real/surface
+        // run = double-slant). skipSkew = isItalicSrc.
+        _replaySubRangeOverrides(para, sp.s, sp.e, captured, diff, isItalicSrc);
+        anyApplied = true;
+    }
+
+    if (!anyApplied) {
+        if (!out.reason) out.reason = "applyCharStyle_failed";
+        return out;
+    }
+    out.outcome = "applied";
+    // Surface partial span-apply failures + silent overset drops: a span whose CS
+    // write threw (spanFailChars) or silently dropped in the overset region
+    // (readbackDropChars) leaves its chars unstyled. Fold both into skippedCharCount
+    // + a partialReason so the caller counts + surfaces them (otherwise a later
+    // successful span returns "applied" and the failed / dropped chars vanish from
+    // the report — the exact failed:0 blind spot #ac-overset-widen closes).
+    var _extraSkip = spanFailChars + readbackDropChars;
+    if (_extraSkip > 0) {
+        out.skippedCharCount = (out.skippedCharCount || 0) + _extraSkip;
+        var _reasons = [];
+        if (readbackDropChars > 0) _reasons.push("overset_silent_drop");
+        if (spanFailChars > 0) _reasons.push("applyCharStyle_failed_partial");
+        out.partialReason = _reasons.join("+");
+    } else if (collidedChars > 0) {
+        // partial: some chars collided but others were styled.
+        out.partialReason = "collision_skipped_chars";
+    }
+    return out;
+}
+
+// Case-tolerant resolution to a real installed face. First the standard
+// _resolveInstalledFontName (as-specified / legacy↔twin / base sub-family);
+// on null, a case-insensitive scan of workDoc.fonts → app.fonts recovers the
+// exact-case ".name" (resolver gives "Xbold" but the real face may be
+// "XBold"; itemByName is case-sensitive — SPEC §10.7). null → truly missing.
+// #144: the page a paragraph sits on, or null. ⚠ In UXP `parentPage` can be a Promise (CLAUDE.md #3):
+// a Promise is NOT a page, so it reads as "unknown" (null), never as a made-up name.
+function _pageNameOfPara(para) {
+    try {
+        var frames = para.parentTextFrames, f0 = null;
+        if (frames && frames.length) f0 = frames[0];
+        if (!f0 && frames && typeof frames.item === "function") f0 = frames.item(0);
+        if (Array.isArray(f0)) f0 = f0[0];   // host reading 2026-10-11: parentTextFrames is [[TextFrame]] in UXP
+        var pg = f0 && f0.parentPage;
+        if (pg && typeof pg.then === "function") return null;
+        var nm = pg && pg.name;
+        return (nm === undefined || nm === null || nm === "") ? null : String(nm);
+    } catch (e) { return null; }
+}
+// #144: the face "use its own font" WOULD land on for a char of another family — the same
+// resolution the decided "own" branch performs, minus every write.
+function _ownWouldBe(rel, B, workDoc, I, body, sr) {
+    var rOwn = null, ownFam = B.foreign.family, ownSty = "Bold";
+    try {
+        rOwn = rel.ER.resolveEmphasis({ config: rel.config, relations: rel.relations, body: body,
+            srcLang: rel.srcLang, dstLang: rel.dstLang, script: sr.isCJK ? "cjk" : "latin", kind: "bold",
+            startMember: { lang: rel.srcLang, font: B.foreign.family, weight: B.foreign.weight },
+            latinFamily: B.foreign.family });
+    } catch (eO) { rOwn = null; }
+    if (rOwn && rOwn.outcome === "relation") { ownFam = rOwn.family; ownSty = rOwn.weight; }
+    var face = null;
+    try { face = _resolveInstalledFaceCaseTolerant(workDoc, ownFam, ownSty, I); } catch (eF) { face = null; }
+    return { family: face ? face.family : ownFam, style: face ? face.fontStyle : ownSty, installed: !!face };
+}
+function _resolveInstalledFaceCaseTolerant(workDoc, family, style, I) {
+    var st = (style !== null && style !== undefined && String(style)) ? String(style) : "Regular";
+    if (typeof I._resolveInstalledFontName === "function") {
+        var r = null;
+        try { r = I._resolveInstalledFontName(workDoc, family, st); } catch (eR) {}
+        if (r && r.family) return r;
+    }
+    // case-insensitive recovery: scan the SYSTEM catalog (app.fonts) ONLY —
+    // NOT workDoc.fonts. A doc-embedded font can report INSTALLED under a name
+    // while a family-string write still substitutes against the system catalog
+    // (style_sheet_builder.js:2002), so scanning workDoc.fonts could recover a
+    // doc-only ghost. Match _resolveInstalledFontName's system-only probe.
+    var want = (String(family) + "\t" + st).toLowerCase();
+    var hit = _scanFontsCaseInsensitive(workDoc, want);
+    if (hit) {
+        var tab = hit.indexOf("\t");
+        if (tab >= 0) {
+            return { family: hit.substring(0, tab), fontStyle: hit.substring(tab + 1) };
+        }
+        return { family: hit, fontStyle: "Regular" };
+    }
+    return null;
+}
+
+// #HANG-LOG (20260908): a diagnostic-only sink, set once by the caller that owns the
+// run's log. Module-level because the expensive function below is four call-frames
+// away from anything holding `deps`, and threading a logger through those frames for
+// a diagnostic would change four signatures on the hot path. Null unless set, so this
+// module keeps its "no ambient state" property for every caller that does not opt in.
+// It is a LOGGER, never a control input — nothing below branches on it except whether
+// to write a line.
+var _SA_DIAG = null;
+function setDiagLogger(fn) { _SA_DIAG = (typeof fn === "function") ? fn : null; }
+
+// Scan the SYSTEM font catalog (app.fonts) ONLY for a case-insensitive match,
+// returning the exact-case ".name". Starts at workDoc.parent (skipping
+// workDoc.fonts) and walks up to the app — mirroring _isSystemFontInstalled so
+// case recovery can't return a doc-only embedded ghost (style_sheet_builder.js:2002).
+// #FONT-SCAN (20260908) — measured, and the reason this function was rewritten.
+//
+// The old body read `.name` on EVERY font of the collection, one cross-bridge
+// property read each. Host measurement from the run that produced this fix:
+//
+//     fontscan: MISS after 3786 fonts +498447ms      ← 8 min 18 s, for ONE lookup
+//
+// 3786 = 6 hops x 631 fonts — the parent walk re-read the same catalog six times.
+// It is entered ONLY when a face did not resolve, i.e. exactly when a face is
+// MISSING, and nothing cached the answer, so it repeated per script sub-run: the
+// document that produced this had 35 Latin sub-runs on italic-baseline paragraphs
+// wanting one absent face, i.e. ~4.8 hours of it. InDesign stayed responsive and
+// burned one core; from outside it is indistinguishable from a hang.
+//
+// 🔴 This exact lesson was ALREADY recorded in this repo, in the file next door:
+// lib/font_italic_probe.js's header (univ-italic 2026-06-28) says iterating
+// app.fonts "is a per-Font cross-bridge property read x N, runs SYNC on the V8
+// main thread, and FROZE InDesign uninterruptibly (CLAUDE.md gate #9) -> the user
+// had to force-restart", and ends "DO NOT call it on app.fonts in host code".
+// That fix swept its own file and stopped. THIS function is the violator it left
+// behind — the same anti-pattern, still on the resolution path, for ten weeks.
+// The lesson is not "iterating fonts is slow"; it is that fixing a finding means
+// grepping the whole concept, not patching the line the report pointed at.
+//
+// Three changes, each independently sufficient to avoid the 8 minutes:
+//   1. `everyItem().name` — ONE bridge call for all names instead of N. The idiom
+//      is already used in this repo (import_integrated.idjs:251) and measured in
+//      lib/font_mapping_doc_scan.js:311-314 at 2492ms -> 60ms for the same shape.
+//   2. Cache the answer for the session, keyed by catalog SIZE so installing or
+//      activating a font invalidates it. Negative results are cached too — that is
+//      the whole point, since the MISS is the case that repeats.
+//   3. The six hops are now six cheap calls, so the redundant walk stops mattering
+//      and needs no fragile de-duplication.
+//
+// Semantics are unchanged (case-insensitive match on the canonical "Family\tStyle",
+// status must read INSTALLED) EXCEPT on a host with no `everyItem`: there we now
+// fall back to a CAPPED item() walk and say so, rather than freezing. That is the
+// same trade font_italic_probe.js made deliberately — a face with an exotic
+// spelling may go unfound, which lands on the already-correct "face_not_installed"
+// path, and a wrong answer in milliseconds beats a right one in eight minutes.
+// The cache is OPT-IN and OFF by default: null here means every lookup is fresh,
+// exactly as before. It is opened only by code that knows the font catalog cannot
+// change while it runs (one synchronous doScript), and closed after.
+//
+// 🔴 It started out as an always-on module cache keyed by catalog SIZE, and
+// dst_gate_uniform_tests caught that within minutes: three lookups of the same
+// name against three collections of size 1 that differ only in the font's STATUS,
+// so a cached HIT was returned where a fail-closed null was required. Size is not
+// an identity — it was equal to one by coincidence, not by any guarantee, and the
+// repo has a rule about exactly that. Keying on identity is not available either:
+// UXP host objects fail `===`. So the honest key is not a value at all, it is a
+// SCOPE: the caller states the window in which the answer cannot change.
+var _FACE_CACHE = null;                  // null = OFF; else { size, map: { wantLower: name|null } }
+var _FACE_SCAN_CAP = 64;                 // fallback-only; the host path never iterates
+
+// Open / close the face-resolution cache for one run. Idempotent; safe to call
+// when the module is used from Node with no host at all.
+function beginFaceCache() { _FACE_CACHE = { size: -2, map: {} }; }
+function endFaceCache() { _FACE_CACHE = null; }
+
+function _scanFontsCaseInsensitive(workDoc, wantLower) {
+    var __now = function () { return (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; };
+    var __sn0 = __now();
+    var __snSeen = 0;
+    var ref = null;
+    try { ref = workDoc && workDoc.parent; } catch (e0) { return null; }
+
+    var __size = -1;
+    try {
+        var __c0 = ref && ref.fonts;
+        __size = (__c0 && typeof __c0.length === "number") ? __c0.length : -1;
+    } catch (eSz) { __size = -1; }
+
+    if (_FACE_CACHE) {
+        // Second line of defence inside the opened scope: if the catalog size moved
+        // (a font installed or activated mid-run), drop everything rather than answer
+        // from a table describing a catalog that no longer exists.
+        if (_FACE_CACHE.size !== __size) { _FACE_CACHE.size = __size; _FACE_CACHE.map = {}; }
+        else if (Object.prototype.hasOwnProperty.call(_FACE_CACHE.map, wantLower)) {
+            var __c = _FACE_CACHE.map[wantLower];
+            if (_SA_DIAG) { try { _SA_DIAG("fontscan: cached " + (__c === null ? "MISS" : "HIT") + " want=" + wantLower); } catch (eDc) {} }
+            return __c;
+        }
+    }
+
+    if (_SA_DIAG) { try { _SA_DIAG("fontscan: begin want=" + wantLower + " catalog=" + __size); } catch (eD0) {} }
+
+    var found = null;
+    for (var hop = 0; hop < 6 && ref && found === null; hop++) {
+        var fonts = null;
+        try { fonts = ref.fonts; } catch (eF) { fonts = null; }
+        if (fonts) {
+            var names = null;
+            if (typeof fonts.everyItem === "function") {
+                try { names = fonts.everyItem().name; } catch (eEv) { names = null; }
+            }
+            if (names !== null && names !== undefined) {
+                // A one-font collection returns a bare string, not an array.
+                if (Object.prototype.toString.call(names) !== "[object Array]") names = [names];
+            } else {
+                // No everyItem (Node mocks; a host build without it). Walk, but CAPPED —
+                // an uncapped walk here is the eight minutes this rewrite exists to remove.
+                names = [];
+                var n = 0;
+                try { n = fonts.length; } catch (eN) { n = 0; }
+                var lim = (n > _FACE_SCAN_CAP) ? _FACE_SCAN_CAP : n;
+                for (var i = 0; i < lim; i++) {
+                    try { names.push(String(fonts.item(i).name)); } catch (eNm) { names.push(""); }
+                }
+                if (_SA_DIAG && n > lim) {
+                    try { _SA_DIAG("fontscan: no everyItem — item() walk CAPPED at " + lim + " of " + n + "; case recovery is incomplete for this lookup"); } catch (eD3) {}
+                }
+            }
+            __snSeen += names.length;
+            for (var j = 0; j < names.length; j++) {
+                var nm = String(names[j] || "");
+                if (nm && nm.toLowerCase() === wantLower) {
+                    // TODO#38 (owner 3A 2026-08-13): status must READ as installed —
+                    // the old `!st ||` arm treated an unreadable status as installed
+                    // (fail-open). Census 20260813_14: 0/631 unreadable — scoped to
+                    // THIS machine's table at that moment (mid font-sync/activation
+                    // elsewhere may differ); a live guard-rail, not dead code.
+                    // Read via itemByName: a hash lookup, not a walk.
+                    var st = "";
+                    try { st = String(fonts.itemByName(nm).status); } catch (eSt) { st = ""; }
+                    if (st === "INSTALLED" || st.indexOf("INSTALLED") >= 0 || st.indexOf("Installed") >= 0) {
+                        found = nm;
+                        break;
+                    }
+                }
+            }
+        }
+        var nxt = null;
+        try { nxt = ref.parent; } catch (eP) { nxt = null; }
+        if (!nxt || nxt === ref) break;
+        ref = nxt;
+    }
+
+    if (_FACE_CACHE) _FACE_CACHE.map[wantLower] = found;
+    if (_SA_DIAG) { try { _SA_DIAG("fontscan: " + (found ? "HIT" : "MISS") + " want=" + wantLower + " after " + __snSeen + " names +" + (__now() - __sn0) + "ms"); } catch (eD1) {} }
+    if (found !== null) return found;
+    return null;
+}
+
+// Build (or reuse) a combined emphasis character style. The style carries
+// the run's FULL diff: resolved font (appliedFont=family + separate fontStyle,
+// per the style-OBJECT contract — NOT "family\tstyle") PLUS every non-font
+// dim from _empPropsSpec (color/size/underline/etc.). find-or-create by a
+// deterministic name → re-import idempotent (SPEC §12.5/§13.2).
+function _ensureEmphasisCharStyle(workDoc, diff, family, style, deps, I, italicSkew) {
+    var sanitize = (typeof I._sanitize === "function") ? I._sanitize
+        : function (s) { return String(s || "Unknown").replace(/[^A-Za-z0-9]+/g, "_"); };
+    var _fauxSkew = (typeof italicSkew === "number" && italicSkew > 0) ? italicSkew : 0;
+    var shortHash = (typeof I._shortHash === "function") ? I._shortHash : null;
+    var empDescriptor = (typeof I._empDescriptor === "function") ? I._empDescriptor : null;
+    var empPropsSpec = (typeof I._empPropsSpec === "function") ? I._empPropsSpec : null;
+    var resolveFillColor = (typeof I._resolveFillColor === "function") ? I._resolveFillColor : null;
+
+    // ── name: _T_c_emp_w_<family>_<style>[_it<angle>][_<hash(descriptor)>] ──
+    var name = "_T_c_emp_w_" + sanitize(family) + "_" + sanitize(style);
+    // univ-italic: encode the faux skew angle so a faux CS (CS-body skew>0) and an
+    // upright CS for the SAME (family,style) don't collide on one name — the upright
+    // weight token is identical; only the CS-body skew differs (the carrier-#1 fold).
+    if (_fauxSkew > 0) name = name + "_it" + Math.round(_fauxSkew);
+    // Multi-dim (anything beyond the font weight) → append a descriptor hash so
+    // distinct diffs on the same face don't collapse to one style.
+    var nonFontKeys = 0;
+    try {
+        for (var k in diff) {
+            if (!Object.prototype.hasOwnProperty.call(diff, k)) continue;
+            if (k === "fontFamily" || k === "fontStyle") continue;
+            nonFontKeys++;
+        }
+    } catch (eK) {}
+    if (nonFontKeys > 0 && shortHash && empDescriptor) {
+        name = name + "_" + shortHash(empDescriptor(diff));
+    }
+
+    // find-or-create (mirror ensureAnnotationCharStyle:3172 add→on-dup itemByName).
+    var styleObj = null;
+    try { styleObj = workDoc.characterStyles.add({ name: name }); }
+    catch (eAdd) {
+        try { styleObj = workDoc.characterStyles.itemByName(name); }
+        catch (eN) { styleObj = null; }
+        if (styleObj) {
+            var ok = false;
+            try { ok = !!styleObj.isValid; } catch (eV) { ok = true; }
+            if (!ok) styleObj = null;
+        }
+    }
+    if (!styleObj) throw new Error("characterStyles add+itemByName both failed for '" + name + "'");
+
+    // ── props: full diff MINUS raw font dims, PLUS resolved font + fillColor/position ──
+    var props = empPropsSpec ? empPropsSpec(diff) : {};
+    // drop the raw font dims (we set the RESOLVED installed face instead).
+    try { delete props.appliedFontFamily; } catch (ePf) {}
+    try { delete props.fontStyle; } catch (ePs) {}
+
+    // [P2b Fix a — 4th APPLY-time sink] normalize the emphasis font to its
+    // installed twin BEFORE writing. This runs AFTER the commit-time
+    // _sweepManagedStyleFonts, so the sweep can NOT catch a legacy/cold family
+    // baked here — normalize at the write instead. A legacy family resolves to its
+    // installed twin (Dax Light→Dax Pro); a missing one resolves null → kept as-is
+    // (no substitution — policy-aligned). Keep the BARE appliedFont+fontStyle form
+    // (NOT the "family\tstyle" tab-name — it collides with the props-bag Font-object
+    // form here, per the note below); cold-robustness is out of reach for this sink
+    // by that constraint, but emphasis families come from the doc's own runs (warm).
+    try {
+        // Use I._resolveInstalledFontName — the resolver is exported ONLY under
+        // SSB._internal (so `SSB._resolveInstalledFontName` is undefined and would
+        // throw→swallow→silent no-op). I === SSB._internal here; typeof-guard mirrors
+        // the existing use at :1731.
+        if (typeof I._resolveInstalledFontName === "function") {
+            var _instEmp = I._resolveInstalledFontName(workDoc, family, style);
+            if (_instEmp) { family = _instEmp.family; style = _instEmp.fontStyle; }
+        }
+    } catch (eNormEmp) {}
+    // resolved font via the style-OBJECT contract: appliedFont=family + fontStyle
+    // separately (NOT "family\tstyle"). Set on the style object directly so the
+    // properties bag doesn't collide with the Font-object form of appliedFont.
+    try { styleObj.appliedFont = family; } catch (eAF) {}
+    try { styleObj.fontStyle = style; } catch (eFS) {}
+    // univ-italic: CS-body faux skew (the carrier-#1 fold). CS-body skew survives
+    // clearOverrides — unlike a direct per-char override (host probe 20260625_01).
+    // >0 = faux angle; 0 clears any stale skew (real italic / non-italic / surface).
+    try { styleObj.skew = _fauxSkew; } catch (eSkewCS) {}
+
+    // fillColorSpec → swatch (deps.ColorSpace + deps.ColorModel via _resolveFillColor).
+    if (Object.prototype.hasOwnProperty.call(props, "fillColorSpec")) {
+        var spec = props.fillColorSpec;
+        try { delete props.fillColorSpec; } catch (eDel) {}
+        if (resolveFillColor) {
+            var sw = null;
+            try { sw = resolveFillColor(workDoc, spec, deps); } catch (eRF) {}
+            if (sw) props.fillColor = sw;
+        }
+    }
+    // position string → DOM Position enum (deps.Position).
+    if (Object.prototype.hasOwnProperty.call(props, "position")) {
+        var posStr = String(props.position || "").toUpperCase();
+        try { delete props.position; } catch (eDp) {}
+        var posEnum = (deps && deps.Position) ? deps.Position[posStr] : null;
+        if (posEnum) props.position = posEnum;
+    }
+
+    // apply the remaining (non-font, swatch/enum-resolved) props as a bag.
+    try { styleObj.properties = props; } catch (eProps) {
+        // fall back to per-key best-effort so one bad dim doesn't drop the rest.
+        for (var pk in props) {
+            if (!Object.prototype.hasOwnProperty.call(props, pk)) continue;
+            try { styleObj[pk] = props[pk]; } catch (ePK) {}
+        }
+    }
+    return styleObj;
+}
+
+// Capture full-matrix direct overrides per-char on a sub-range, keyed by
+// paragraph-relative index. Mirrors _readCharOverrides (the full matrix used
+// by captureDocDirectOverrides). Returns [{ idx, ov }, ...].
+function _captureSubRangeOverrides(para, subStart, subEnd) {
+    var out = [];
+    var paraDef = _paragraphDefaults(para);
+    for (var idx = subStart; idx <= subEnd; idx++) {
+        var ch = null;
+        try { ch = para.characters.item(idx); } catch (eCh) { ch = null; }
+        if (!ch) continue;
+        var ov = null;
+        try { ov = _readCharOverrides(ch, paraDef); } catch (eRd) { ov = null; }
+        if (ov) out.push({ idx: idx, ov: ov });
+    }
+    return out;
+}
+
+// Replay captured full-matrix overrides on a sub-range AFTER the char style
+// was assigned — but ONLY the dims the run.diff did NOT set (the diff-set dims
+// now belong to the emphasis CS; font dims NEVER replay; SPEC §13.2 filter).
+function _replaySubRangeOverrides(para, subStart, subEnd, captured, diff, skipSkew) {
+    if (!captured || !captured.length) return;
+    var capsEnum = _resolveCapitalizationEnum();
+    var posEnum = _resolvePositionEnumDoc();
+    var diffHas = function (key) { return !!(diff && Object.prototype.hasOwnProperty.call(diff, key)); };
+    // map diff keys → override dims they own (so we don't replay over them).
+    var diffOwnsFill = diffHas("fillColor");
+    var diffOwnsSize = diffHas("fontSize");
+    var diffOwnsUnderline = diffHas("underline");
+    var diffOwnsStrike = diffHas("strikeThrough");
+    var diffOwnsTracking = diffHas("tracking");
+    var diffOwnsBaseline = diffHas("baseline_shift");
+    var diffOwnsHScale = diffHas("horizontal_scale");
+    var diffOwnsVScale = diffHas("vertical_scale");
+    var diffOwnsSkew = diffHas("skew");
+    var diffOwnsPosition = diffHas("position");
+
+    for (var i = 0; i < captured.length; i++) {
+        var rec = captured[i];
+        var ov = rec.ov;
+        if (!ov) continue;
+        var range = null;
+        try { range = para.characters.itemByRange(rec.idx, rec.idx); } catch (eIB) { continue; }
+        // caps: emphasis runs never carry capitalization → always replay.
+        // Resolve to the Capitalization enum where available; fall back to the
+        // captured string (works in test mocks; mirrors _restoreDirectCharOverrideRanges).
+        if (ov.caps) {
+            var cv = capsEnum ? capsEnum[ov.caps] : null;
+            try { range.capitalization = (cv !== undefined && cv !== null) ? cv : ov.caps; } catch (eC) {}
+        }
+        // fillColor / pointSize: replay only if the diff didn't set them.
+        if (ov.fcRef && !diffOwnsFill) {
+            try { if (ov.fcRef.isValid) range.fillColor = ov.fcRef; } catch (eF) {}
+        }
+        if (ov.pt !== null && ov.pt !== undefined && !diffOwnsSize) {
+            try { range.pointSize = ov.pt; } catch (ePt) {}
+        }
+        // typographic geometry (#27 wide matrix dims): replay unless diff owns.
+        if (ov.tracking !== null && ov.tracking !== undefined && !diffOwnsTracking) {
+            try { range.tracking = ov.tracking; } catch (eTr) {}
+        }
+        if (ov.horizontalScale !== null && ov.horizontalScale !== undefined && !diffOwnsHScale) {
+            try { range.horizontalScale = ov.horizontalScale; } catch (eHs) {}
+        }
+        if (ov.verticalScale !== null && ov.verticalScale !== undefined && !diffOwnsVScale) {
+            try { range.verticalScale = ov.verticalScale; } catch (eVs) {}
+        }
+        if (ov.kerningValue !== null && ov.kerningValue !== undefined) {
+            try { range.kerningValue = ov.kerningValue; } catch (eKv) {}
+        }
+        // univ-italic: skipSkew (italic-marked run) → the emphasis CS BODY owns the
+        // skew; never restore a captured skew as a direct override over it.
+        if (ov.skew !== null && ov.skew !== undefined && !diffOwnsSkew && !skipSkew) {
+            try { range.skew = ov.skew; } catch (eSk) {}
+        }
+        if (ov.baselineShift !== null && ov.baselineShift !== undefined && !diffOwnsBaseline) {
+            try { range.baselineShift = ov.baselineShift; } catch (eBs) {}
+        }
+        if (ov.leading !== null && ov.leading !== undefined) {
+            try { range.leading = ov.leading; } catch (eLd) {}
+        }
+        if (ov.position && posEnum && !diffOwnsPosition) {
+            var pv = posEnum[ov.position];
+            if (pv !== undefined && pv !== null) { try { range.position = pv; } catch (ePos) {} }
+        }
+        if (ov.fillTint !== null && ov.fillTint !== undefined && ov.fillTint >= 0 && !diffOwnsFill) {
+            try { range.fillTint = ov.fillTint; } catch (eFt) {}
+        }
+        if (ov.noBreak !== null && ov.noBreak !== undefined) {
+            try { range.noBreak = !!ov.noBreak; } catch (eNb) {}
+        }
+        // underline / strikeThrough visual detail (incl. GAP color/tint): replay
+        // unless diff owns the toggle. The gap dims are part of the captured
+        // matrix (_readCharOverrides ulGap*/stGap*) — replay them with the rest.
+        if (!diffOwnsUnderline) {
+            if (ov.ulColorRef) { try { if (ov.ulColorRef.isValid) range.underlineColor = ov.ulColorRef; } catch (e) {} }
+            if (ov.ulTint !== null && ov.ulTint !== undefined) { try { range.underlineTint = ov.ulTint; } catch (e) {} }
+            if (ov.ulWeight !== null && ov.ulWeight !== undefined) { try { range.underlineWeight = ov.ulWeight; } catch (e) {} }
+            if (ov.ulOffset !== null && ov.ulOffset !== undefined) { try { range.underlineOffset = ov.ulOffset; } catch (e) {} }
+            if (ov.ulGapColorRef) { try { if (ov.ulGapColorRef.isValid) range.underlineGapColor = ov.ulGapColorRef; } catch (e) {} }
+            if (ov.ulGapTint !== null && ov.ulGapTint !== undefined) { try { range.underlineGapTint = ov.ulGapTint; } catch (e) {} }
+        }
+        if (!diffOwnsStrike) {
+            if (ov.stColorRef) { try { if (ov.stColorRef.isValid) range.strikeThroughColor = ov.stColorRef; } catch (e) {} }
+            if (ov.stTint !== null && ov.stTint !== undefined) { try { range.strikeThroughTint = ov.stTint; } catch (e) {} }
+            if (ov.stWeight !== null && ov.stWeight !== undefined) { try { range.strikeThroughWeight = ov.stWeight; } catch (e) {} }
+            if (ov.stOffset !== null && ov.stOffset !== undefined) { try { range.strikeThroughOffset = ov.stOffset; } catch (e) {} }
+            if (ov.stGapColorRef) { try { if (ov.stGapColorRef.isValid) range.strikeThroughGapColor = ov.stGapColorRef; } catch (e) {} }
+            if (ov.stGapTint !== null && ov.stGapTint !== undefined) { try { range.strikeThroughGapTint = ov.stGapTint; } catch (e) {} }
+        }
+        // appliedLanguage (#29 G6 — never a diff dim) → always replay. Prefer the
+        // captured Language ref; emphasis runs never carry language so no filter.
+        if (ov.langRef && typeof ov.langRef === "object") {
+            try { if (ov.langRef.isValid) range.appliedLanguage = ov.langRef; } catch (eLang) {}
+        }
+        // stroke detail (never a diff dim) → always replay.
+        if (ov.strokeColorRef) { try { if (ov.strokeColorRef.isValid) range.strokeColor = ov.strokeColorRef; } catch (e) {} }
+        if (ov.strokeTint !== null && ov.strokeTint !== undefined) { try { range.strokeTint = ov.strokeTint; } catch (e) {} }
+        if (ov.strokeWeight !== null && ov.strokeWeight !== undefined) { try { range.strokeWeight = ov.strokeWeight; } catch (e) {} }
+        // NOTE: font/fontFamily/fontStyle dims NEVER replay — the emphasis CS owns the font.
+    }
+}
+
+function _applyDiffToRange(range, diff, workDoc, deps) {
+    var failures = [];
+    if (!diff) return failures;
+
+    // fontFamily + fontStyle: when both present in diff, set them together via
+    // the "Family\tStyle" appliedFont form. This is more robust than two
+    // separate assignments — InDesign resolves the full font in one shot
+    // and avoids "fontStyle not available" errors caused by setting style
+    // before family is materialized on the range.
+    var hasFam = Object.prototype.hasOwnProperty.call(diff, "fontFamily");
+    var hasStyle = Object.prototype.hasOwnProperty.call(diff, "fontStyle");
+    if (hasFam && hasStyle) {
+        try {
+            range.appliedFont = String(diff.fontFamily) + "\t" + String(diff.fontStyle);
+        } catch (e) {
+            failures.push("appliedFont(family+style): " + (e && e.message ? e.message : e));
+            // fall back to separate sets
+            try { range.appliedFont = String(diff.fontFamily); } catch (e1) { failures.push("appliedFont: " + (e1 && e1.message ? e1.message : e1)); }
+            try { range.fontStyle = String(diff.fontStyle); } catch (e2) { failures.push("fontStyle: " + (e2 && e2.message ? e2.message : e2)); }
+        }
+    } else if (hasFam) {
+        try { range.appliedFont = String(diff.fontFamily); }
+        catch (e) { failures.push("appliedFont: " + (e && e.message ? e.message : e)); }
+    } else if (hasStyle) {
+        // Compose with the run's CURRENT effective family so style requests
+        // resolve against the right typeface even when the diff omits family.
+        var currentFamily = null;
+        try {
+            var af = range.appliedFont;
+            if (af && af.fontFamily) currentFamily = String(af.fontFamily);
+            else if (af && af.name)  currentFamily = String(af.name).split("\t")[0];
+        } catch (eF) {}
+        if (currentFamily) {
+            // TODO#15 ②: brand pair-authoritative emphasis weight. The run carries
+            // the SOURCE weight name ("Semibold"); composing it raw against the
+            // mapped CJK family yields a non-existent face ("MHei PRC\tSemibold")
+            // that gets silently downgraded one notch (→Bold). When a resolver is
+            // wired, recover the brand target weight (Semibold→Xbold) so a REAL
+            // installed brand face is applied. Latin families return null → keep
+            // the source weight verbatim. Fail-open.
+            var __styleToApply = String(diff.fontStyle);
+            if (deps && typeof deps.cjkEmphasisWeight === "function") {
+                var __brandW = null;
+                try { __brandW = deps.cjkEmphasisWeight(currentFamily, __styleToApply); } catch (eBW) {}
+                if (__brandW) __styleToApply = String(__brandW);
+            }
+            try { range.appliedFont = currentFamily + "\t" + __styleToApply; }
+            catch (e) { failures.push("appliedFont(currentFamily+style): " + (e && e.message ? e.message : e)); }
+        } else {
+            try { range.fontStyle = String(diff.fontStyle); }
+            catch (e) { failures.push("fontStyle: " + (e && e.message ? e.message : e)); }
+        }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(diff, "fontSize")) {
+        try { range.pointSize = Number(diff.fontSize); }
+        catch (e) { failures.push("pointSize: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "underline")) {
+        try { range.underline = !!diff.underline; }
+        catch (e) { failures.push("underline: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "strikeThrough")) {
+        try { range.strikeThru = !!diff.strikeThrough; }
+        catch (e) { failures.push("strikeThru: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "tracking")) {
+        try { range.tracking = Number(diff.tracking); }
+        catch (e) { failures.push("tracking: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "baseline_shift")) {
+        try { range.baselineShift = Number(diff.baseline_shift); }
+        catch (e) { failures.push("baselineShift: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "horizontal_scale")) {
+        try { range.horizontalScale = Number(diff.horizontal_scale); }
+        catch (e) { failures.push("horizontalScale: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "vertical_scale")) {
+        try { range.verticalScale = Number(diff.vertical_scale); }
+        catch (e) { failures.push("verticalScale: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "skew")) {
+        try { range.skew = Number(diff.skew); }
+        catch (e) { failures.push("skew: " + (e && e.message ? e.message : e)); }
+    }
+    if (Object.prototype.hasOwnProperty.call(diff, "fillColor")) {
+        var color = _resolveOrCreateColor(diff.fillColor, workDoc, deps);
+        if (color) {
+            try { range.fillColor = color; }
+            catch (e) { failures.push("fillColor: " + (e && e.message ? e.message : e)); }
+        }
+    }
+    // #E2E-1 import side: apply position diff. Resolve the string ("SUPERSCRIPT"
+    // etc.) into the DOM Position enum via deps.position. Without this branch,
+    // emphasis_extractor's `{position: "SUPERSCRIPT"}` diff lands here as a
+    // silent no-op — round-trip lost ®* superscripts on the Client-A card names.
+    if (Object.prototype.hasOwnProperty.call(diff, "position")) {
+        var posStr = String(diff.position || "").toUpperCase();
+        var posEnum = (deps && deps.position) ? deps.position[posStr] : null;
+        if (posEnum) {
+            try { range.position = posEnum; }
+            catch (e) { failures.push("position: " + (e && e.message ? e.message : e)); }
+        } else if (posStr && posStr !== "NORMAL") {
+            failures.push("position: unresolved enum " + posStr);
+        }
+    }
+    return failures;
+}
+
+function _resolveOrCreateColor(c, workDoc, deps) {
+    if (!c || !workDoc) return null;
+    if (c.swatch) {
+        try {
+            var sw = workDoc.swatches.itemByName(String(c.swatch));
+            if (sw && sw.isValid) return sw;
+        } catch (e) {}
+    }
+    if (c.values && c.values.length === 3 && (!c.space || c.space === "RGB")) {
+        var r = Math.max(0, Math.min(255, Math.round(c.values[0])));
+        var g = Math.max(0, Math.min(255, Math.round(c.values[1])));
+        var b = Math.max(0, Math.min(255, Math.round(c.values[2])));
+        var name = "_T_emp_rgb_" + r + "_" + g + "_" + b;
+        try {
+            var existing = workDoc.colors.itemByName(name);
+            if (existing && existing.isValid) return existing;
+        } catch (eL) {}
+        if (deps && deps.ColorModel && deps.ColorSpace) {
+            try {
+                return workDoc.colors.add({
+                    name: name,
+                    model: deps.ColorModel.PROCESS,
+                    space: deps.ColorSpace.RGB,
+                    colorValue: [r, g, b]
+                });
+            } catch (eA) {}
+        }
+    }
+    return null;
+}
+
+// ─── Module exports ────────────────────────────────────────────────
+
+// ─── #27 doc-wide direct char override preserver ──────────────────
+// Per-paragraph capture inside applyClusterStyleToParagraph (above)
+// captures POST-preclean values, which is too late: preclean's
+// splitSoftBreaksWithFormatChange does `ch.contents = "\r"` to promote
+// soft breaks to hard breaks, and InDesign's DOM as a side effect
+// resets ALL direct character overrides on the affected paragraph.
+// By the time apply runs, ALL_CAPS / Paper / pointSize overrides on
+// the original paragraph's chars are already gone — capture sees
+// NORMAL/Black/default-pt and restores those (no-op).
+//
+// Doc-wide capture BEFORE preclean fixes this: char offsets within
+// each story are stable through preclean ((LS) → \r is 1-char-in /
+// 1-char-out) and through pure reorganize apply (no para.contents
+// rewrite). So the captured (storyId, charOffsetInStory) coordinates
+// stay valid all the way to the post-apply restore call.
+//
+// Properties tracked: capitalization, fillColor (swatch ref + id),
+// pointSize. Each is captured ONLY when it differs from the para
+// style's value at capture time — so chars without "real" overrides
+// don't get spurious "+" override flags after restore.
+
+function _paragraphDefaults(para) {
+    var def = { caps: "", fcId: "", pt: 0, fontFamily: "", fontStyle: "",
+        position: "", fillTint: -1, noBreak: false, langName: "",
+        // Client-A-regression-2026-05-28: per-char `tracking` override (negative
+        // values used to tighten display headlines like "Life Insurance"
+        // so they fit in narrow threaded frames) was previously dropped
+        // by reorganize, causing 2-line titles to re-wrap to 3 lines and
+        // overflow into the next frame in the thread. Capture + restore
+        // it on the same path as caps/fc/pt/font.
+        tracking: 0,
+        // #31 G8/G9: stroke + underline-detail + strikeThrough-detail
+        strokeColorId: "", strokeTint: -1, strokeWeight: 0,
+        ulColorId: "", ulTint: -1, ulWeight: 0, ulOffset: 0,
+        ulGapColorId: "", ulGapTint: -1,
+        stColorId: "", stTint: -1, stWeight: 0, stOffset: 0,
+        stGapColorId: "", stGapTint: -1 };
+    try {
+        var ps = para.appliedParagraphStyle;
+        if (ps && ps.isValid) {
+            try { def.caps = String(ps.capitalization); } catch (e) {}
+            try { def.fcId = String(ps.fillColor.id); } catch (e) {}
+            try { def.pt = ps.pointSize; } catch (e) {}
+            try { def.tracking = ps.tracking; } catch (e) {}
+            // Para style's effective font family (string, since accessing
+            // .fontFamily on the Font object). fontStyle on the para style
+            // can be the literal "NOTHING" string in UXP — treat as "".
+            try {
+                var psFont = ps.appliedFont;
+                if (psFont && typeof psFont === "object") { def.fontFamily = String(psFont.fontFamily || ""); }
+                else if (typeof psFont === "string") { def.fontFamily = String(psFont); }
+            } catch (eFf) {}
+            try {
+                var fs = String(ps.fontStyle);
+                if (fs && fs !== "NOTHING") def.fontStyle = fs;
+            } catch (eFs) {}
+            // #29 G2 / G5 / G6 / G7: para style's effective values for
+            // position / fillTint / appliedLanguage / noBreak so the
+            // capture step only records chars whose direct override
+            // DIFFERS from para style (avoiding spurious "+" overrides
+            // after restore).
+            try { def.position = String(ps.position); } catch (eP1) {}
+            try { def.fillTint = ps.fillTint; } catch (eFt) {}
+            try { def.noBreak = !!ps.noBreak; } catch (eNb) {}
+            try { def.langName = ps.appliedLanguage ? String(ps.appliedLanguage.name) : ""; } catch (eLn) {}
+            // #31 G8: stroke + #31 G9: underline / strikeThrough visual detail
+            try { def.strokeColorId = String(ps.strokeColor && ps.strokeColor.id); } catch (e) {}
+            try { def.strokeTint = ps.strokeTint; } catch (e) {}
+            try { def.strokeWeight = ps.strokeWeight; } catch (e) {}
+            try { def.ulColorId = String(ps.underlineColor && ps.underlineColor.id); } catch (e) {}
+            try { def.ulTint = ps.underlineTint; } catch (e) {}
+            try { def.ulWeight = ps.underlineWeight; } catch (e) {}
+            try { def.ulOffset = ps.underlineOffset; } catch (e) {}
+            try { def.ulGapColorId = String(ps.underlineGapColor && ps.underlineGapColor.id); } catch (e) {}
+            try { def.ulGapTint = ps.underlineGapTint; } catch (e) {}
+            try { def.stColorId = String(ps.strikeThroughColor && ps.strikeThroughColor.id); } catch (e) {}
+            try { def.stTint = ps.strikeThroughTint; } catch (e) {}
+            try { def.stWeight = ps.strikeThroughWeight; } catch (e) {}
+            try { def.stOffset = ps.strikeThroughOffset; } catch (e) {}
+            try { def.stGapColorId = String(ps.strikeThroughGapColor && ps.strikeThroughGapColor.id); } catch (e) {}
+            try { def.stGapTint = ps.strikeThroughGapTint; } catch (e) {}
+        }
+    } catch (eP) {}
+    return def;
+}
+
+function _readCharOverrides(ch, paraDef) {
+    var out = { caps: null, fcRef: null, fcId: null, pt: null,
+        fontRef: null, fontFamily: null, fontStyle: null,
+        tracking: null, horizontalScale: null, verticalScale: null,
+        kerningValue: null, skew: null, baselineShift: null,
+        leading: null,
+        position: null, fillTint: null, noBreak: null, langRef: null, langName: null };
+    try {
+        var caps = String(ch.capitalization);
+        if (caps && caps !== paraDef.caps) out.caps = caps;
+    } catch (e) {}
+    // Client-A-regression-2026-05-28: capture any non-default char-level
+    // typographic geometry override. Reorganize's cluster-style builder
+    // snaps these dims to "deadzone defaults" (tracking 0, scale 100,
+    // kerningValue 0, skew 0, baselineShift 0) regardless of source PS,
+    // so any non-default char.X that originally was inherited from the
+    // source PS gets lost after re-cluster — causing body paragraphs to
+    // re-wrap, headlines to break, and threaded frames to cascade-overflow.
+    // Capture whenever the value is non-default, regardless of paraDef,
+    // so the restore step pins the value back on the char range and
+    // survives the cluster PS reset.
+    try {
+        var tr = ch.tracking;
+        if (typeof tr === "number" && tr !== 0) out.tracking = tr;
+    } catch (eTr) {}
+    try {
+        var hs = ch.horizontalScale;
+        if (typeof hs === "number" && hs !== 100) out.horizontalScale = hs;
+    } catch (eHs) {}
+    try {
+        var vs = ch.verticalScale;
+        if (typeof vs === "number" && vs !== 100) out.verticalScale = vs;
+    } catch (eVs) {}
+    try {
+        var kv = ch.kerningValue;
+        if (typeof kv === "number" && kv !== 0) out.kerningValue = kv;
+    } catch (eKv) {}
+    try {
+        var sk = ch.skew;
+        if (typeof sk === "number" && sk !== 0) out.skew = sk;
+    } catch (eSk) {}
+    try {
+        var bs = ch.baselineShift;
+        if (typeof bs === "number" && bs !== 0) out.baselineShift = bs;
+    } catch (eBs) {}
+    // leading: same problem as pointSize. Cluster style averaging may
+    // assign a different leading (e.g. source PS 9pt/12pt → cluster
+    // 10.5pt/14pt), and chars that inherited the source leading lose
+    // it after re-cluster. Capture always-readable, restore is idempotent.
+    try {
+        var ld = ch.leading;
+        if (typeof ld === "number" && ld > 0) out.leading = ld;
+    } catch (eLd) {}
+    try {
+        var fc = ch.fillColor;
+        var fcId = "";
+        if (fc && fc.isValid) {
+            try { fcId = String(fc.id); } catch (eIdF) { fcId = String(fc.name || ""); }
+        }
+        if (fcId && fcId !== paraDef.fcId) {
+            out.fcRef = fc;
+            out.fcId = fcId;
+        }
+    } catch (e) {}
+    // Client-A-regression-2026-05-28: same problem as tracking. The cluster
+    // PS auto-merge can collapse paragraphs of different pointSizes into
+    // a single cluster (e.g. 9pt body + 10.5pt body → 10.5pt cluster),
+    // and chars that inherited from a source 9pt PS lose pointSize after
+    // re-cluster. Capture char.pointSize whenever readable, not only
+    // when it differs from paraDef.pt — restore is idempotent so pinning
+    // a value that already matches the cluster does no harm.
+    try {
+        var pt = ch.pointSize;
+        if (typeof pt === "number" && pt > 0) out.pt = pt;
+    } catch (e) {}
+    // #28b: capture appliedFont + fontStyle when they differ from
+    // the paragraph style's effective values. These are the second
+    // designer-override channel (after caps/fc/pt) — a designer who
+    // set fontFamily=Brand Sans Text on a char-level override on top of
+    // a Character Style that says fontFamily=Gotham loses the override
+    // during apply's normalize, so the char style's Gotham wins. Capture
+    // the live override now + replay after apply restores the char style.
+    try {
+        var fnt = ch.appliedFont;
+        var fam = "";
+        if (fnt && typeof fnt === "object") {
+            try { fam = String(fnt.fontFamily || ""); } catch (eFamObj) {}
+        } else if (typeof fnt === "string") {
+            fam = String(fnt);
+        }
+        if (fam && fam !== paraDef.fontFamily) {
+            out.fontRef = fnt;
+            out.fontFamily = fam;
+        }
+    } catch (eFnt) {}
+    try {
+        var fst = String(ch.fontStyle);
+        if (fst && fst !== "NOTHING" && fst !== paraDef.fontStyle) {
+            out.fontStyle = fst;
+        }
+    } catch (eFst) {}
+    // #29 G2: Position (NORMAL / SUPERSCRIPT / SUBSCRIPT / OT_SUPERSCRIPT etc.)
+    try {
+        var pos = String(ch.position);
+        if (pos && pos !== paraDef.position) out.position = pos;
+    } catch (ePos) {}
+    // #29 G5: fillTint — InDesign returns -1 to mean "inherit", so any
+    // numeric value 0..100 different from the para default IS an override.
+    try {
+        var ft = ch.fillTint;
+        if (ft !== undefined && ft !== null && ft !== paraDef.fillTint) {
+            // Treat -1 as "no override" — only record real tint values.
+            if (ft >= 0) out.fillTint = ft;
+        }
+    } catch (eFt) {}
+    // #29 G7: noBreak (keep word together)
+    try {
+        var nb = !!ch.noBreak;
+        if (nb !== !!paraDef.noBreak) out.noBreak = nb;
+    } catch (eNb) {}
+    // #29 G6: appliedLanguage. Languages are doc-level objects; keep
+    // both the ref (preferred for restore) and the name (fallback).
+    try {
+        var lang = ch.appliedLanguage;
+        var lnm = "";
+        if (lang) { try { lnm = String(lang.name || ""); } catch (eLn1) {} }
+        if (lnm && lnm !== paraDef.langName) {
+            out.langRef = lang;
+            out.langName = lnm;
+        }
+    } catch (eL) {}
+    // #31 G8 (stroke) + G9 (underline / strikeThrough visual detail).
+    // Each property captured separately, only when it differs from
+    // para style's effective value. Color refs preserved as objects.
+    out.strokeColorRef = null; out.strokeColorId = null; out.strokeTint = null; out.strokeWeight = null;
+    out.ulColorRef = null; out.ulColorId = null; out.ulTint = null; out.ulWeight = null; out.ulOffset = null;
+    out.ulGapColorRef = null; out.ulGapColorId = null; out.ulGapTint = null;
+    out.stColorRef = null; out.stColorId = null; out.stTint = null; out.stWeight = null; out.stOffset = null;
+    out.stGapColorRef = null; out.stGapColorId = null; out.stGapTint = null;
+    function _captureColor(propName, refKey, idKey, defaultId) {
+        try {
+            var sw = ch[propName];
+            if (sw && sw.isValid) {
+                var sid = "";
+                try { sid = String(sw.id); } catch (eId) { sid = String(sw.name || ""); }
+                if (sid && sid !== defaultId) { out[refKey] = sw; out[idKey] = sid; }
+            }
+        } catch (e) {}
+    }
+    function _captureNum(propName, key, defaultVal) {
+        try {
+            var v = ch[propName];
+            if (v !== null && v !== undefined && v !== defaultVal) out[key] = v;
+        } catch (e) {}
+    }
+    _captureColor("strokeColor", "strokeColorRef", "strokeColorId", paraDef.strokeColorId);
+    _captureNum("strokeTint",   "strokeTint",   paraDef.strokeTint);
+    _captureNum("strokeWeight", "strokeWeight", paraDef.strokeWeight);
+    _captureColor("underlineColor",    "ulColorRef",    "ulColorId",    paraDef.ulColorId);
+    _captureNum  ("underlineTint",     "ulTint",        paraDef.ulTint);
+    _captureNum  ("underlineWeight",   "ulWeight",      paraDef.ulWeight);
+    _captureNum  ("underlineOffset",   "ulOffset",      paraDef.ulOffset);
+    _captureColor("underlineGapColor", "ulGapColorRef", "ulGapColorId", paraDef.ulGapColorId);
+    _captureNum  ("underlineGapTint",  "ulGapTint",     paraDef.ulGapTint);
+    _captureColor("strikeThroughColor",    "stColorRef",    "stColorId",    paraDef.stColorId);
+    _captureNum  ("strikeThroughTint",     "stTint",        paraDef.stTint);
+    _captureNum  ("strikeThroughWeight",   "stWeight",      paraDef.stWeight);
+    _captureNum  ("strikeThroughOffset",   "stOffset",      paraDef.stOffset);
+    _captureColor("strikeThroughGapColor", "stGapColorRef", "stGapColorId", paraDef.stGapColorId);
+    _captureNum  ("strikeThroughGapTint",  "stGapTint",     paraDef.stGapTint);
+    return out;
+}
+
+/**
+ * Walk every story's every paragraph's every character; group consecutive
+ * chars sharing the same {caps, fcId, pt} override signature into runs;
+ * record (storyId, story-relative offset) so a later restore can find the
+ * same chars even after preclean changes paragraph structure.
+ *
+ * Returns: { storyId: [{ start, end, caps, fcRef, fcId, pt }, ...] }
+ */
+function captureDocDirectOverrides(doc, plog, deps) {
+    var deps2 = deps || {};
+    var getColl = deps2.getCollectionItem || _getCollectionItem;
+    var byStory = {};
+    var totalRuns = 0;
+    var storiesProcessed = 0;
+    var stories;
+    try { stories = doc.stories; } catch (eDS) { return byStory; }
+    var n = 0;
+    try { n = stories.length; } catch (e) {}
+    for (var s = 0; s < n; s++) {
+        var story = getColl(stories, s);
+        if (!story) continue;
+        try { if (!story.isValid) continue; } catch (eIv) { continue; }
+        var sid = "";
+        try { sid = String(story.id); } catch (eSid) { continue; }
+        var paras;
+        try { paras = story.paragraphs; } catch (ePs) { continue; }
+        var pCount = 0;
+        try { pCount = paras.length; } catch (e) {}
+        if (!pCount) continue;
+        var storyCharOffset = 0;
+        var runs = [];
+        var cur = null;
+        for (var p = 0; p < pCount; p++) {
+            var para = getColl(paras, p);
+            if (!para) continue;
+            try { if (!para.isValid) continue; } catch (eIp) { continue; }
+            var paraDef = _paragraphDefaults(para);
+            var pChars;
+            try { pChars = para.characters; } catch (ePc) { continue; }
+            var nChars = 0;
+            try { nChars = pChars.length; } catch (e) {}
+            for (var c = 0; c < nChars; c++) {
+                var ch = pChars.item(c);
+                var values = _readCharOverrides(ch, paraDef);
+                var hasAny = (values.caps !== null) || (values.fcRef !== null) || (values.pt !== null)
+                    || (values.fontRef !== null) || (values.fontStyle !== null)
+                    || (values.tracking !== null) || (values.horizontalScale !== null)
+                    || (values.verticalScale !== null) || (values.kerningValue !== null)
+                    || (values.skew !== null) || (values.baselineShift !== null)
+                    || (values.leading !== null)
+                    || (values.position !== null) || (values.fillTint !== null)
+                    || (values.noBreak !== null) || (values.langRef !== null)
+                    || (values.strokeColorRef !== null) || (values.strokeTint !== null) || (values.strokeWeight !== null)
+                    || (values.ulColorRef !== null) || (values.ulTint !== null) || (values.ulWeight !== null) || (values.ulOffset !== null)
+                    || (values.ulGapColorRef !== null) || (values.ulGapTint !== null)
+                    || (values.stColorRef !== null) || (values.stTint !== null) || (values.stWeight !== null) || (values.stOffset !== null)
+                    || (values.stGapColorRef !== null) || (values.stGapTint !== null);
+                if (!hasAny) {
+                    if (cur) { runs.push(cur); cur = null; }
+                    continue;
+                }
+                // Sig key: include all stripe-aware properties so any
+                // change starts a new run. Empty string for nulls.
+                function _sv(v) { return v === null || v === undefined ? "" : v; }
+                var sig = _sv(values.caps) + "|" + _sv(values.fcId) + "|" + _sv(values.pt)
+                    + "|" + _sv(values.fontFamily) + "|" + _sv(values.fontStyle)
+                    + "|" + _sv(values.tracking) + "|" + _sv(values.horizontalScale)
+                    + "|" + _sv(values.verticalScale) + "|" + _sv(values.kerningValue)
+                    + "|" + _sv(values.skew) + "|" + _sv(values.baselineShift)
+                    + "|" + _sv(values.leading)
+                    + "|" + _sv(values.position) + "|" + _sv(values.fillTint)
+                    + "|" + (values.noBreak === null ? "" : (values.noBreak ? "1" : "0"))
+                    + "|" + _sv(values.langName)
+                    + "|" + _sv(values.strokeColorId) + "|" + _sv(values.strokeTint) + "|" + _sv(values.strokeWeight)
+                    + "|" + _sv(values.ulColorId) + "|" + _sv(values.ulTint) + "|" + _sv(values.ulWeight) + "|" + _sv(values.ulOffset)
+                    + "|" + _sv(values.ulGapColorId) + "|" + _sv(values.ulGapTint)
+                    + "|" + _sv(values.stColorId) + "|" + _sv(values.stTint) + "|" + _sv(values.stWeight) + "|" + _sv(values.stOffset)
+                    + "|" + _sv(values.stGapColorId) + "|" + _sv(values.stGapTint);
+                var globalOffset = storyCharOffset + c;
+                if (cur && cur.sig === sig && globalOffset === cur.end + 1) {
+                    cur.end = globalOffset;
+                    continue;
+                }
+                if (cur) runs.push(cur);
+                cur = {
+                    sig: sig,
+                    start: globalOffset,
+                    end: globalOffset,
+                    caps: values.caps,
+                    fcRef: values.fcRef, fcId: values.fcId,
+                    pt: values.pt,
+                    fontRef: values.fontRef, fontFamily: values.fontFamily,
+                    fontStyle: values.fontStyle,
+                    tracking: values.tracking,
+                    horizontalScale: values.horizontalScale,
+                    verticalScale: values.verticalScale,
+                    kerningValue: values.kerningValue,
+                    skew: values.skew,
+                    baselineShift: values.baselineShift,
+                    leading: values.leading,
+                    position: values.position,
+                    fillTint: values.fillTint,
+                    noBreak: values.noBreak,
+                    langRef: values.langRef, langName: values.langName,
+                    // #31: stroke + underline-detail + strikeThrough-detail
+                    strokeColorRef: values.strokeColorRef, strokeTint: values.strokeTint, strokeWeight: values.strokeWeight,
+                    ulColorRef: values.ulColorRef, ulTint: values.ulTint, ulWeight: values.ulWeight, ulOffset: values.ulOffset,
+                    ulGapColorRef: values.ulGapColorRef, ulGapTint: values.ulGapTint,
+                    stColorRef: values.stColorRef, stTint: values.stTint, stWeight: values.stWeight, stOffset: values.stOffset,
+                    stGapColorRef: values.stGapColorRef, stGapTint: values.stGapTint
+                };
+            }
+            storyCharOffset += nChars;
+        }
+        if (cur) runs.push(cur);
+        if (runs.length) {
+            byStory[sid] = runs;
+            totalRuns += runs.length;
+            storiesProcessed++;
+        }
+    }
+    if (plog) plog("preserve: captured " + totalRuns + " override runs across " + storiesProcessed + " stories (pre-preclean)");
+    return byStory;
+}
+
+var _CapitalizationEnumDoc = null;
+function _resolveCapsEnumDoc() {
+    if (_CapitalizationEnumDoc) return _CapitalizationEnumDoc;
+    try { var idsn = require("indesign"); if (idsn && idsn.Capitalization) { _CapitalizationEnumDoc = idsn.Capitalization; return _CapitalizationEnumDoc; } } catch (e) {}
+    try { if (typeof Capitalization !== "undefined" && Capitalization) { _CapitalizationEnumDoc = Capitalization; return _CapitalizationEnumDoc; } } catch (e2) {}
+    return null;
+}
+
+// #29 G2: Position enum (NORMAL / SUPERSCRIPT / SUBSCRIPT / OT_SUPERSCRIPT
+// / OT_SUBSCRIPT / OT_NUMERATOR / OT_DENOMINATOR). Like Capitalization,
+// `range.position = "ALL_CAPS"` (string) is silently rejected — must be
+// the enum value.
+var _PositionEnumDoc = null;
+function _resolvePositionEnumDoc() {
+    if (_PositionEnumDoc) return _PositionEnumDoc;
+    try { var idsn = require("indesign"); if (idsn && idsn.Position) { _PositionEnumDoc = idsn.Position; return _PositionEnumDoc; } } catch (e) {}
+    try { if (typeof Position !== "undefined" && Position) { _PositionEnumDoc = Position; return _PositionEnumDoc; } } catch (e2) {}
+    return null;
+}
+
+/**
+ * Re-apply the captured overrides AFTER the apply pipeline finishes.
+ * Story-relative offsets are stable through preclean (`(LS) → \r`
+ * is 1-char-in / 1-char-out) and pure reorganize apply (no para.contents
+ * rewrite), so itemByRange against the same story/offsets points at the
+ * same characters that were captured.
+ */
+function restoreDocDirectOverrides(doc, captured, plog, deps) {
+    var deps2 = deps || {};
+    var getColl = deps2.getCollectionItem || _getCollectionItem;
+    var stats = { restored: 0, failed: 0, storiesProcessed: 0,
+        capsApplied: 0, fcApplied: 0, ptApplied: 0,
+        fontApplied: 0, fontStyleApplied: 0,
+        // Client-A-regression-2026-05-28: per-char geometry overrides
+        trackingApplied: 0, horizontalScaleApplied: 0, verticalScaleApplied: 0,
+        kerningValueApplied: 0, skewApplied: 0, baselineShiftApplied: 0,
+        leadingApplied: 0,
+        positionApplied: 0, fillTintApplied: 0, noBreakApplied: 0, langApplied: 0,
+        // #31 stroke + underline-detail + strikeThrough-detail
+        strokeApplied: 0, ulDetailApplied: 0, stDetailApplied: 0 };
+    if (!captured) return stats;
+    var capsEnum = _resolveCapsEnumDoc();
+    var posEnum = _resolvePositionEnumDoc();
+    var stories;
+    try { stories = doc.stories; } catch (eDS) { return stats; }
+    var n = 0;
+    try { n = stories.length; } catch (e) {}
+    for (var s = 0; s < n; s++) {
+        var story = getColl(stories, s);
+        if (!story) continue;
+        try { if (!story.isValid) continue; } catch (eIv) { continue; }
+        var sid = "";
+        try { sid = String(story.id); } catch (eSid) { continue; }
+        var runs = captured[sid];
+        if (!runs || !runs.length) continue;
+        stats.storiesProcessed++;
+        var storyChars;
+        try { storyChars = story.characters; } catch (eSC) { continue; }
+        var storyLen = 0;
+        try { storyLen = storyChars.length; } catch (e) {}
+        for (var r = 0; r < runs.length; r++) {
+            var run = runs[r];
+            if (!run) continue;
+            // Clamp to current story length in case content shrank
+            var endIdx = Math.min(run.end, storyLen - 1);
+            if (endIdx < run.start) { stats.failed++; continue; }
+            var range = null;
+            try { range = storyChars.itemByRange(run.start, endIdx); }
+            catch (eIR) { stats.failed++; continue; }
+            if (run.caps && capsEnum) {
+                var enumVal = capsEnum[run.caps];
+                if (enumVal !== undefined && enumVal !== null) {
+                    try { range.capitalization = enumVal; stats.capsApplied++; } catch (eC) {}
+                }
+            }
+            if (run.fcRef) {
+                try {
+                    if (run.fcRef.isValid) { range.fillColor = run.fcRef; stats.fcApplied++; }
+                } catch (eF) {}
+            }
+            if (run.pt !== null && run.pt !== undefined) {
+                try { range.pointSize = run.pt; stats.ptApplied++; } catch (ePt) {}
+            }
+            // #28b: font-family direct override. Prefer Font-object ref
+            // (faster, exact). Fall back to family-string (range.appliedFont
+            // accepts both). Only set when captured value differs from
+            // post-apply para style to avoid spurious "+" overrides.
+            if (run.fontRef || run.fontFamily) {
+                try {
+                    if (run.fontRef && typeof run.fontRef === "object") {
+                        try {
+                            if (run.fontRef.isValid) { range.appliedFont = run.fontRef; stats.fontApplied++; }
+                            else if (run.fontFamily) { range.appliedFont = run.fontFamily; stats.fontApplied++; }
+                        } catch (eFR) {
+                            if (run.fontFamily) { try { range.appliedFont = run.fontFamily; stats.fontApplied++; } catch (eFR2) {} }
+                        }
+                    } else if (run.fontFamily) {
+                        try { range.appliedFont = run.fontFamily; stats.fontApplied++; } catch (eFF) {}
+                    }
+                } catch (eF2) {}
+            }
+            if (run.fontStyle) {
+                try { range.fontStyle = run.fontStyle; stats.fontStyleApplied++; } catch (eFS) {}
+            }
+            // Client-A-regression-2026-05-28: per-char geometry overrides
+            if (run.tracking !== null && run.tracking !== undefined) {
+                try { range.tracking = run.tracking; stats.trackingApplied++; } catch (eTr) {}
+            }
+            if (run.horizontalScale !== null && run.horizontalScale !== undefined) {
+                try { range.horizontalScale = run.horizontalScale; stats.horizontalScaleApplied++; } catch (eHs) {}
+            }
+            if (run.verticalScale !== null && run.verticalScale !== undefined) {
+                try { range.verticalScale = run.verticalScale; stats.verticalScaleApplied++; } catch (eVs) {}
+            }
+            if (run.kerningValue !== null && run.kerningValue !== undefined) {
+                try { range.kerningValue = run.kerningValue; stats.kerningValueApplied++; } catch (eKv) {}
+            }
+            if (run.skew !== null && run.skew !== undefined) {
+                try { range.skew = run.skew; stats.skewApplied++; } catch (eSk) {}
+            }
+            if (run.baselineShift !== null && run.baselineShift !== undefined) {
+                try { range.baselineShift = run.baselineShift; stats.baselineShiftApplied++; } catch (eBs) {}
+            }
+            if (run.leading !== null && run.leading !== undefined) {
+                try { range.leading = run.leading; stats.leadingApplied++; } catch (eLd) {}
+            }
+            // #29 G2: position (enum-typed; string assignment silently rejected)
+            if (run.position && posEnum) {
+                var posVal = posEnum[run.position];
+                if (posVal !== undefined && posVal !== null) {
+                    try { range.position = posVal; stats.positionApplied++; } catch (ePos) {}
+                }
+            }
+            // #29 G5: fillTint (numeric 0..100; -1 means inherit so we never restore that)
+            if (run.fillTint !== null && run.fillTint !== undefined && run.fillTint >= 0) {
+                try { range.fillTint = run.fillTint; stats.fillTintApplied++; } catch (eFt) {}
+            }
+            // #29 G7: noBreak (boolean)
+            if (run.noBreak !== null && run.noBreak !== undefined) {
+                try { range.noBreak = !!run.noBreak; stats.noBreakApplied++; } catch (eNb) {}
+            }
+            // #29 G6: appliedLanguage. Prefer the captured Language ref;
+            // fall back to itemByName lookup on the doc for cases where
+            // ref became invalid (rare).
+            if (run.langRef || run.langName) {
+                try {
+                    if (run.langRef && typeof run.langRef === "object") {
+                        try {
+                            if (run.langRef.isValid) { range.appliedLanguage = run.langRef; stats.langApplied++; }
+                            else if (run.langName) {
+                                var lByName = doc.languagesWithVendors.itemByName(run.langName);
+                                if (lByName && lByName.isValid) { range.appliedLanguage = lByName; stats.langApplied++; }
+                            }
+                        } catch (eLR) {
+                            if (run.langName) {
+                                try {
+                                    var lByName2 = doc.languagesWithVendors.itemByName(run.langName);
+                                    if (lByName2 && lByName2.isValid) { range.appliedLanguage = lByName2; stats.langApplied++; }
+                                } catch (eLR2) {}
+                            }
+                        }
+                    } else if (run.langName) {
+                        try {
+                            var lByName3 = doc.languagesWithVendors.itemByName(run.langName);
+                            if (lByName3 && lByName3.isValid) { range.appliedLanguage = lByName3; stats.langApplied++; }
+                        } catch (eLN) {}
+                    }
+                } catch (eL2) {}
+            }
+            // #31 G8: stroke (color/tint/weight)
+            var anyStroke = false;
+            if (run.strokeColorRef) { try { if (run.strokeColorRef.isValid) { range.strokeColor = run.strokeColorRef; anyStroke = true; } } catch (eSC) {} }
+            if (run.strokeTint !== null && run.strokeTint !== undefined) { try { range.strokeTint = run.strokeTint; anyStroke = true; } catch (eST) {} }
+            if (run.strokeWeight !== null && run.strokeWeight !== undefined) { try { range.strokeWeight = run.strokeWeight; anyStroke = true; } catch (eSW) {} }
+            if (anyStroke) stats.strokeApplied++;
+            // #31 G9: underline visual detail
+            var anyUl = false;
+            if (run.ulColorRef) { try { if (run.ulColorRef.isValid) { range.underlineColor = run.ulColorRef; anyUl = true; } } catch (e) {} }
+            if (run.ulTint !== null && run.ulTint !== undefined) { try { range.underlineTint = run.ulTint; anyUl = true; } catch (e) {} }
+            if (run.ulWeight !== null && run.ulWeight !== undefined) { try { range.underlineWeight = run.ulWeight; anyUl = true; } catch (e) {} }
+            if (run.ulOffset !== null && run.ulOffset !== undefined) { try { range.underlineOffset = run.ulOffset; anyUl = true; } catch (e) {} }
+            if (run.ulGapColorRef) { try { if (run.ulGapColorRef.isValid) { range.underlineGapColor = run.ulGapColorRef; anyUl = true; } } catch (e) {} }
+            if (run.ulGapTint !== null && run.ulGapTint !== undefined) { try { range.underlineGapTint = run.ulGapTint; anyUl = true; } catch (e) {} }
+            if (anyUl) stats.ulDetailApplied++;
+            // #31 G9: strikeThrough visual detail
+            var anySt = false;
+            if (run.stColorRef) { try { if (run.stColorRef.isValid) { range.strikeThroughColor = run.stColorRef; anySt = true; } } catch (e) {} }
+            if (run.stTint !== null && run.stTint !== undefined) { try { range.strikeThroughTint = run.stTint; anySt = true; } catch (e) {} }
+            if (run.stWeight !== null && run.stWeight !== undefined) { try { range.strikeThroughWeight = run.stWeight; anySt = true; } catch (e) {} }
+            if (run.stOffset !== null && run.stOffset !== undefined) { try { range.strikeThroughOffset = run.stOffset; anySt = true; } catch (e) {} }
+            if (run.stGapColorRef) { try { if (run.stGapColorRef.isValid) { range.strikeThroughGapColor = run.stGapColorRef; anySt = true; } } catch (e) {} }
+            if (run.stGapTint !== null && run.stGapTint !== undefined) { try { range.strikeThroughGapTint = run.stGapTint; anySt = true; } catch (e) {} }
+            if (anySt) stats.stDetailApplied++;
+            stats.restored++;
+        }
+    }
+    if (plog) plog("preserve: restored " + stats.restored + " runs across " + stats.storiesProcessed + " stories"
+        + " (caps=" + stats.capsApplied + " fc=" + stats.fcApplied + " pt=" + stats.ptApplied
+        + " font=" + stats.fontApplied + " fontStyle=" + stats.fontStyleApplied
+        + " tracking=" + stats.trackingApplied + " hscale=" + stats.horizontalScaleApplied
+        + " vscale=" + stats.verticalScaleApplied + " kerning=" + stats.kerningValueApplied
+        + " skew=" + stats.skewApplied + " bshift=" + stats.baselineShiftApplied
+        + " pos=" + stats.positionApplied + " ft=" + stats.fillTintApplied
+        + " nb=" + stats.noBreakApplied + " lang=" + stats.langApplied
+        + " stroke=" + stats.strokeApplied + " ulDetail=" + stats.ulDetailApplied
+        + " stDetail=" + stats.stDetailApplied
+        + " failed=" + stats.failed + ")");
+    return stats;
+}
+
+module.exports = {
+    _clearCharOverrides: _clearCharOverrides,   // D3b
+    // #HANG-LOG (20260908): diagnostic sink, see setDiagLogger's comment.
+    setDiagLogger: setDiagLogger,
+    // #FONT-SCAN (20260908): opt-in face-resolution cache, see beginFaceCache.
+    beginFaceCache: beginFaceCache,
+    endFaceCache: endFaceCache,
+    applyClusterStyleToParagraph: applyClusterStyleToParagraph,
+    applyAnnotationsToParagraph: applyAnnotationsToParagraph,
+    applyEmphasisRunsToParagraph: applyEmphasisRunsToParagraph,
+    applyEmphasisRunsAsOverrides: applyEmphasisRunsAsOverrides,
+    // SPEC §14: faithful emphasis → combined per-script character styles.
+    applyEmphasisRunsAsCharStyles: applyEmphasisRunsAsCharStyles,
+    // #ac-emphasis-relations batch 1: translator bold through the emphasis relations.
+    applyRelationBold: applyRelationBold,
+    applyRelationItalic: applyRelationItalic,
+    _sourceItalicOf: _sourceItalicOf,   // I-5, exported for tests
+    _bodyKeyFromRanges: _bodyKeyFromRanges,   // batch 5 ④, exported for tests / host-run comparison
+    applySpaceOverridesToParagraph: applySpaceOverridesToParagraph,
+    clearParaCharOverrides: clearParaCharOverrides,
+    clearPipelineEmphasisCharStyles: clearPipelineEmphasisCharStyles,
+    clearTranslationStyles: clearTranslationStyles,
+    // #27: exported for v2_pipeline second-pass replay after emphasis
+    // runs have re-set appliedCharacterStyle (which silently wipes
+    // direct char overrides on the affected ranges).
+    restoreDirectCharOverrideRanges: _restoreDirectCharOverrideRanges,
+    // #27 doc-wide preserver (the channel that actually catches preclean
+    // wipes too — captures BEFORE preclean, restores AFTER apply, since
+    // story-relative char offsets stay stable through both phases).
+    captureDocDirectOverrides: captureDocDirectOverrides,
+    restoreDocDirectOverrides: restoreDocDirectOverrides,
+    _internal: {
+        _getCollectionItem: _getCollectionItem,
+        _applyDiffToRange: _applyDiffToRange,
+        _resolveOrCreateColor: _resolveOrCreateColor,
+        // SPEC §14 emphasis-charstyle helpers (exported for unit testing).
+        _applyOneEmphasisSubRun: _applyOneEmphasisSubRun,
+        _ensureEmphasisCharStyle: _ensureEmphasisCharStyle,
+        _resolveInstalledFaceCaseTolerant: _resolveInstalledFaceCaseTolerant,
+        _scanFontsCaseInsensitive: _scanFontsCaseInsensitive
+    }
+};

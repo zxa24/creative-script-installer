@@ -1,0 +1,2531 @@
+# Creative Script Kit — full documentation
+
+> Free scripts for Adobe InDesign and Illustrator, installed and updated with one line. Folio takes a finished InDesign layout to a translator and brings the translation back into the same layout; a set of InDesign tools fixes what a new language changes; five Illustrator tools handle everyday chores.
+
+This file is the concatenated full text of all 15 pages of https://zxa24.github.io/creative-script-installer/. It is generated from the site's Markdown sources; do not edit it by hand.
+
+Contents:
+- Creative Script Kit — https://zxa24.github.io/creative-script-installer/
+- Install and update — https://zxa24.github.io/creative-script-installer/guide/install
+- Folio: translate a layout — https://zxa24.github.io/creative-script-installer/folio/
+- Translate in the web app: for translators — https://zxa24.github.io/creative-script-installer/folio/translator
+- Translate a layout: for designers — https://zxa24.github.io/creative-script-installer/folio/designer
+- Before you export — https://zxa24.github.io/creative-script-installer/folio/before-export
+- Export and import — https://zxa24.github.io/creative-script-installer/folio/export-import
+- 3 Make the new language look right — https://zxa24.github.io/creative-script-installer/folio/fonts
+- Later rounds — https://zxa24.github.io/creative-script-installer/folio/rounds
+- Sister documents — https://zxa24.github.io/creative-script-installer/folio/sister-documents
+- More tools — https://zxa24.github.io/creative-script-installer/tools/
+- All scripts — https://zxa24.github.io/creative-script-installer/scripts/
+- Advanced install options — https://zxa24.github.io/creative-script-installer/reference/advanced
+- Files and folders — https://zxa24.github.io/creative-script-installer/guide/folders
+- Changelog — https://zxa24.github.io/creative-script-installer/reference/changelog
+
+---
+
+<!-- page: index.md -->
+# Creative Script Kit
+
+Source: https://zxa24.github.io/creative-script-installer/
+
+Summary: Free scripts for Adobe InDesign and Illustrator. Folio takes a finished InDesign layout to a translator and brings the translation back into the same layout. A set of InDesign tools fixes what a new language changes, and five Illustrator tools handle everyday chores. Install them all with one line.
+
+Creative Script Kit
+
+Scripts for InDesign and Illustrator.
+
+Install with one line. Update with the same line. Free and open source.
+
+Folio
+
+Translate a finished InDesign layout without rebuilding it. You send the text to a translator, who works in a web page, and the translation comes back into the same frames, styles and pages.
+
+More tools
+
+Scripts outside the translation workflow. In InDesign, save and open the document's folder in one step. In Illustrator, five small helpers. Unembed every image, save each artboard as its own PDF, finish a job in one click with Export Small PDF (smallest PDF, largest PDF, save, package), replace fonts across a file, and set Chinese and Japanese line breaking and spacing.
+
+All scripts
+
+Saw a script name in the Scripts panel or the File menu? Find what it does and where it is explained.
+
+**Translating a Folio zip?** You need nothing installed. Go to
+[For translators](/folio/translator).
+
+## Install in one line
+
+Open InDesign (and Illustrator) once before installing, then quit. Open a
+terminal, paste the line for your computer, and press Enter.
+[Install](/guide/install) shows each step.
+
+**Mac**: open the Terminal app and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+```
+
+**Windows**: open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
+
+Then restart InDesign and Illustrator. To update later, paste the same line again.
+
+## Who it is for
+
+- **Designers** who lay out documents in more than one language, or who want a
+  few chores in InDesign and Illustrator done for them.
+- **Translators** who receive a Folio package. You work in a web page and need
+  nothing installed. See [For translators](/folio/translator).
+
+You do not need to write code. In InDesign you double-click a script in the
+Scripts panel; in Illustrator you pick it from the File menu.
+
+## Free and open source
+
+The scripts and this site are on
+[GitHub](https://github.com/zxa24/creative-script-installer). Questions and bug
+reports are welcome there.
+
+> **For AI assistants**
+This whole site is also published as plain text, so you can give an AI
+assistant the address and ask it questions:
+[`llms.txt`](/llms.txt) is an index and [`llms-full.txt`](/llms-full.txt) is
+every page in one file.
+
+---
+
+<!-- page: guide/install.md -->
+# Install and update
+
+Source: https://zxa24.github.io/creative-script-installer/guide/install
+
+Summary: Install the InDesign and Illustrator scripts on a Mac or a Windows PC by pasting one line into a terminal, then find them in InDesign and Illustrator. Updating and uninstalling use the same line.
+
+# Install and update
+
+Use this page the first time you set up the scripts on a computer, and whenever
+you want the newest version.
+
+You paste one line into a terminal. There is nothing to download by hand, and
+you do not need an account. The one exception is Illustrator, which asks for
+your permission once (see [below](#it-asks-for-my-password)).
+
+Before you start, open InDesign once (and Illustrator once, if you use it), then
+quit. The installer finds them by the folders they create the first time they
+open.
+
+## On a Mac
+
+1. **Open Terminal.** Press <kbd>Cmd</kbd> + <kbd>Space</kbd>, type
+   `Terminal`, and press <kbd>Return</kbd>.
+   
+2. **Copy this line, paste it into Terminal and press <kbd>Return</kbd>.** To
+   copy it, point at the box and click the copy button that appears at its
+   right, or select the whole line and press <kbd>Cmd</kbd>+<kbd>C</kbd>. Click
+   in the Terminal window and press <kbd>Cmd</kbd>+<kbd>V</kbd> to paste.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash
+   ```
+
+3. **Press <kbd>Return</kbd> again** to accept **Install**. The installer lists
+   what it found on your Mac and what it is about to do.
+   
+4. **Only for Illustrator, and only the first time:** it asks
+   *Continue? [y/n]*. Press <kbd>Return</kbd>. If it then asks for your
+   password, type the password you use to log in to this Mac (not an Adobe
+   password). Nothing appears while you type; press <kbd>Return</kbd>.
+5. **Wait for the last line.** When the install worked, it starts with
+   **Installed v** followed by the version number, and tells you which
+   applications to restart. You can then close the Terminal window. If it ends
+   any other way, see [Something went wrong](#something-went-wrong).
+6. **Restart InDesign and Illustrator.** They only look for new scripts when
+   they open.
+
+## On Windows
+
+1. **Open PowerShell.** Press the <kbd>Windows</kbd> key, type `PowerShell`, and
+   press <kbd>Enter</kbd>.
+   
+2. **Copy this line, paste it into PowerShell and press <kbd>Enter</kbd>.** To
+   copy it, point at the box and click the copy button that appears at its
+   right, or select the whole line and press <kbd>Ctrl</kbd>+<kbd>C</kbd>. Click
+   in the PowerShell window and press <kbd>Ctrl</kbd>+<kbd>V</kbd>, or
+   right-click, to paste.
+
+   ```powershell
+   irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+   ```
+
+3. **Press <kbd>Enter</kbd> again** to accept **Install**.
+   
+4. **Only for Illustrator, and only the first time:** it asks
+   *Continue? [y/n]*. Press <kbd>Enter</kbd>. Windows then shows an approval
+   prompt; click **Yes**. No Adobe password is involved.
+5. **Wait for the last line.** When the install worked, it starts with
+   **Installed v** followed by the version number, and tells you which
+   applications to restart. You can then close the PowerShell window. If it
+   ends any other way, see [Something went wrong](#something-went-wrong).
+6. **Restart InDesign and Illustrator.**
+
+If the scripts were already current, the last line says
+**Already up to date** instead, and nothing was changed.
+
+## Where to find the scripts 
+- **InDesign:** choose **Window → Utilities → Scripts**. In the Scripts panel,
+  open **User**, then **indesign-toolkit-stable**. This folder is where
+  Creative Script Kit's InDesign scripts appear. Double-click a script to run
+  it.
+  
+- **Illustrator:** choose **File → Scripts → illustrator-toolkit-stable**, then
+  pick a script.
+  
+
+To **update**, paste the same line again and choose **Update**. To
+**uninstall**, paste it and choose **Uninstall**.
+
+## What next 
+[Folio: translate a layout](/folio/) · [More tools](/tools/) ·
+[All scripts](/scripts/)
+
+## Common problems
+
+> **It asks for my password**
+<a id="it-asks-for-my-password"></a>
+
+That is Illustrator, and it happens once. Illustrator only reads scripts from a
+folder inside the application itself, and your account cannot write there. The
+installer asks once to create a folder of your own in that spot. On a Mac it
+asks for the password you use to log in to the Mac; on Windows, Windows shows
+an approval prompt and you click **Yes**. It is never an Adobe password. After
+that, installs and updates never ask again.
+
+If you say no, everything else still installs, and the installer prints the
+line to run when you are ready.
+
+When you upgrade Illustrator to a new version, that folder is removed with the
+old version. Paste the install line again afterwards.
+
+> **The scripts do not show up**
+- Restart InDesign or Illustrator. They only look for scripts when they open.
+- If the installer said it could not find InDesign or Illustrator, see
+  [It says it could not find InDesign or Illustrator](#not-found).
+
+> **It says it could not find InDesign or Illustrator**
+<a id="not-found"></a>
+
+The installer finds them by the folders they create the first time they open.
+Open that application once, quit it, and paste the line again. The same goes
+for a message that Illustrator *has not recorded which language it runs in*. If
+it says it *found Illustrator, but could not identify its Scripts folder*, see
+[How Illustrator's Scripts folder is found](/reference/advanced#how-illustrator-s-scripts-folder-is-found).
+
+> **My work computer blocks it**
+<a id="work-computer-blocks"></a>
+
+Some company computers are set up to refuse commands like this one. The
+installer cannot get around that, and should not try. Ask your IT team, and
+show them this page.
+
+> **I cannot use a terminal**
+Download the project as a ZIP from
+[GitHub](https://github.com/zxa24/creative-script-installer) (**Code →
+Download ZIP**), unzip it, and double-click **install-update.bat** on Windows or
+**install-update.command** on a Mac.
+
+Your computer will warn you, because these files are not signed:
+
+- **Windows** shows *"Windows protected your PC"*. Click **More info → Run
+  anyway**.
+- **Mac** says the file *"cannot be opened because it is from an unidentified
+  developer"*. Right-click the file, choose **Open**, then **Open** again.
+
+This route installs the copy you downloaded. To update, download it again.
+
+> **Something went wrong**
+<a id="something-went-wrong"></a>
+
+If an install fails, the installer prints a line that runs it again and saves a
+log file to your Desktop. Run that line and send us the file it names, through
+[GitHub](https://github.com/zxa24/creative-script-installer/issues). To ask for
+the log yourself, see
+[Collecting a log](/reference/advanced#collecting-a-log-when-something-goes-wrong).
+
+> **Technical details**
+
+<a id="what-it-changes"></a>**What it changes on your computer**
+
+Only these folders:
+
+| | |
+| --- | --- |
+| InDesign scripts | `%APPDATA%\Adobe\InDesign\Version <N>\<language>\Scripts\Scripts Panel\indesign-toolkit-stable\` (Windows) · `~/Library/Preferences/Adobe InDesign/Version <N>/<language>/Scripts/Scripts Panel/indesign-toolkit-stable/` (macOS) |
+| Illustrator scripts | a folder named `illustrator-toolkit-stable` inside Illustrator's own Scripts folder |
+
+It installs one copy for every InDesign version on the computer. For
+Illustrator, the folder it creates is made writable for you (`chown` on macOS,
+one access-control entry on Windows), and only that folder.
+
+Nothing else: no System Settings or Windows Settings entry, no login item, no
+`PATH` change, no registry key, no scheduled task, no `defaults write`, no
+InDesign or Illustrator preference. It installs scripts only (`.idjs` files and
+their `lib/` folder); it is not a UXP plugin.
+
+- **Windows execution policy:** `iex` evaluates text, and the policy governs
+  script files, so the line runs even under `Restricted`. You do not need
+  `Set-ExecutionPolicy`. A Group Policy setting can still block it (see
+  [My work computer blocks it](#work-computer-blocks)).
+- **macOS Gatekeeper:** nothing is downloaded and opened as an application on
+  the one-line route, so there is no dialog to allow.
+- **Admin rights:** the installer never runs as an administrator. Only the one
+  command that creates the Illustrator folder is elevated. If no prompt is
+  needed (a recent `sudo`, or an already elevated PowerShell), it passes
+  silently.
+- **Illustrator language:** the folder goes into the language folder
+  Illustrator reads, taken from Illustrator's own settings. If Illustrator has
+  never been launched, it installs nothing for Illustrator and says so (see
+  [It says it could not find InDesign or Illustrator](#not-found)).
+
+<a id="how-updating-behaves"></a>**How updating behaves**
+
+- Everything is downloaded and checksum-verified before anything is written.
+- InDesign: the whole folder is replaced in one step. If any step fails,
+  nothing changes, and a failed swap puts the old folder back.
+- Illustrator: each file is replaced in place, one at a time, because a
+  whole-folder swap would need write access to the Adobe folder around it.
+  Scripts an older version shipped and this one does not are removed; other
+  files you put there are left alone.
+- No old copy is kept after a successful update, because InDesign would show
+  it as a second set of scripts. To go back, install the older version with
+  `--source` (macOS) or `-Source` (Windows).
+- Running it again is safe.
+
+**The menu**
+
+**Install**, **Update**, **Repair** (rewrite the files even if the version
+matches) and **Uninstall** are offered only when they apply; `q` leaves without
+changing anything. When everything is current there is no default. With no
+terminal at all (a script or a deployment tool) it installs without asking. On
+macOS, uninstall also works without the menu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash -s -- --uninstall
+```
+
+On Windows, uninstalling the Illustrator folder needs no administrator step. On
+macOS it asks once, and a folder that still holds files the installer did not
+put there is left alone.
+
+**The `-stable` suffix**
+
+It keeps an installed copy from colliding with a developer's link to a working
+copy. A plain `indesign-toolkit` folder is removed only when it is one of the
+installer's own earlier installs. If a link sits at the `-stable` name, the
+installer refuses to write there.
+
+More: [Advanced install options](/reference/advanced).
+
+---
+
+<!-- page: folio/index.md -->
+# Folio: translate a layout
+
+Source: https://zxa24.github.io/creative-script-installer/folio/
+
+Summary: Folio translates a finished InDesign layout without rebuilding it. The designer exports the text, a translator translates it in a web page, and the designer imports the translation into a copy of the same layout.
+
+# Folio: translate a layout
+
+Folio gets a finished InDesign document into another language without
+rebuilding the layout. The translation goes back into the same frames, styles
+and pages.
+
+1. **The designer exports** the text from InDesign as a `.zip` file.
+2. **The translator translates** it in a web page. Nothing to install.
+3. **The designer imports** the translation. InDesign makes a translated copy;
+   the original stays as it is.
+
+Then the designer checks the result and
+[adjusts fonts for the new language](/folio/fonts) if needed.
+
+## Pick your part
+
+- **I lay out the document:** [Translate a layout: for designers](/folio/designer),
+  the five stages of the work in order.
+- **I translate the text:** [Translate in the web app: for translators](/folio/translator)
+
+> **What Folio does not do**
+- It does not translate by itself. A person translates; the web app can suggest
+  a first draft with Google Translate if the translator asks for it.
+- It does not add bold, italic or other formatting the translator did not mark.
+- It does not change the original document.
+
+---
+
+<!-- page: folio/translator.md -->
+# Translate in the web app: for translators
+
+Source: https://zxa24.github.io/creative-script-installer/folio/translator
+
+Summary: Step by step for the translator. Open the zip the designer sent in the Folio web app, type the translation next to each source paragraph, mark bold or italic where needed, save the package zip and send it back. Nothing to install.
+
+# Translate in the web app: for translators
+
+Follow these steps when a designer sends you a Folio `.zip` file. You work in
+your web browser; there is nothing to install.
+
+The zip is opened inside your browser and is not uploaded anywhere. The only
+exception is **Auto Translate**, which sends the text to Google.
+
+## What to do
+
+1. **Open the web app:** [zxa24.github.io/app-folio](https://zxa24.github.io/app-folio/).
+2. **Click Open Package ZIP** and choose the zip the designer sent. A window
+   called *Review project metadata* opens. **Project name** must not be empty,
+   and **Source language** and **Target language** should match the job. Type
+   your name in **Translator** if it is not there yet. Then click **Next**.
+   If a required field is left empty, your saved zip will not include these
+   project details, and a warning tells you so when you save
+   ([what to do](#project-details-missing)).
+   
+3. **Translate.** On the right, each paragraph is a card with the **Source** and
+   a **Target** box. Type your translation in **Target**. Press
+   <kbd>Enter</kbd> to go to the next one. On the left is the page as it will
+   look, with your text in place. Use **Prev** and **Next** under it to change
+   page.
+   
+
+   ::: warning Sensitive text
+   There is an **Auto Translate** button at the top that fills in a machine
+   draft. It sends the text to Google Translate. If the document contains
+   sensitive or confidential information, do not use it.
+   :::
+4. **Mark bold and italic yourself.** Formatting is not copied from the
+   source by itself. Where the **Source** has bold or italic (yellow markers),
+   select the matching words in **Target** and mark them
+   (<kbd>Ctrl</kbd>+<kbd>B</kbd> bold, <kbd>Ctrl</kbd>+<kbd>I</kbd> italic), or
+   click the yellow marker and use **Apply to target selection**. Anything you
+   do not mark comes out plain. The Target box stays plain text; the real look
+   shows on the page on the left.
+5. **Click Save Package ZIP,** then **Download**. Send the downloaded zip (its
+   name starts with `V` and ends in `_translated_<date>.zip`) back to the
+   designer.
+
+That is all you need. The rest of this site is for the designer. If the
+designer sends you another zip later, open it the same way.
+
+## Common problems
+
+> **Will I lose my work if I close the browser?**
+Your edits are saved in this browser as you type. Open the same zip again in
+the same browser and they come back. They are not saved anywhere else, so the
+only thing you can send is the zip from **Save Package ZIP**. Save it before you
+switch computers or browsers.
+
+> **Can it translate for me?**
+**Auto Translate** at the top fills every empty paragraph with a Google
+Translate draft. It sends the source text to Google: **if the document contains
+sensitive or confidential information, do not use it.** Check every paragraph
+afterwards. It does not
+overwrite text you already typed unless you choose that in its settings.
+
+> **Some text in the Target box is grey or locked**
+When the designer sends a document that was already translated, each card
+starts with the current wording in grey. Edit that text where it needs
+changing; do not retype whole paragraphs. Cards you leave grey stay exactly as
+they are in the layout. If you add, change or remove bold or italic on a card,
+the layout follows your change. **Reset** brings a card back to the grey text. A locked
+card belongs to the paragraph before it (edit that one), or is not meant to be
+translated.
+
+> **A card warns about control tokens**
+Some paragraphs contain markers (for example a page number) that must stay in
+the translation. If you deleted one, click **Restore Deleted** on that card.
+
+> **Saving warns that the project details were not included**
+<a id="project-details-missing"></a>
+
+A required project field is empty: **Project name**, **Source language** or
+**Target language**. Fill it in on the **Project** tab, or in the window that
+opens when you click **Save Package ZIP**, then save again and send the new zip.
+
+> **The source has bold or italic words**
+<a id="source-has-bold"></a>
+
+They are marked in yellow in the Source column. Click a marker and use
+**Apply to target selection** to copy the same formatting to the words you
+selected in Target. Formatting you do not mark is not added to the translation.
+
+> **The translation looks too small on the page preview**
+The preview shrinks long text so it fits its box. Shrunken text on the left is
+a sign the translation may be too long for the layout; the designer will see
+it when importing ([what the designer does](/folio/export-import#text-too-long)).
+
+> **A message says the package is open in another tab**
+Use one tab per package. Click **Take over editing here** in the tab you want
+to keep working in.
+
+> **Technical details**
+- The zip is unpacked in the browser. Only `segments.json` is required;
+  `preview.pdf` and `translations.json` are optional. Any other file type is
+  refused.
+- Segment status: `todo`, `translated` (set automatically when you type),
+  `reviewed` (only when control tokens are intact) and `skip`. Click the status
+  chip on a card to change it. Card colours: grey todo, green translated, blue
+  reviewed, purple-grey skip.
+- Toolbar: bold, italic, underline, superscript, colour (6 presets or a hex
+  value), hyperlink (<kbd>Ctrl</kbd>+<kbd>K</kbd>), comment, remove. Pressing a
+  shortcut again on the same selection removes that format.
+- Auto Translate: default provider `google_web`, which calls
+  `translate.googleapis.com` (no key); `google_cloud` needs an API key. Whole
+  document only; by default it skips segments that already have text, reviewed
+  segments and number or punctuation only text. Formatting it carries over from
+  the source is flagged as automatic (amber dashed underline) and is dropped if
+  you then edit that sentence by hand.
+- Autosave: the browser's IndexedDB (`webapp_working_state`), about 1.5 seconds
+  after typing stops and when the tab is hidden. Opening an updated package
+  while unsaved edits exist asks: keep local edits, use the package
+  translations (discards local edits), or cancel.
+- Save Package ZIP writes the original package files plus `translations.json`,
+  `translation_qc_report.txt`, `ai_manual_handoff.txt` and `_meta.json`, named
+  `V<NN>T_<name>_translated_<YYYYMMDD_HHMMSS>.zip`. NN is the number of the
+  package you opened, plus one when it came from the designer (D); saving again
+  keeps the number. T marks a translator save. If required project fields are
+  empty, `_meta.json` is left out and a warning says so
+  ([what to do](#project-details-missing)).
+- Other tools: **Draw Hotspot** adds a manual card for text not in the package;
+  **Advanced → Export PDF** saves the preview with translations drawn in;
+  **Advanced → Open Package Folder (legacy)** and **Save Outputs** are the older
+  folder route.
+- The interface is English only.
+
+---
+
+<!-- page: folio/designer.md -->
+# Translate a layout: for designers
+
+Source: https://zxa24.github.io/creative-script-installer/folio/designer
+
+Summary: The designer's part of Folio in the order of the work. Get the document ready, export the text and import the translation, make the new language look right, handle later rounds, and copy settings to sister documents.
+
+# Translate a layout: for designers
+
+Follow these five stages, in this order, when a finished InDesign document
+needs a version in another language.
+
+**Before you start:** the layout is final, and the scripts are
+[installed](/guide/install).
+
+1. **[Before you export](/folio/before-export).** Check that InDesign shows no
+   missing fonts or missing links, and save the document. Relink missing images
+   or tidy tangled paragraph styles here if you need to.
+2. **[Export and import](/folio/export-import).** Export the text as a zip with
+   **1.1 Export Translation Package** and send it to the translator, who
+   translates it in the web app and sends it back. Then import it into a copy
+   of the original with **1.2 Import Translation Package** and check the result.
+3. **[Make the new language look right](/folio/fonts).** For Chinese, Japanese
+   or Korean, run **2.2 Apply CJK Styles** once. Other tools fix specific
+   problems where the new language meets the layout.
+4. **[Later rounds](/folio/rounds).** When the translation changes after you
+   adjusted the layout, update the `.translated.indd` you adjusted and mark
+   what changed.
+5. **[Sister documents](/folio/sister-documents).** Copy tuned paragraph-style
+   settings to a sister document, without redoing them by hand.
+
+> **Do not import a later round into the original**
+That starts over and replaces the `.translated.indd` you adjusted. The import
+asks before it does this and saves a backup first, but your layout work is no
+longer in the translated copy.
+[Later rounds](/folio/rounds#next-round-warning) shows what to do instead.
+
+---
+
+<!-- page: folio/before-export.md -->
+# Before you export
+
+Source: https://zxa24.github.io/creative-script-installer/folio/before-export
+
+Summary: Get an InDesign document ready for Folio before you export its text. 3.3 Relink Missing Links finds missing images in the document's folder; 2.4 Reorganize Styles replaces hundreds of near-identical paragraph styles with a small, clean set.
+
+# Before you export
+
+Stage 1 of [Translate a layout: for designers](/folio/designer). Before you run
+**1.1 Export Translation Package**, the layout should be final, InDesign should
+show no [missing fonts](/folio/export-import#missing-fonts) or missing links,
+and the document should be saved. Use this page when a document is not quite
+ready: InDesign reports [missing links](#relink-missing-links), or the
+paragraph styles have grown into [a tangle](#reorganize-styles).
+
+These are free InDesign scripts from Creative Script Kit. You install them
+once with one line ([Install](/guide/install)) and find them in the Scripts
+panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+Both tools are optional. If the document is already clean, go straight to
+[2 Export and import](/folio/export-import).
+
+## 3.3 Relink Missing Links 
+Use it when InDesign reports missing links and the files are somewhere inside
+the document's folder.
+
+1. Save the document, so the script knows which folder to search.
+2. In the Scripts panel, double-click **3.3 Relink Missing Links**. It asks
+   nothing.
+3. Read the window that lists what it relinked and
+   [what it could not find](#still-missing), then click **Close**.
+
+It relinks each missing link to a file with the same name in the document's
+folder or any folder inside it, and leaves the rest alone. All the relinks are
+one undo step.
+
+## 2.4 Reorganize Styles 
+Use it when a document has sprawled into hundreds of near-identical paragraph
+styles, or into paragraphs held together by local overrides.
+
+1. Open the document and double-click **2.4 Reorganize Styles**.
+2. In its one dialog, choose how paragraphs should be grouped, then click
+   **OK**. **Cancel** stops without changing anything.
+3. Wait; there are no more questions. Read the summary and its warnings, then
+   look through the document.
+
+It groups paragraphs that look the same and gives each group one new paragraph
+style, in the open document. It keeps the fonts as they are. The whole run is
+one undo step, so if you do not like the result, undo it before you save.
+
+## Next
+
+[2 Export and import](/folio/export-import): export the text with
+**1.1 Export Translation Package** and send it to the translator.
+
+## Common problems
+
+> **Some links are still missing after 3.3**
+<a id="still-missing"></a>
+
+It only relinks when it finds a file with exactly the same name (capital
+letters do not matter) in the document's folder or a folder inside it. It never
+guesses. Move the file into the document's folder, or relink it by hand in the
+Links panel.
+
+> **3.3 picked a different copy of the file**
+When the same file name is in several places, the copy closest to the
+document's folder wins. That keeps it from taking a copy buried deep inside a
+packaged folder.
+
+> **A link shows as modified, not missing**
+A file that still exists but has changed needs **Update Link** in the Links
+panel. 3.3 only handles links whose file is missing.
+
+> **3.3 says it stopped searching**
+It stops after 4000 folders or 12 levels deep, and says so rather than quietly
+searching less. Keep the linked files closer to the document.
+
+> **Technical details**
+<a id="relink-missing-links-details"></a>**3.3 Relink Missing Links**
+(source `relink_missing_from_doc_folder.idjs`)
+
+For every link in the document whose status is *missing*, the script searches
+**the document's folder and all of its subfolders** for a file of the same name,
+matched case-insensitively. When it finds one, it relinks and updates. When it
+does not, it **reports the link and leaves it alone**; it never guesses.
+
+- **Shallow wins.** If the same filename appears in several places, the one
+  closest to the document folder is taken first. That keeps it from grabbing a
+  deep copy out of a packaged folder.
+- **Missing only.** It handles broken links. A link whose file still exists but
+  has been modified is an *Update*, not a relink, and is out of scope.
+- **Dry run available.** It can report what it *would* relink without touching
+  anything (automation option `dryRun`; a double-click always relinks).
+- **Undo:** all relinks are wrapped in one undo step.
+- **Search limits:** it stops at 4000 directories or 12 levels deep, and says so
+  when it hits a limit rather than silently truncating the search.
+- **It writes** its report to `<document folder>/script_outputs/log/`, falling
+  back to the document folder itself if that is unavailable.
+
+<a id="reorganize-styles-details"></a>**2.4 Reorganize Styles**
+(source `reorganize_styles_inplace.idjs`)
+
+What it does:
+
+- Walks every paragraph in every story and captures its *effective* visual
+  properties: font, size, colour, leading, indents, spacing, keep options,
+  bullets, and so on.
+- Clusters paragraphs by that visual fingerprint.
+- Creates one `_T_p_<hash>` paragraph style per cluster with those properties
+  baked in. N paragraphs typically collapse to a much smaller number of styles.
+- Reassigns each paragraph to its cluster's canonical style.
+
+What it does **not** do:
+
+- No source file picker: it reads the active document.
+- No output file: it modifies the active document in place.
+- **No CJK (Chinese, Japanese and Korean) font policy.** It preserves the original Latin font family. This is
+  pure style consolidation, not translation preparation.
+
+The dialog's grouping options: dimensions, colour tolerance, auto-merge preset,
+safety, soft-break handling, edit mode.
+
+**Undo:** the whole reorganization (pre-flight, apply and repair) is one undo
+step.
+
+**It also writes:** a progress log next to the document
+(`<doc>_reorganize_progress_<timestamp>.log`) for post-mortem triage, and, when
+safety is on, a before-snapshot used by the post-flight repair.
+
+---
+
+<!-- page: folio/export-import.md -->
+# Export and import
+
+Source: https://zxa24.github.io/creative-script-installer/folio/export-import
+
+Summary: Stage 2 for the designer. Export the text of a finished InDesign layout as a zip with 1.1 Export Translation Package, send it to the translator, get it back, import it into a copy of the original with 1.2 Import Translation Package, and check the result.
+
+# Export and import
+
+Stage 2 of [Translate a layout: for designers](/folio/designer). Do this when
+the document is [ready to export](/folio/before-export).
+
+## What to do 
+1. **Export the text.** Open the document. In the Scripts panel, double-click
+   **1.1 Export Translation Package**. The dialog asks for the
+   **Source language** (the language of this document) and the
+   **Target language** (the language it is being translated into). Set both,
+   then click **OK**. A `.zip` file appears in the **packages** folder next to
+   your document.
+   
+2. **Send the zip to the translator,** with this link:
+   [Translate in the web app](/folio/translator). Tell them the target
+   language, and whether they may use **Auto Translate** in the web app (it
+   sends the text to Google).
+3. **Get the translated zip back** from the translator.
+4. **Import the translation.** For the first import, open the **original**
+   document (not a file whose name ends in `.translated`). Double-click
+   **1.2 Import Translation Package** and choose the translated zip. If InDesign
+   asks about [missing fonts](#missing-fonts) or
+   [missing links](#missing-links), fix them now; after that it runs on its
+   own.
+   
+5. **Check the result.** A new document named `<your document>.translated.indd`
+   opens. Your original is not changed. If something needs fixing, a window
+   lists each place with its page: **Show** takes you to it, and
+   **How to fix** gives the steps ([more](#end-window)). Look through every
+   page anyway, especially for
+   [text that is too long for its frame](#text-too-long). Bold and italic come
+   through only [where the translator marked them](#bold-italic-missing).
+
+## Next
+
+[3 Make the new language look right](/folio/fonts). For Chinese, Japanese or
+Korean, run **2.2 Apply CJK Styles** once.
+
+## Common problems
+
+> **The import refuses to run**
+The document you have open looks like a translated copy (its name ends in
+`.translated`, `.aborted` or `.BLOCKED`) but it carries no record of an earlier
+import, so the import cannot update it. For a first import, open the original
+document instead. For a [later round](/folio/rounds#next-round), open the
+`.translated.indd` that the import created.
+
+> **A window lists places to fix after the import**
+<a id="end-window"></a>
+
+The import opens this window only when something needs your attention. It
+groups the places by problem, says what each problem means and what to do, and
+lists each place with its page and the first words of its text.
+
+- **Show** turns to that page and selects the frame or paragraph. The window
+  stays open, so you can go through the list one by one.
+- **How to fix**, where a problem has it, opens the steps inside the window,
+  with the address of the matching section of this site to copy into a browser.
+- **Open report** shows where the full report is saved, as text you can copy.
+- **Done** closes the window.
+
+There is no tick box for "fixed". Fix the places, then import again: a place
+that is fixed no longer appears. If the import finds nothing to fix, no window
+opens.
+
+> **The import asks to replace the translated copy**
+<a id="replace-translated-copy"></a>
+
+You ran the import on the original while a `.translated.indd` already exists.
+Importing from the original starts over, so layout changes you made by hand in
+that copy are lost.
+
+- To update the copy instead, click **Cancel** (nothing is changed), then
+  [open the `.translated.indd` and import there](/folio/rounds#next-round).
+- To start over, click **Replace it**. A backup of the old copy is saved in
+  **script_outputs → backup** first. If that backup cannot be made, the copy is
+  not replaced.
+
+If the translated copy is open with unsaved changes, or cannot be closed, the
+import stops without changing anything. Save or close the copy, then run the
+import again.
+
+> **The import stopped part way**
+<a id="import-stopped"></a>
+
+Most problems do not stop it: paragraphs it cannot find keep their original
+text and are listed in its report. It does stop when CJK text would end up in a
+font with no pair, and when it fails while writing. On a first import it then
+deletes the half-made translated copy (if it had replaced an earlier copy, that
+one is in **script_outputs → backup**); in a
+[later round](/folio/rounds#next-round) it leaves the `.translated.indd` open
+and unsaved. Fix what it reported and run it again the same way (from the
+original for a first import, from the `.translated.indd` for a later round).
+The full list is in its [report](#report-and-log). Problems it reports include
+[missing fonts](#missing-fonts), [missing links](#missing-links) and
+[a font with no pair](#font-has-no-pair).
+
+> **InDesign says fonts are missing**
+<a id="missing-fonts"></a>
+
+Fix them in the original document before you import, so the translated copy
+opens with them. In InDesign's **Missing Fonts** dialog, click **Add** for a
+font that Adobe Fonts has. Install any other font on your computer, or choose
+**Type → Find/Replace Font** to replace it with one you have. If the dialog
+appears during **1.2 Import Translation Package**, that is the one time the
+import lets InDesign ask, and what you choose there is kept for the whole run.
+
+> **InDesign says links are missing**
+<a id="missing-links"></a>
+
+Relink them in the original document and save it before you import; the
+translated copy is made from the saved file.
+[3.3 Relink Missing Links](/folio/before-export#relink-missing-links) finds
+files with the same name anywhere inside the document's folder. Relink the
+others by hand: choose **Window → Links**, select a link marked with a red
+question mark and click the **Relink** button. If InDesign asks about links
+during the import, relink them the same way in the translated copy afterwards;
+it is saved in the same folder as the original.
+
+> **The import stopped because a font has no pair**
+<a id="font-has-no-pair"></a>
+
+Chinese, Japanese or Korean text would have been set in a font that has no
+characters for it and would show as empty boxes, so the import stopped. The
+message names the font. Run the import again on the same document and, when the
+font pairing panel opens, give that font a pair.
+
+> **The import says the safety backup could not be made**
+<a id="backup-failed"></a>
+
+This can happen in a [later round](/folio/rounds#next-round). The file on disk
+was not overwritten, but the open document already holds the new translation,
+unsaved. Do not save it under the same name: that would overwrite the file with
+no backup. To keep the result, use **File → Save As** with a new name; to drop
+it, close the document without saving. Make sure the folder next to the
+document can be written to, then run the import again.
+
+> **Some bold or italic did not come over**
+<a id="bold-italic-missing"></a>
+
+Folio only applies formatting the translator marked in the web app. Ask the
+translator to [mark it](/folio/translator#source-has-bold), or set it by hand in
+InDesign. For bold on mixed Chinese and Latin text,
+[2.3 Set Selection Weight](/folio/fonts#set-selection-weight) picks the right
+font for each part.
+
+> **Text is too long for its frame**
+<a id="text-too-long"></a>
+
+A frame whose text does not fit shows a red plus sign at its lower right, and
+**Window → Output → Preflight** lists every one. The import also checks for
+this and lists each frame in the [window at the end](#end-window), where
+**Show** selects it. Make the frame larger,
+tighten the tracking a little, or ask the translator for a shorter wording.
+
+> **The new language looks wrong**
+See [3 Make the new language look right](/folio/fonts): there are tools for
+fonts across languages, Chinese typesetting, and protecting the layout during
+big changes. Every script is listed in [All scripts](/scripts/).
+
+> **Where is the previous translated version?**
+When you update a `.translated.indd` in a
+[later round](/folio/rounds#next-round), the previous version is saved in
+**script_outputs → backup** first. If you import into the original again and
+choose to [replace the translated copy](#replace-translated-copy), the old copy
+is saved there too. Before version 1.2, that replacement kept no copy.
+
+> **Where are the report and the log?**
+<a id="report-and-log"></a>
+
+In the **script_outputs** folder next to your document. The report of what
+happened sits directly in that folder (a file named `post_import_check_` and the
+date); the full run is in its **log** folder.
+
+> **Technical details**
+<a id="export-translation-package"></a>**1.1 Export Translation Package**
+(source `export_translation_package.idjs`)
+
+It writes a package folder and a `.zip` of it, by default to
+`<document folder>/packages/V<nn>D_<doc>_translation_package_<timestamp>`
+(the dialog's **Output directory** field can point elsewhere).
+The package carries, among other files:
+
+| File | What it is |
+| --- | --- |
+| `preview.pdf` | The document as it stands, as a visual reference for the translator. |
+| `segments.json` | Every translatable segment with its identity and context. |
+| `translations_template.json` | The empty target side, which the translator fills in. |
+| `tid_map.json` | The segment id to document position map used to put the text back. |
+| `<doc>.idml` | An IDML copy of the document. |
+| `manifest.json` | What the package contains, for round-trip integrity. |
+| `emphasis_report.json` | The emphasis (bold, italic, colour) found in the source. |
+| `import_state.json` | Only when exporting from an already imported document: the record of that import, which the web app uses to open in edit mode. |
+
+<a id="import-translation-package"></a>**1.2 Import Translation Package**
+(source `import_integrated.idjs`)
+
+It accepts the package `.zip` (extracted for you) or a `translations.json`.
+
+**First import (from the original).** In
+order: the source is opened read-only and copied to `<doc>.translated.indd`,
+which becomes the working document; one interactive moment to resolve
+[missing fonts](#missing-fonts) or [links](#missing-links); a layout snapshot;
+analysis (style plan, locating every segment, pre-flight); a pre-flight gate (from the Scripts panel it is overridden by default:
+blocking findings are logged and reported, located segments are still written
+and the rest keep their source text; [what to do](#import-stopped)); writing the text and applying
+the style plan; post-flight checks for [overset text](#text-too-long), failed style
+application and mixed runs; a repair pass; save in place, left open.
+
+If a `.translated.indd` already exists, the import asks before anything is
+closed or written ([what the user sees](#replace-translated-copy)). From
+automation it refuses unless `automationOptions.replaceExistingTranslated` is
+`true`. Before the file is replaced it is copied to `script_outputs/backup/`,
+read back and compared (the same verified backup a later round makes); if that
+fails, nothing is replaced. The import stops without changing anything when the
+existing copy is open with unsaved changes, when it cannot tell whether the
+file exists, or when an open copy does not close after four tries (versions
+before 1.2 saved under a timestamped name in that case). An open, unmodified
+copy at that path is closed without saving; a document with the same name in
+another folder is left alone.
+
+On failure the working document is closed and the half-written
+`.translated.indd` deleted; when it had replaced an earlier copy, the report
+gives the backup's path.
+
+**The end window.** When the self-check or the final check found something to
+fix, a window lists it, grouped by problem: text that does not fit a frame or a
+table cell, paragraphs not updated, translated text missing from the page,
+characters that may print as empty boxes, text that appears twice, an original
+paragraph left on the page, written text that differs from the translation,
+other final-check problems, and import errors. A bypassed preflight block is
+listed only when the window opens for another reason. Located items get
+**Show**. A clean run opens nothing; automated runs write the same lines to the
+log instead. The wording and the problem list come from one table,
+`lib/finish_problems.js`, which also decides whether the window opens.
+
+**Later rounds (in-place update).** When the open document carries the record a
+previous import wrote, the import works on that document itself instead of a
+copy. Paragraph styles are not reassigned and unchanged paragraphs are skipped.
+A paragraph whose only change is the translator's bold or italic counts as
+changed. In changed paragraphs only the characters that differ are rewritten:
+unchanged characters keep their direct formatting, character styles and local
+fonts, and the translator's bold or italic moves with its text. Where bold or
+italic sat on text that changed, it is listed in the report rather than placed
+by position. When this cannot be done (the character count or the number of
+anchored objects does not match, or the text has surrogate pairs), the whole
+paragraph is rewritten and its direct formatting cleared, as in versions before
+1.2, and the report lists the paragraph. Before saving, a verified copy of the
+document is written to `script_outputs/backup/`; if that copy fails, the import
+stops without saving. On a failure the document is left open and unsaved. The whole run happens in one open document with
+one font-resolution state: an earlier design that saved, closed and reopened
+between phases let silent font substitution diverge recomposition.
+
+Guardrails: it refuses to import into a document named `.translated`,
+`.aborted` or `.BLOCKED` that carries no import record (that would
+double-apply the pipeline). Post-flight results stay in `report.json` and never
+rename the file; passing does not certify the result and failing does not mean
+it is unusable. Font pairing is handled during the import: when fonts need
+pairing, the pairing panel opens as part of the run. Chinese, Japanese and
+Korean composition settings are not set by the import; that is 2.2.
+
+Formatting the translator did not mark is not carried over to the target. Reports land in
+`script_outputs/` itself (`writeback_v2_report_<ts>.json`, `post_import_check_<ts>.md`), logs in `script_outputs/log/`; see
+[Files and folders](/guide/folders).
+
+---
+
+<!-- page: folio/fonts.md -->
+# 3 Make the new language look right
+
+Source: https://zxa24.github.io/creative-script-installer/folio/fonts
+
+Summary: Fix what a new language changes after 1.2 Import Translation Package. Pair fonts across languages, set Chinese line breaking and spacing, set the weight of selected text, repair punctuation that lands in the wrong font, turn a broken underline into a paragraph rule, and protect the layout during big changes.
+
+# Make the new language look right
+
+Stage 3 of [Translate a layout: for designers](/folio/designer). Use this page
+after [**1.2 Import Translation Package**](/folio/export-import), when the
+translated copy needs other fonts, proper Chinese typesetting, or a fix where
+Chinese and Latin text meet.
+
+These are free InDesign scripts from Creative Script Kit. You install them
+once with one line ([Install](/guide/install)) and find them in the Scripts
+panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+**What the import already did:** it paired fonts across languages (the pairing
+panel opens during the import when fonts need pairing). It did **not** set
+Chinese, Japanese or Korean line breaking and spacing.
+
+- **Chinese, Japanese or Korean:** run **2.2 Apply CJK Styles** once after the
+  first import.
+- **English or another Latin language:** you usually need nothing here.
+- The other tools are for specific problems. Open the one that matches what you
+  see.
+
+## Fonts and Chinese typesetting
+
+### 2.1 Apply Font Pairing 
+Use it when you want to change which font goes with which across languages,
+for example a different Chinese font to go with a Latin one. The import already
+asked for pairings it needed; this is for changing them afterwards.
+
+1. Open the translated document and double-click **2.1 Apply Font Pairing** in
+   the Scripts panel.
+2. A panel opens with the fonts the document uses. Set which font each one pairs
+   with.
+3. Click **Done**. A message says how many changes it made.
+
+It changes the fonts directly on the text and creates no new paragraph or
+character styles. The whole batch is one undo step. The same panel opens during
+the import when fonts need pairing.
+
+**Notifications.** What still needs your decision, and what is worth a look,
+is collected under **Notifications** (the button at the top shows how many are
+left to decide). **Decide all by recommendation** settles every one that has a
+recommended choice. If you click **Done** while some are undecided, the panel
+offers **Ignore and continue with recommendation**, or **Cancel** to go back and
+choose yourself.
+
+<a id="emphasis-lines"></a>**Bold and italic in your design's weights.** Where
+the translator marked bold or italic, you can choose the weights it comes out
+in. Drag from the small dot on the left of a pairing's card to the card of the
+pairing it should become: for example from the Regular pairing to the Bold one,
+and from Light to Medium. A line to a card of upright weights is a bold line; a
+line to a card of italic weights is an italic line. The weight is chosen from
+the paragraph's own text weight, and one line covers every language in the
+pairing. Click a line to see what it does or to remove it; a red line has no
+effect, and clicking it says why. Lines only change bold and italic that the
+translator marked. Where no line is drawn, Folio chooses the bold weight
+itself.
+
+### 2.2 Apply CJK Styles 
+Use it when Chinese text needs Chinese line breaking and the other Chinese
+typesetting settings.
+
+1. Click into the text you want to set. With nothing selected, it works on the
+   whole document.
+2. Double-click **2.2 Apply CJK Styles**.
+3. In the dialog, check the language and choose which cleanups to run, then
+   click **OK**. The language starts at the one the document was translated
+   into, and a line under the list says where that came from.
+
+The cleanups only tidy the text the import wrote: paragraphs an import rewrote
+and that nobody has edited since. Line breaks you added by hand stay, even when
+you run 2.2 again. With text selected, only those paragraphs in the selected
+story are cleaned. The dialog says what the cleanup will touch.
+
+> **Documents imported before version 1.2**
+A document with no record of a 1.2 import (imported with an older version, or
+never imported) is cleaned as a whole. Then **Remove soft line breaks** removes
+every soft line break (Shift+Enter) in the **whole document**, even when you
+selected one text frame. If you have placed line breaks by hand, untick it.
+
+It brings a ready-made Chinese paragraph style with its line-breaking and
+typesetting settings into the document and applies it, and tells you clearly if
+[those settings did not come through](#kinsoku-not-applied). It also protects the layout by itself:
+text frames too short for a line of Chinese are made taller first, and the
+layout is checked and repaired afterwards, so you do not need 3.1 and 3.2
+around it. It is one undo step.
+
+### 2.3 Set Selection Weight 
+Use it when selected text needs to be a certain weight, such as bold, in the
+fonts set up for your brand, even when it mixes Chinese and Latin text.
+
+1. Select the text.
+2. Double-click **2.3 Set Selection Weight**.
+3. Pick the weight in the dialog and click **OK**.
+
+The Chinese and the Latin parts of the selection each get the right font for
+that weight. If it cannot finish, it changes nothing and
+[says why](#weight-stopped). It is one undo step.
+
+### 2.5 Repair Cluster GREP 
+Use it when, in a document imported with an older version, punctuation between
+Latin words (a curly apostrophe, for example) shows in the Chinese font.
+
+1. Open the document.
+2. Double-click **2.5 Repair Cluster GREP**. It asks nothing.
+
+It updates the rules inside the document's generated paragraph styles that
+decide which characters get the Latin font and which the Chinese font, then
+refreshes the text. Running it again changes nothing. It is one undo step.
+Documents imported with the current version do not need it.
+
+### 2.6 Convert Underline to Rule 
+Use it when a whole paragraph is underlined and the line breaks up: hidden
+under Chinese characters, showing under Latin letters and digits.
+
+1. Open the document.
+2. Double-click **2.6 Convert Underline to Rule**. It asks nothing.
+3. Read the summary it shows at the end.
+
+For every paragraph whose visible text is fully underlined, it removes the
+underline and draws a thin line under the paragraph instead, in the colour of
+the underlined text. That line runs unbroken under both scripts. Paragraphs already
+converted are skipped. It is one undo step.
+
+## Protect the layout during big changes 
+**3.1** and **3.2** are a pair. Run 3.1 just before a big change you make by
+hand, such as a find and replace across the document or editing a paragraph
+style, and 3.2 just after it. **2.2 Apply CJK Styles** and the import already
+do this themselves.
+
+### 3.1 Snapshot Before Apply 
+Use it right before the big change.
+
+1. Open the document and double-click **3.1 Snapshot Before Apply**.
+
+It records the current state of the text so that 3.2 can restore it. It also
+makes text frames taller where they are too short to hold a line of Chinese
+text; left alone, those frames
+[come back empty after the change](#frames-empty).
+
+### 3.2 Repair After Apply 
+Use it right after the big change, when you ran 3.1 before it.
+
+1. Double-click **3.2 Repair After Apply**.
+
+It reads what 3.1 recorded, repairs what the change disturbed, and writes a
+report of what it checked.
+
+## Next
+
+[4 Later rounds](/folio/rounds): when the translation changes after you
+adjusted the layout.
+
+## Common problems
+
+> **I closed the font pairing panel and nothing changed**
+Closing the panel without clicking **Done** makes no changes. Run
+**2.1 Apply Font Pairing** again and finish with **Done**.
+
+> **Text frames came back empty after a big change**
+<a id="frames-empty"></a>
+
+Frames too short for a line of Chinese text empty out when the text is
+recomposed. Undo the change, run **3.1 Snapshot Before Apply** (it makes those
+frames taller first), make the change again, then run **3.2 Repair After Apply**.
+2.2 Apply CJK Styles does this by itself.
+
+> **2.3 stopped with a message**
+<a id="weight-stopped"></a>
+
+In rare or unclear cases it stops rather than guessing, and leaves the selection
+as it was. Every stop is written to its log. The message says what to change.
+The usual ones: select text with the Type tool, not a frame; select text that
+uses one font for the Chinese and one for the Latin; install the font it names,
+or pick a weight that is installed.
+
+> **2.2 says Kinsoku (line breaking) was not applied**
+<a id="kinsoku-not-applied"></a>
+
+The ready-made Chinese style that comes with the scripts arrived without its
+line-breaking rules, so lines may break in the wrong places. Paste the
+[install line](/guide/install) again and choose **Repair**, which rewrites the
+scripts' files, then run 2.2 again. If the message comes back, report it on
+[GitHub](https://github.com/zxa24/creative-script-installer/issues).
+
+> **Technical details**
+<a id="apply-font-pairing-details"></a>**2.1 Apply Font Pairing**
+(source `font_apply_panel.idjs`)
+
+1. It scans the active document and collects the fonts in use, their weights,
+   and how much text each one carries.
+2. It opens a panel inside InDesign where you set the pairings.
+3. On **Done**, it applies the pairing-driven font swaps as direct format
+   overrides. It does **not** create paragraph or character styles to do it.
+4. It reports how many swaps landed.
+
+**Undo:** the whole batch is wrapped in one undo step; a single
+<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> reverts all of it.
+
+<a id="apply-cjk-styles-details"></a>**2.2 Apply CJK Styles**
+(source `cjk_style_apply.idjs`)
+
+1. It asks which cleanup passes to run first. The dialog offers three, all on
+   by default on every run (nothing is remembered): **Remove soft line breaks (Shift+Enter)**, **Collapse consecutive
+   empty lines (spaces too)** and **Remove spaces between CJK and ASCII**. The
+   cleanups act on the paragraphs that imports wrote and whose text has not
+   changed since (each import adds them to a record in the document, and each
+   cleanup rewrites the record from what it cleaned); with a selection,
+   on those paragraphs in the selection's story only. With no such record (a
+   document imported before 1.2, or never imported), or with
+   `automationOptions.cleanupScope: "document"`, they run on the whole document
+   and the selection is ignored. Soft line breaks in a header bar's product
+   names, recognised the same way the import recognises them, are kept. The
+   style merge follows the selection. "Remove spaces" matches Han characters
+   only. The language list is zh-CN, zh-HK, zh-TW, ja and ko; it starts at the
+   target language the import recorded in the document, or at zh-CN when none
+   is recorded, and the dialog says which. The import (1.2) never runs these
+   cleanups.
+2. It works on either the story containing your selection, or on every
+   repairable story in the document.
+3. It opens the bundled CJK (Chinese, Japanese and Korean) donor document,
+   imports its text styles into your document (this brings in the Chinese
+   composition settings, including the kinsoku line-breaking set) and applies the donor paragraph style.
+4. It verifies that the donor style actually arrived with its CJK settings
+   intact, and says so loudly if the import came through broken.
+
+**Undo:** the import and apply are wrapped in one undo step.
+
+<a id="set-selection-weight-details"></a>**2.3 Set Selection Weight**
+(source `set_selection_weight.idjs`)
+
+Select text, pick a target weight, and the script resolves that weight name to
+a concrete (font, weight) pair via the brand configuration and applies it.
+
+- If the document does not already have a character style for that weight, the
+  script creates one on the fly.
+- A **mixed Han + Latin selection is routed per script**, so each half gets the
+  right family, full-width punctuation included.
+- Existing paragraph-level overrides are left alone; only character-level
+  overrides in the selection are cleared.
+
+**Failure behaviour:** it fails loudly, never silently. Rare or ambiguous cases
+exit with a message, and every exit is logged. If applying fails, the whole
+change is rolled back as one unit rather than leaving the selection half
+changed.
+
+<a id="repair-cluster-grep-details"></a>**2.5 Repair Cluster GREP**
+(source `repair_cluster_grep.idjs`)
+
+The problem it fixes: in a bilingual document built with the older rule set,
+neutral punctuation (a curly apostrophe, U+2019, for instance) sitting between
+Latin letters inside a Chinese-cluster document was left out of the Latin GREP,
+so it stayed orphaned on the full-width CJK font.
+
+This script rewrites the `grepExpression` of every managed cluster paragraph
+style's nested Latin and CJK GREP rules to the current, context-aware patterns,
+then recomposes so already-orphaned marks are re-routed.
+
+- **It is a repair for documents already built with the old rules.** New imports
+  get the current rules from the pipeline; they do not need this.
+- **It is idempotent.** Re-running it rewrites nothing.
+- **Undo:** one undo step for the whole run.
+
+<a id="convert-underline-to-rule-details"></a>**2.6 Convert Underline to Rule**
+(source `convert_underline_to_rule.idjs`)
+
+It scans every paragraph in every story and finds the ones where **100% of the
+visible characters** carry character-level `underline = true`. For each, it
+removes the character-level underline and puts a paragraph-level rule below
+instead: 0.5pt, text width, coloured from the majority fill colour of the
+underlined characters.
+
+**Why:** a character-level underline tracks each glyph's own baseline. CJK
+glyphs hide the line under their body while Latin characters and digits expose
+it, so a mixed line gets a half-drawn underline. A paragraph rule sits at the
+paragraph baseline and stays continuous across both scripts.
+
+- It lives outside the import pipeline on purpose, so the import stays
+  format-neutral and **you** decide when to apply this visual change.
+- **It is idempotent.** Paragraphs already converted are skipped.
+- **It writes** a log to `<document folder>/convert_underline_to_rule_<timestamp>.log`.
+
+<a id="snapshot-before-apply-details"></a>**3.1 Snapshot Before Apply**
+(source `snapshot_before_apply.idjs`; pairs with 3.2)
+
+Run it **before** any bulk text replacement or CJK style application. It:
+
+1. Expands geometry-split frames that are too short to hold a line of CJK text.
+   Left alone, those frames come back empty after recomposition.
+2. Captures a "before" snapshot of every repairable story.
+3. Saves that snapshot twice: once as `before_snapshot_latest.json` and once
+   as `<document name>_before_snapshot.json`.
+
+3.2 Repair After Apply reads that file and uses it as the target state to
+restore.
+
+<a id="repair-after-apply-details"></a>**3.2 Repair After Apply**
+(source `repair_after_apply.idjs`; pairs with 3.1)
+
+Reads the snapshot from 3.1, repairs what the bulk change disturbed, and writes
+an acceptance report. The intended sequence is:
+
+1. 3.1 Snapshot Before Apply: save the "before" snapshot and expand the short
+   frames.
+2. Do the bulk change: text replacement, CJK style import, whatever it is.
+3. 3.2 Repair After Apply: read the snapshot, repair, and report.
+
+---
+
+<!-- page: folio/rounds.md -->
+# Later rounds
+
+Source: https://zxa24.github.io/creative-script-installer/folio/rounds
+
+Summary: Stage 4 for the designer. When the client or reviewer changes the translation after you adjusted the layout, update the translated document you adjusted instead of starting again, and use 3.4 Highlight Translation Changes to mark every changed character without touching the text.
+
+# Later rounds
+
+Stage 4 of [Translate a layout: for designers](/folio/designer). Use this page
+when the client or reviewer changes the translation after you have adjusted the
+layout, and to see, or show a reviewer, exactly what changed since the last
+round.
+
+These are free InDesign scripts from Creative Script Kit. You install them
+once with one line ([Install](/guide/install)) and find them in the Scripts
+panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+## The next round of changes 
+Do **not** start again from the original. Update the translated document
+instead:
+
+1. **Open your `.translated.indd`** (the one you adjusted) and capture a
+   baseline before you change anything. Double-click
+   **3.4 Highlight Translation Changes**, choose **Capture baseline** and click
+   **OK**. Nothing visible changes. Then run
+   **1.1 Export Translation Package** on it and send the new zip to the
+   translator.
+2. **The translator edits the existing text** in the web app. Paragraphs they do
+   not touch stay exactly as they are.
+3. **Open the same `.translated.indd`** and run
+   **1.2 Import Translation Package** with the new zip. It updates this document
+   itself; no new copy is made. A copy of the previous version is saved first in
+   **script_outputs → backup** (if that copy fails, see
+   [The import says the safety backup could not be made](/folio/export-import#backup-failed)).
+4. **Mark and check the paragraphs that changed.** Run
+   **3.4 Highlight Translation Changes** again, choose **Highlight changes**,
+   pick the starting point you saved from the list, and click **OK**. Tick
+   **Ignore whitespace differences** if only the wording matters to you. Your
+   other adjustments stay. Inside a changed paragraph, only the words the
+   translator changed are rewritten, so formatting you set by hand on the rest
+   (tracking or no-break, for example) stays. Check the changed words
+   themselves.
+5. **Delete the highlight layer before you export the final PDF.** In the
+   Layers panel, delete the layer named **_T_translation_highlights**. The
+   marks are ordinary page items, so otherwise they print in it.
+
+> **Do not import a later round into the original**
+<a id="next-round-warning"></a>That starts over and replaces the
+`.translated.indd` you adjusted, and all your layout work in it is lost. The
+import [asks before it does this](/folio/export-import#replace-translated-copy):
+click **Cancel** and open the `.translated.indd` instead. If you do replace it,
+the old copy is saved in **script_outputs → backup** first.
+
+## 3.4 Highlight Translation Changes 
+Use it when you need the edited text marked, for example in a PDF that goes back
+to the reviewer. It has two choices: **Capture baseline** saves the text as it
+stands, and **Highlight changes** marks what changed since a baseline you saved.
+
+- Capture a baseline before you change anything: right after the first
+  import, and again at the start of each later round (step 1 above). Edits
+  made before you capture it cannot be marked later.
+- Changed text gets a yellow box, and a place where text was deleted gets a red
+  mark. The marks sit on their own layer, behind the text; the text itself is
+  not changed in any way.
+- Each new **Highlight changes** run clears the old marks first, so they never
+  pile up.
+- To remove the marks when you no longer need them, delete the layer named
+  **_T_translation_highlights** in the Layers panel. The marks are ordinary
+  page items, so they show in a PDF you export.
+
+## Next
+
+[5 Sister documents](/folio/sister-documents): copy tuned paragraph-style
+settings to a sister document.
+
+## Common problems
+
+> **Highlight changes is not available**
+There is no starting point yet. Run it once with **Capture baseline** first.
+
+> **Will adding or removing paragraphs make everything light up?**
+No. When paragraphs have moved, it matches each one by its content instead of
+its position, so only the real changes are marked.
+
+> **Spaces and line breaks are marked too**
+That is the default. Run **Highlight changes** again with
+**Ignore whitespace differences** ticked.
+
+> **Technical details**
+<a id="highlight-translation-changes-details"></a>**3.4 Highlight Translation Changes**
+(source `track_translation_changes.idjs`)
+
+The highlight is a **separate layer of yellow rectangles drawn behind the
+text**. It has zero effect on the text's own properties: underlines, character
+styles and everything else are untouched.
+
+From the Scripts panel the dialog offers **Capture baseline** (the `rebaseline`
+mode below) and **Highlight changes** (a diff against the chosen baseline). The
+modes are how automation drives it:
+
+| Mode | What it does |
+| --- | --- |
+| `auto` (default) | **First run:** captures a baseline, with no visible change to the document. **Later runs:** diffs every paragraph against the baseline character by character and marks the changed substrings. It always clears the previous overlay first, so stale marks never pile up. |
+| `clear` | Deletes the highlight layer and everything on it. The baseline file is kept. |
+| `rebaseline` | Clears the overlay, then re-captures the baseline as the new ground truth. |
+
+**Options**
+
+- **Ignore whitespace:** suppresses highlights whose inserted or deleted
+  characters are pure whitespace (space, tab, newline, non-breaking space,
+  ideographic space). **Off by default**; turn it on when you only care about
+  content edits and want post-translation whitespace shuffling ignored.
+- **Baseline file:** pick which baseline JSON to diff against, either from the
+  dropdown of files in the baselines folder or by giving an arbitrary path.
+  Capture mode ignores this and always writes a fresh timestamped file.
+
+Baselines are saved in `<document folder>/script_outputs/baseline_snapshots/`.
+
+**Surviving structural edits**
+
+The baseline is keyed positionally first, by story and paragraph index, which
+is the fast path when the structure has not changed. When a paragraph's text
+turns out to be wildly different from the baseline entry at that position (a
+sign that paragraphs were added or removed and indices have shifted), it falls
+back to matching on a content fingerprint. That is what keeps a document from
+lighting up with false positives after "N paragraphs added between capture and
+diff".
+
+For what the import does in a later round (in-place update, the backup, what
+is rewritten in changed paragraphs), see the technical details of
+[1.2 Import Translation Package](/folio/export-import#import-translation-package).
+
+---
+
+<!-- page: folio/sister-documents.md -->
+# Sister documents
+
+Source: https://zxa24.github.io/creative-script-installer/folio/sister-documents
+
+Summary: Copy tuned paragraph-style settings from one InDesign document to a sister document without redoing them by hand. 4.1 Export Brand Preset saves the settings; 4.2 Apply Brand Preset applies them. Fonts are never changed.
+
+# Sister documents
+
+Stage 5 of [Translate a layout: for designers](/folio/designer). Use this page
+when you tuned the paragraph styles of one document over several rounds and a
+sister document needs to match, without redoing the work by hand.
+
+These are free InDesign scripts from Creative Script Kit. You install them
+once with one line ([Install](/guide/install)) and find them in the Scripts
+panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+A sister document is another document in the same family as the one you
+tuned, for example the same fact sheet for a different product, laid out with
+the same styles.
+
+**4.1** saves the settings from the document you tuned. **4.2** applies them to
+the sister document. Both work on the paragraph styles that Folio's import or
+[**2.4 Reorganize Styles**](/folio/before-export#reorganize-styles) created, and
+neither ever changes fonts. To check
+that a document has them, open the Paragraph Styles panel: their names start
+with `_T_p_`.
+
+## 4.1 Export Brand Preset 
+Use it in the document whose paragraph styles you have tuned.
+
+1. Save the document. The settings file is written next to it.
+2. Double-click **4.1 Export Brand Preset** in the Scripts panel. It asks
+   nothing.
+
+It saves each style's size, line spacing, indents, space before and after,
+alignment, colour and rules into a settings file (a brand preset) named
+`brand_style_preset.json`. If a brand configuration file next to the document
+names the brand, the brand name goes in front:
+`<brand>_brand_style_preset.json`. It only reads the document and changes
+nothing in it.
+
+## 4.2 Apply Brand Preset 
+Use it in the sister document that should match.
+
+1. Save the sister document, and make sure the preset file from 4.1 is in the
+   same folder. If the two documents share a folder, it already is. 4.2 looks
+   in its own document's folder for a file whose name ends in
+   `_brand_style_preset.json`, and uses `brand_style_preset.json` only if there
+   is none. If there are several, it takes the one for this document's brand,
+   or else the newest, and says so in its log. Keep only the one you want in
+   that folder.
+2. Double-click **4.2 Apply Brand Preset**. It asks nothing.
+3. Check its report in the **log** folder inside **script_outputs**, next to
+   the document. If some settings did not carry over, see
+   [below](#settings-not-carried).
+
+It updates the matching paragraph styles with the saved settings. Fonts are
+never touched. It is one undo step.
+
+Hand changes in the sister document are kept for size, line spacing, indents,
+keep options, alignment and composer, and listed in the report. Space before
+and after, colour and rules are always overwritten with the preset's values.
+
+## Common problems
+
+> **4.2 says no preset was found**
+The preset file is not in the sister document's folder, or the document has
+never been saved. Copy the file from the first document's folder and run it
+again. Nothing was changed.
+
+> **Some settings did not carry over**
+<a id="settings-not-carried"></a>
+
+A size, line spacing, indent, keep option, alignment or composer that someone
+changed by hand in the sister document is kept and listed as kept local. Space
+before and after, colour and rules are always written; a colour or rule that
+did not take is listed as failed. It never hides either case.
+
+> **The report says the styles were reused, but not everything changed**
+"Reused" only means a style found its match. Read it together with the applied
+rate, the kept local count and the failed count.
+
+> **Technical details**
+<a id="export-brand-preset-details"></a>**4.1 Export Brand Preset**
+(source `export_brand_style_preset.idjs`)
+
+It reads the active document's `_T_p_*` paragraph-style definitions and writes
+their geometry into a preset file:
+
+- point size and leading
+- indents and space before / space after
+- justification and composer
+- fill colour
+- rules above and below
+
+**It is read-only on the document.** It builds a preset *from* the styles; it
+does not modify them. The one undo-block it opens exists only to hold a
+consistent points-based measurement context while reading numbers, and to give
+a clean single-undo boundary; nothing is written to the document.
+
+**Output:** next to the saved `.indd`, plus a summary log. The file is
+`<brand>_brand_style_preset.json` when a `<document name>_brand_config.json` or
+`brand_config.json` beside the document gives a brand name, otherwise
+`brand_style_preset.json`.
+
+<a id="apply-brand-preset-details"></a>**4.2 Apply Brand Preset**
+(source `apply_brand_style_preset.idjs`)
+
+It loads a `brand_style_preset.json` captured by 4.1 and writes its tuned
+geometry onto the active document's matching `_T_p_*` paragraph-style
+**definitions**.
+
+**It never touches fonts.** `appliedFont` and `fontStyle` are out of scope, by
+design.
+
+**How it finds the preset**
+
+1. An explicitly given path, used verbatim.
+2. Otherwise, `<saved document folder>/*_brand_style_preset.json`. With
+   several matches it prefers the one named for this document's brand, then
+   the newest by modification date, and logs the choice as ambiguous.
+3. Otherwise, `<saved document folder>/brand_style_preset.json`.
+4. If none of these turns one up, it reports "no preset found" and exits
+   cleanly; that is not treated as an error.
+
+**What happens when the target document disagrees**
+
+Conflicts are resolved per dimension, not per style.
+
+**Protected dimensions** (point size, leading, indents, keep options,
+justification, composer) are reconciled three ways against what was last
+applied and what the style was created with:
+
+| The live value is… | Result |
+| --- | --- |
+| the same as what was last applied | safe to update: take the preset's value |
+| the same as the creation baseline (never touched locally) | take the preset's value |
+| different from both (someone tuned it locally) | **keep the local value** and report it |
+
+**Always-apply dimensions** (space before / space after, fill colour, rules
+above and below) have no reconstructable creation baseline, so the preset's
+value is always written. The colour and rule writes are then **read back and
+verified**, and reported as applied-OK or applied-FAILED. A write that silently
+did not land is reported, not swallowed.
+
+All of it is applied in one undo step. The coverage report is written to the
+log folder (`script_outputs/log/`).
+
+**Reading the report**
+
+The headline number is **reuse rate**: matched styles divided by total. A style
+counts as matched even if one of its dimensions was kept local or failed to
+apply.
+
+Three separate counts sit next to it so "reuse" is never misread as "everything
+transferred":
+
+- **applied rate**
+- **kept-local count**
+- **applied-failed count**
+
+Read all four together.
+
+---
+
+<!-- page: tools/index.md -->
+# More tools
+
+Source: https://zxa24.github.io/creative-script-installer/tools/
+
+Summary: General-purpose tools in Creative Script Kit, not part of the translation workflow. In InDesign, 3.5 Save and Reveal saves the document and opens its folder. In Illustrator, five tools for everyday chores, Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts, and CJK Composer and Mojikumi, with when to use each and what to answer.
+
+# More tools
+
+These are general-purpose tools, not part of the translation workflow. You
+install them with the other scripts, with one line
+([Install](/guide/install)).
+
+## InDesign 
+Find it in the Scripts panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+### 3.5 Save and Reveal 
+Use it when you want to save the document and open the folder it is in.
+
+1. Double-click **3.5 Save and Reveal** in the Scripts panel.
+2. If the document has unsaved changes, it asks whether to save it. For a
+   document that has never been saved, saying yes opens the Save As dialog.
+
+It saves only when you say yes, then opens the document's folder in Explorer or
+Finder.
+
+## Illustrator 
+Five small tools for everyday chores in Illustrator, found under
+**File → Scripts → illustrator-toolkit-stable**.
+
+### Unembed All Images 
+Use it when a file has images embedded in it and you want them as separate,
+linked files, or when you want to clear out broken links.
+
+1. Save the document, then choose
+   **File → Scripts → illustrator-toolkit-stable → Unembed All Images**.
+2. The *Asset Management* window shows how many embedded images and broken
+   links it found. Tick what you want: export the embedded images and relink
+   them, remove the broken links, or both. **Change...** picks another output
+   folder.
+3. Click **Run** and read the summary.
+
+It writes one file per embedded image into a new **Linked_assets** folder next
+to the document (or **Linked_assets_1**, and so on, if that name is taken), and
+links the artwork to those files.
+
+### Export Artboard PDFs 
+Use it when each artboard needs to be its own PDF.
+
+1. Save the document, then choose
+   **File → Scripts → illustrator-toolkit-stable → Export Artboard PDFs**.
+2. If the document has broken links, choose what to do with them: relink them
+   from a folder, skip them during export, delete them from the document, or
+   cancel.
+3. In *Export Artboards as PDF*, tick **PDF**, **Print PDF** (with bleed) or
+   **.ai File**, pick a PDF preset, and click **Export**.
+
+It writes one file per artboard, named after the artboard, into a new folder
+next to the document whose name ends in `_export`, then opens that folder. To
+change the file names, rename the artboards in the Artboards panel first.
+
+### Export Small PDF 
+Use it to finish a job in one click: export the smallest PDF, the largest PDF,
+save the document and package it, in any combination.
+
+1. Save the document, then choose
+   **File → Scripts → illustrator-toolkit-stable → Export Small PDF**.
+2. In *Quick Actions*, tick what you want: **Export smallest PDF** (ticked by
+   default), **Export largest PDF**, **Save document**, **Package**.
+3. Click **OK**.
+
+The PDFs go next to the document as `<name>_smallest.pdf` and
+`<name>_highquality.pdf` (a number is added if the file exists), and the
+folder opens. **Package** opens Illustrator's own Package dialog at the end.
+
+> **Save first**
+To export, it closes your document and opens it again from disk. Changes you
+have not saved are not kept in the `.ai` file, so save first or tick
+**Save document**.
+
+### Replace Fonts 
+Use it when one font has to be replaced by another across a whole file or a
+selection.
+
+1. Choose **File → Scripts → illustrator-toolkit-stable → Replace Fonts**.
+2. Click **+ Add** and pick a *From* font and a *To* font for each row. Type
+   in **Filter** and click **Search** to narrow the font lists.
+3. Under **Scope**, choose **Whole document** or **Selection only**, then
+   click **Replace**.
+
+It changes the fonts in the document and reports how many characters it
+replaced. **Save rules** and **Load rules** keep a list of pairs for next time.
+To reverse it, use **Edit → Undo**.
+
+### CJK Composer and Mojikumi 
+Use it when Chinese or Japanese text needs CJK (Chinese, Japanese and Korean)
+typesetting: the CJK composer, a Mojikumi set (spacing rules between
+characters) and a Kinsoku set (rules for which characters may not start or end
+a line).
+
+1. Select the text frames to work on, or select nothing to work on every text
+   frame.
+2. Choose
+   **File → Scripts → illustrator-toolkit-stable → CJK Composer and Mojikumi**.
+3. If something is selected, it asks a question: **OK** works on the selected
+   text frames only. If it finds spaces between CJK and Latin text, it lists
+   them: **OK** removes them, **Cancel** keeps them.
+
+> **Cancel does not stop the script**
+In the first question, **Cancel does not stop the script**. It means "work on
+every text frame in the document". There is no way to stop it at that
+question. To work on your selection only, click **OK**; to reverse a run, use
+**Edit → Undo**.
+
+It sets the composer, Mojikumi and Kinsoku on each paragraph, adds a little
+space where CJK text meets Latin letters or digits, and tightens full-width
+punctuation in text frames that overflow. Locked and hidden text frames are
+skipped. A summary lists what it set.
+
+## Common problems
+
+> **An Illustrator tool says "No document open"**
+Every Illustrator tool needs an open document. Open the file and run it again.
+
+> **An Illustrator tool asks me to save first**
+Unembed All Images, Export Artboard PDFs and Export Small PDF write files next
+to the document, so it must have been saved once. Save it and run the tool
+again.
+
+> **I lost changes after Export Small PDF**
+It closes the document and opens it again from disk to export. Anything not
+saved before that is not in the `.ai` file. Next time, save first or tick
+**Save document**.
+
+> **Replace Fonts says nothing is selected**
+**Scope** is set to **Selection only**. Select a text frame or group with the
+Selection tool, or select text with the Type tool, and run it again. Or choose
+**Whole document**.
+
+> **Replace Fonts says the same From font appears in more than one row**
+Each *From* font can appear in one row only. Remove or merge the duplicate
+rows and click **Replace** again.
+
+> **The bleed I typed in Export Artboard PDFs is gone next time**
+The bleed values are stored in the document. Save the document after the
+export to keep them.
+
+> **The summary says Mojikumi or Kinsoku "(not set / not found)"**
+The document has no Mojikumi or Kinsoku set to use, so that part was skipped.
+The other settings were still applied.
+
+> **Technical details**
+Most people never need to change these.
+
+<a id="save-and-reveal-details"></a>**3.5 Save and Reveal**
+(source `save_and_reveal.idjs`)
+
+Offers to save the active document if it has unsaved changes, then opens its
+folder in the system file browser. A small convenience: run it, answer the save
+prompt if one appears, and the document's folder opens in Explorer or Finder.
+
+<a id="illustrator-details"></a>**Illustrator tools: undo and files.** Changes
+to the document go through Illustrator's own undo. Files a tool writes (PDFs,
+images, `.ai` copies) stay on disk; Undo does not remove them. All five tools
+stop with a message when no document is open.
+
+**Unembed All Images**
+
+The default output folder is `<document folder>/Linked_assets`, or
+`Linked_assets_<n>` if that folder exists. If there is nothing embedded and no
+broken link, it says so and stops.
+
+**Export Artboard PDFs**
+
+- Each artboard is exported by duplicating it into a new document, so nothing
+  from the other artboards gets in.
+- PDF presets offered: `[Smallest File Size]`, `[High Quality Print]`,
+  `[Press Quality]`, `[PDF/X-1a:2001]`, `[PDF/X-4:2008]`.
+- Output folder: `<document folder>/<YYYYMMDD>_<HHMM>_export`. Files:
+  `<artboard>.pdf`, `<artboard>_print.pdf` (with marks and bleeds) and
+  `<artboard>.ai`. A log is saved in the same folder.
+- Bleed units: mm, pt, in or px (default 0.125 in). The values are stored in a
+  hidden page item named `__ExportArtboardPDFs__`.
+
+**Export Small PDF**
+
+The smallest PDF uses the `[Smallest File Size]` preset and the largest uses
+`[High Quality Print]`. **Save document** runs first, then the PDFs, then
+**Package** (`File → Package`).
+
+**Replace Fonts**
+
+Options in the window: **List all fonts in the From menu** (off by default;
+otherwise only the fonts in use), **Grow frames that overset after replacing**
+(on by default; it reports how many it fixed and how many still overflow) and
+**Halfwidth characters only (Latin, digits, punctuation)** (off by default),
+which leaves CJK text on its current font.
+
+**CJK Composer and Mojikumi: settings at the top of the script**
+
+The `.jsx` file in the **illustrator-toolkit-stable** folder starts with a
+block of settings. An update replaces the file, so edits there do not survive
+an update.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `COMPOSER_MODE` | `"paragraph"` | Every-line composer; `"single"` for the single-line composer. |
+| `SET_MOJIKUMI`, `SET_KINSOKU` | `true` | Whether to set a Mojikumi and a Kinsoku set. |
+| `MOJIKUMI_NAME`, `KINSOKU_NAME` | `""` | The set to use, by name. Empty: the first set whose name contains 简体, 繁体, 中文, Chinese, JIS, 日本 or Japanese, or else the first set the document has. |
+| `ENABLE_BURASAGARI`, `BURASAGARI_MODE` | `true`, Standard | Hanging punctuation at the line end. |
+| `ENABLE_BUNRIKINSHI` | `true` | Keeps certain character pairs from being split. |
+| `TSUME_PERCENT` | `null` | Tightens every character by this percentage; `null` leaves it alone. |
+| `ENABLE_PUNCTUATION_SQUEEZE`, `PUNCTUATION_TSUME` | `true`, `50` | Tightens full-width punctuation, only in area text frames that overflow. |
+| `ENABLE_CJK_LATIN_SPACING`, `CJK_LATIN_AKI` | `true`, `25` | Space where CJK text meets Latin letters or digits, as a percentage of a full-width character. |
+| `ENABLE_REMOVE_CJK_LATIN_SPACES` | `true` | Offers to remove typed spaces between CJK and Latin text. |
+
+Whether it works on the selection or the whole document is not a setting: it
+comes from the first question, and with nothing selected it always works on
+every text frame.
+
+---
+
+<!-- page: scripts/index.md -->
+# All scripts
+
+Source: https://zxa24.github.io/creative-script-installer/scripts/
+
+Summary: Every script in Creative Script Kit. The numbered InDesign scripts in Scripts panel order and the five Illustrator scripts, each with one line on what it is for and a link to where it is explained.
+
+# All scripts
+
+Every script the [installer](/guide/install) puts into InDesign and
+Illustrator, with one line on what it is for and where it is explained.
+
+The numbers group the InDesign scripts by kind; they are not the order you run
+them in. For the order, see [For designers](/folio/designer).
+
+## InDesign 
+In the Scripts panel under **User → indesign-toolkit-stable**
+([where to find the scripts](/guide/install#where-to-find-the-scripts)).
+
+| Script | What it is for | Explained in |
+| --- | --- | --- |
+| **1.1 Export Translation Package** | Export the text of a finished layout as a zip for the translator. | [Export and import](/folio/export-import#what-to-do) |
+| **1.2 Import Translation Package** | Bring the translated zip back into a copy of the layout. | [Export and import](/folio/export-import#what-to-do) |
+| **2.1 Apply Font Pairing** | Pick a matching font for each language and swap them in. | [Make the new language look right](/folio/fonts#apply-font-pairing) |
+| **2.2 Apply CJK Styles** | Give Chinese text Chinese line breaking and typesetting settings. | [Make the new language look right](/folio/fonts#apply-cjk-styles) |
+| **2.3 Set Selection Weight** | Set selected text to a weight, such as bold, in the brand's fonts. | [Make the new language look right](/folio/fonts#set-selection-weight) |
+| **2.4 Reorganize Styles** | Replace hundreds of near-identical paragraph styles with a small set. | [Before you export](/folio/before-export#reorganize-styles) |
+| **2.5 Repair Cluster GREP** | Stop punctuation between Latin words from showing in the Chinese font. | [Make the new language look right](/folio/fonts#repair-cluster-grep) |
+| **2.6 Convert Underline to Rule** | Turn a broken underline under mixed Chinese and Latin text into one unbroken line. | [Make the new language look right](/folio/fonts#convert-underline-to-rule) |
+| **3.1 Snapshot Before Apply** | Record the layout before a big change. Pairs with 3.2. | [Make the new language look right](/folio/fonts#snapshot-before-apply) |
+| **3.2 Repair After Apply** | Repair what the big change disturbed. Pairs with 3.1. | [Make the new language look right](/folio/fonts#repair-after-apply) |
+| **3.3 Relink Missing Links** | Find missing images and other links in the document's folder. | [Before you export](/folio/before-export#relink-missing-links) |
+| **3.4 Highlight Translation Changes** | Mark what changed in the text since the last round. | [Later rounds](/folio/rounds#highlight-translation-changes) |
+| **3.5 Save and Reveal** | Save the document and open its folder. | [More tools](/tools/#save-and-reveal) |
+| **4.1 Export Brand Preset** | Save tuned paragraph-style settings to a file. | [Sister documents](/folio/sister-documents#export-brand-preset) |
+| **4.2 Apply Brand Preset** | Apply those settings to a sister document. | [Sister documents](/folio/sister-documents#apply-brand-preset) |
+
+## Illustrator 
+In the menu **File → Scripts → illustrator-toolkit-stable**.
+
+| Script | What it is for | Explained in |
+| --- | --- | --- |
+| **Unembed All Images** | Turn embedded images into linked files, or clear out broken links. | [More tools](/tools/#unembed-all-images) |
+| **Export Artboard PDFs** | Save each artboard as its own PDF. | [More tools](/tools/#export-artboard-pdfs) |
+| **Export Small PDF** | Export the smallest PDF, the largest PDF, save and package, in one click. | [More tools](/tools/#export-small-pdf) |
+| **Replace Fonts** | Replace one font by another across a file or a selection. | [More tools](/tools/#replace-fonts) |
+| **CJK Composer and Mojikumi** | Set the CJK composer, Mojikumi and Kinsoku for Chinese or Japanese text. | [More tools](/tools/#cjk-composer-and-mojikumi) |
+
+---
+
+<!-- page: reference/advanced.md -->
+# Advanced install options
+
+Source: https://zxa24.github.io/creative-script-installer/reference/advanced
+
+Summary: For IT, scripted installs and offline installs. The installer's command-line flags and exit codes, installing from a local copy with -Source, --source or TOOLKIT_SOURCE, the TOOLKIT_ZIP_URL, TOOLKIT_MANIFEST_URL and TOOLKIT_AUTH_TOKEN overrides, collecting a log with CSI_LOG or --log, and how the distribution bundle is built.
+
+# Advanced install options
+
+Use this page if you install the scripts for other people (IT), run the
+installer from a script, or install on a computer without internet access. To
+set up your own computer, [Install and update](/guide/install) is all you need.
+
+## Run it without the menu 
+Run `install-update.ps1` (Windows) or `install-update.sh` (macOS) from a copy
+of the [distribution](https://github.com/zxa24/creative-script-installer) with
+one of these flags:
+
+| Windows | macOS | What it does |
+| --- | --- | --- |
+| `-Install` | `--install` | Skip the menu; install or update. |
+| `-Repair` | `--repair` | Skip the menu; rewrite the files even if the version matches. |
+| `-Uninstall` | `--uninstall` | Skip the menu; remove the installed scripts. |
+| `-Force` | `--force` | Reinstall even when the installed version already matches. |
+| `-DryRun` | `--dry-run` | Detect and verify only; write no files. |
+| `-Source <path>` | `--source=<path>` | Install from a local copy (see [below](#environment-overrides)). |
+| `-Log` | `--log` | Save a diagnostic log to the Desktop. |
+
+On macOS a flag can also ride on the one-line command:
+`curl … | bash -s -- --uninstall`. On Windows it cannot, because `irm … | iex`
+hands the script over as text, so run `install-update.ps1` with the flag
+instead.
+
+<a id="requirements-and-exit-codes"></a>**Exit codes**, for a script that runs
+the installer:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do. A stop that leaves something for you to do first (Illustrator never launched, the one-time step declined) is also 0. |
+| 1 | Something failed, or nothing could be installed. See [Something went wrong](/guide/install#something-went-wrong). |
+| 2 | The answer was not one of the menu choices. See [It says "Not one of the choices"](#not-one-of-the-choices). |
+| 3 | No InDesign or Illustrator was found, or only Illustrator was found and its Scripts folder could not be identified. See [It says it could not find InDesign or Illustrator](/guide/install#not-found) and [It found Illustrator but not its Scripts folder](#how-illustrator-s-scripts-folder-is-found). |
+| 4 | The download failed verification. See [Something went wrong](/guide/install#something-went-wrong). |
+
+## Install offline or from your own copy 
+1. On a computer with internet access, download the distribution from
+   [GitHub](https://github.com/zxa24/creative-script-installer) (**Code →
+   Download ZIP**).
+2. Copy the zip to the computer, unzipped or not.
+3. Run the installer with that copy as its source:
+   `install-update.ps1 -Source <zip or folder>` on Windows,
+   `install-update.sh --source=<zip or folder>` on macOS.
+
+Instead of the flag you can set an environment variable. The installer reads
+these when you run `install-update.ps1` or `install-update.sh` directly:
+
+| Variable | What it does |
+| --- | --- |
+| `TOOLKIT_SOURCE` | Install from a local `.zip` or folder, like `-Source` / `--source`. |
+| `TOOLKIT_ZIP_URL` | Download the scripts from this address instead. |
+| `TOOLKIT_MANIFEST_URL` | Read the version and checksums from this address instead. |
+| `TOOLKIT_AUTH_TOKEN` | For a private source: sends an `Authorization: token …` header with each download. |
+| `CSI_LOG` | Set to `1` to save a diagnostic log to the Desktop (see [below](#collecting-a-log-when-something-goes-wrong)). |
+
+The one-line commands ignore the four `TOOLKIT_*` variables
+([why](#toolkit-variable-ignored)). `CSI_LOG` works on both routes.
+
+## Collecting a log when something goes wrong 
+An ordinary run writes no log file, so nothing piles up on the computer. When
+something goes wrong, run it again and ask for a log. On Windows the one-line
+command cannot take a flag, so an environment variable switches it on there:
+
+::: code-group
+
+```powershell [Windows]
+$env:CSI_LOG='1'; irm https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.ps1 | iex
+```
+
+```bash [macOS]
+curl -fsSL https://raw.githubusercontent.com/zxa24/creative-script-installer/main/install.sh | bash -s -- --log
+```
+
+The log is saved on your **Desktop** as
+`creative-script-installer-log-<date>-<time>.txt`, and the installer prints its
+full path when it finishes. Each run writes its own file. Send that file on,
+and delete it when you are done. A failed run prints this command itself, so
+nobody has to remember it.
+
+## Common problems
+
+> **It found Illustrator but not its Scripts folder**
+<a id="how-illustrator-s-scripts-folder-is-found"></a>
+
+The message is *Found Illustrator, but could not identify its Scripts folder*.
+Illustrator keeps a Scripts folder inside the application, and its name is in
+Illustrator's language (`Scripts`, `脚本`, `スクリプト`, `Komut Dosyaları` and
+so on), so the installer does not go by the name. Inside the language folder
+Illustrator uses, it looks for the sub-folder that already holds our
+`illustrator-toolkit-stable` folder from an earlier install, or else the one
+that holds `.jsx` files (normally Adobe's three sample scripts). If the samples
+were deleted and nothing of ours is there yet, no folder qualifies.
+
+To fix it, put any `.jsx` file back into the right folder, or repair the
+Illustrator installation, which restores the samples, then run the installer
+again. If InDesign is also installed, the run installs the InDesign scripts and
+skips Illustrator; if not, it stops with exit code 3.
+
+> **A `TOOLKIT_` variable seems to be ignored**
+<a id="toolkit-variable-ignored"></a>
+
+You used the one-line command. It downloads the distribution from GitHub first
+and then runs the installer with that download as its source, so
+`TOOLKIT_SOURCE`, `TOOLKIT_ZIP_URL`, `TOOLKIT_MANIFEST_URL` and
+`TOOLKIT_AUTH_TOKEN` are never used. Run `install-update.ps1` or
+`install-update.sh` directly instead.
+
+> **A flag does nothing on Windows**
+`irm … | iex` passes the script as text, so it cannot take a flag. Run
+`install-update.ps1` with the flag, or, for a log, set `CSI_LOG`
+([how](#collecting-a-log-when-something-goes-wrong)).
+
+> **It says it needs PowerShell 5 or newer**
+<a id="needs-powershell-5"></a>
+
+Windows 10 and 11 have it already. On an older Windows, install Windows
+Management Framework 5.1 from Microsoft, then run the line again.
+
+> **It says "Not one of the choices"**
+<a id="not-one-of-the-choices"></a>
+
+What was typed at the menu was not one of the numbers shown, or `q`. Nothing was
+changed. Run it again and type one of the choices, or pass a flag such as
+`-Install` / `--install` to skip the menu.
+
+> **Technical details**
+<a id="where-the-installer-fetches-from"></a>**Where the installer downloads from**
+
+The public distribution repository is
+[github.com/zxa24/creative-script-installer](https://github.com/zxa24/creative-script-installer).
+Its coordinates are at the top of the installers: `$Owner`, `$Repo` and `$Ref`
+in `install-update.ps1`, `OWNER`, `REPO` and `REF` in `install-update.sh`. By
+default the scripts come from
+`https://codeload.github.com/<owner>/<repo>/zip/refs/heads/<ref>` and the
+version check reads
+`https://raw.githubusercontent.com/<owner>/<repo>/<ref>/indesign-toolkit.manifest.json`.
+`TOOLKIT_ZIP_URL` and `TOOLKIT_MANIFEST_URL` replace these two addresses.
+
+**Order of sources.** `-Source` / `--source` wins over `TOOLKIT_SOURCE`, and a
+local source wins over any address. With a local source the installer reads the
+version from the copy itself and downloads nothing. It finds the copy by the
+`indesign-toolkit.manifest.json` inside it, so the zip GitHub offers works as it
+is.
+
+**From `cmd.exe`.** Double-click `install-update.bat`, or run
+`powershell -NoProfile -Command "irm … | iex"`. Windows needs PowerShell 5 or
+newer.
+
+<a id="update-semantics-restated"></a>**How an update behaves**
+
+- **InDesign:** the whole folder is replaced in one step: download and verify
+  first, swap second. A `.bak` folder exists only during the swap, so it can be
+  undone, and is removed once the new folder is in place. It is **not** a copy
+  you can roll back to later: a leftover copy would appear in the Scripts panel
+  as a second set of scripts, because InDesign scans the folder and everything
+  in it.
+- **Illustrator:** files are replaced in place, each one in a single step; there
+  is no `.bak` and no whole-folder swap, because that would need write access to
+  the Adobe folder around it, which the installer does not have. See
+  [How updating behaves](/guide/install#how-updating-behaves).
+- To roll back, install the older distribution:
+  `--source=/path/to/old-dist` (macOS) or `-Source C:\path\to\old-dist`
+  (Windows). Keeping the distribution you are on now is the only way back.
+- For InDesign, a failure at any step leaves the existing installation as it
+  was. For Illustrator, a failure part way through the in-place replace is
+  reported as a failure and is put right by the next run.
+- Running it again when everything is current installs nothing.
+
+<a id="building-the-distribution-bundle"></a>**Building the distribution bundle**
+
+From the development repository:
+
+```bash
+node toolkit_installer/make_dist.mjs
+```
+
+It walks `translation_mvp_uxp/` (every top-level `.idjs` and all of `lib/`,
+minus an exclusion list) and checks that every `require` in the shipped files
+resolves to a shipped file, so nothing needed at run time is left out. The
+Illustrator scripts come from the sibling `illustrator-toolkit` repository. It
+writes, under `toolkit_installer/dist/`:
+
+- `indesign-toolkit/`: the InDesign scripts that go into the Scripts panel
+- `indesign-toolkit.manifest.json`: the version plus a SHA-256 for every file
+- `indesign-toolkit.manifest.sha256`: a `shasum -c` file, used for
+  verification on macOS
+- `illustrator-toolkit/`, `illustrator-toolkit.manifest.json`,
+  `illustrator-toolkit.manifest.sha256`: the same three for Illustrator
+- `install.sh`, `install.ps1`: the one-line bootstraps
+- `install-update.ps1`, `install-update.sh`, `install-update.bat`,
+  `install-update.command`: the installer and its double-click launchers
+- `README.md`, `LICENSE` and repository metadata, from
+  `toolkit_installer/repo-scaffold/`
+
+The build refuses to write a manifest and a `.sha256` file that disagree. The
+version number comes from `toolkit_installer/VERSION`.
+
+<a id="shape-of-the-distribution-repository"></a>**Shape of the distribution repository**
+
+```text
+<repo root>/
+  indesign-toolkit/                  the InDesign scripts
+  indesign-toolkit.manifest.json     version and per-file sha256
+  indesign-toolkit.manifest.sha256   shasum -c file (macOS verification)
+  illustrator-toolkit/               the Illustrator scripts
+  illustrator-toolkit.manifest.json
+  illustrator-toolkit.manifest.sha256
+  install.sh                         one-line bootstraps
+  install.ps1
+  install-update.bat
+  install-update.command
+  install-update.ps1
+  install-update.sh
+  README.md
+  LICENSE
+```
+
+The repository also holds the source of this site.
+
+<a id="the-machine-readable-copy-of-this-site"></a>**The machine-readable copy of this site**
+
+Two files are generated from the same Markdown that builds these pages:
+
+| File | Contents |
+| --- | --- |
+| `llms.txt` | An index of the site with absolute links and one-line summaries, following the [llms.txt](https://llmstxt.org) convention. |
+| `llms-full.txt` | The full text of every page on this site, in one file. |
+
+The build regenerates them; nobody edits them by hand:
+
+```bash
+cd website
+npm run llms     # regenerate only
+npm run build    # regenerate, then build the site
+```
+
+The generator reads the page list from `.vitepress/site.mjs`, the same list
+that builds the navigation, and fails the build if it finds a Markdown page that
+is not on it, so the two cannot drift apart.
+
+---
+
+<!-- page: guide/folders.md -->
+# Files and folders
+
+Source: https://zxa24.github.io/creative-script-installer/guide/folders
+
+Summary: What the scripts put next to your InDesign document, and why. packages holds the zips that 1.1 exports; script_outputs holds the logs, the import reports, the 3.4 baselines and the backup an import makes of the previous translated document before it updates or replaces it.
+
+# Files and folders
+
+Use this page when you want to know what the scripts have put next to your
+document, or where to find the previous translated version.
+
+The top of your folder stays yours. The scripts keep their own files in one
+folder, **script_outputs**, which you rarely need to open.
+
+## Next to your document 
+```text
+<your folder>/
+  <doc>.indd                your original
+  <doc>.translated.indd     the translated copy
+  packages/                 the translation zips
+  script_outputs/           the scripts' own files
+    log/                    one log per run
+    backup/                 copies taken before an import overwrites
+    baseline_snapshots/     starting points saved by 3.4
+    writeback_v2_report_<time>.json
+    post_import_check_<time>.md
+```
+
+- **`<doc>.translated.indd`** is the copy that
+  [1.2 Import Translation Package](/folio/export-import#what-to-do) makes next
+  to the original the first time, and updates in
+  [later rounds](/folio/rounds#next-round). It keeps this one name, so your PDF
+  export and your review always point at the same file. Your original is not
+  changed.
+- **packages** holds the zip that **1.1 Export Translation Package** saves each
+  time. Each zip is numbered (`V01D_…`, `V03D_…`), so sorting by name sorts by
+  round. The number goes up only when the package changes hands between
+  designer and translator; exporting again from the same side keeps it. Keep
+  the zips translators send back (`V02T_…`) here too.
+- **script_outputs** is where the scripts write for themselves:
+  - **log**: what happened during each run, one file per run. This is the file
+    to send if you report a problem.
+  - **The two report files** directly inside script_outputs: what the import
+    did (`.json`), and a list of what to check (`.md`). Each import adds a new
+    pair.
+  - **backup**: the previous translated copy, saved before an import
+    updated or replaced it (see [below](#where-to-find-the-previous-version)).
+  - **baseline_snapshots**: the starting points that
+    [3.4 Highlight Translation Changes](/folio/rounds#highlight-translation-changes)
+    compares against.
+
+## Where is the previous translated version? 
+<a id="what-import-does-to-the-previous-output"></a>In a later round you
+import into the `.translated.indd` (the [normal way](/folio/rounds#next-round)).
+Before saving, the import puts a copy of the previous version in
+**script_outputs → backup**, with the date and time in its name. To go back,
+open that copy, or copy it out of the folder. If the copy cannot be made, the
+import does not save at all
+([what to do](/folio/export-import#backup-failed)).
+
+If you import into the original again while a `.translated.indd` exists, the
+import [asks first](/folio/export-import#replace-translated-copy). If you
+choose to replace it, the old copy goes into **script_outputs → backup** the
+same way.
+
+> **Importing into the original again starts over**
+Your hand adjustments are then only in the backup. Do not do this once you
+have adjusted the translated copy.
+[Later rounds](/folio/rounds#next-round-warning) shows what to do instead.
+
+## Common problems
+
+> **My adjustments to the translated copy are gone**
+A later round was most likely imported into the original, which starts over
+and replaces the `.translated.indd`. Since version 1.2 the import asks first
+and saves the old copy in **script_outputs → backup**: open the newest copy
+there. Versions before 1.2 kept no copy in this case, so the folder may only
+have an older version. Next time,
+[import into the .translated.indd](/folio/rounds#next-round).
+
+> **I only see a .zip in packages, not a folder**
+That is normal. 1.1 builds a package folder, packs it into the zip and then
+deletes the folder, so the zip is the one file to send. A package folder with
+no zip next to it means the packing failed; the export's file in
+**script_outputs → log** says why. Run 1.1 again.
+
+> **My older packages are in script_outputs → package**
+Before version 1.1.0, 1.1 saved its packages there. It now saves them in
+**packages** next to the document, and still reads the old folder when it
+picks the next number, so the numbering carries on.
+
+> **A folder whose name ends in `_unzipped_` and a time is next to a zip**
+1.2 unpacks the zip into that folder while it works. It deletes the folder
+after a successful import and keeps it when the import
+[stopped part way](/folio/export-import#import-stopped), was cancelled or did
+not save, so the problem can be looked at. Once you have fixed the problem and
+imported again, you can delete it.
+
+> **There is a file whose name ends in `.translated_` and a long number**
+A version before 1.2 made it: the previous `.translated.indd` was open in
+InDesign and could not be closed, so the import saved its result under this
+name instead. Close both documents, keep the one you want, and name it
+`<doc>.translated.indd`. Since 1.2 the import stops in that case and asks you
+to close the copy.
+
+> **Technical details**
+<a id="folders-details"></a>**Names and places**
+
+| What | Where and how it is named |
+| --- | --- |
+| Translated copy | `<doc>.translated.indd`, next to the original. If an earlier one is open and does not close after four tries, the import stops (before 1.2: `<doc>.translated_<milliseconds>.indd` instead). |
+| Package (1.1) | `packages/V<nn>D_<doc>_translation_package_<YYYYMMDD_HHMMSS>.zip`. The dialog's **Output directory** can point elsewhere. |
+| Package (web app) | `V<nn>T_<…>_translated_<YYYYMMDD_HHMMSS>.zip`, saved wherever the translator puts it. |
+| Log | `script_outputs/log/<script>_<YYYYMMDD_HHMMSS>.log`. For a document that has never been saved, the system temp folder. |
+| Import report | `script_outputs/writeback_v2_report_<YYYYMMDD_HHMMSS>.json` and `post_import_check_<YYYYMMDD_HHMMSS>.md`. |
+| Backup | `script_outputs/backup/<doc>.translated.<YYYYMMDD_HHMMSS>.bak.indd`. |
+| 3.4 baseline | `script_outputs/baseline_snapshots/<doc>__<timestamp>.json`. |
+| Unpacked zip (1.2) | `<zip name>_unzipped_<YYYYMMDD_HHMMSS>/`, next to the zip. |
+
+**Package numbers.** D marks a designer export (InDesign), T a translator
+export (web app). The number goes up only when the package changes hands: an
+export from the other side than the latest package adds one, an export from the
+same side keeps the number. A normal round trip reads V01D, V02T, V03D, V04T;
+exporting twice before sending gives two V01D zips (their times differ). The
+sequence belongs to this document and its target language only. A new document
+starts at V01 whatever the other documents in the folder are at, and each
+target language counts on its own: zh-HK, zh-TW and zh-MO share one sequence
+(Traditional Chinese), zh-CN and zh-SG another (Simplified Chinese).
+
+1.1 looks for the latest package among this document's zips in the folders
+next to it whose names start with `packages`, in the old
+`script_outputs/package/`, and in the automation output folder when one is set;
+`<doc>.translated` counts as the same document. Each zip's `_package_seq.json`
+(written by both exporters) gives its number, side and language; without it,
+the name is read. An older zip with no number gets one from its name, one more
+each time the side changes. A package whose language cannot be read counts for
+every language. The package the last import recorded in the document also
+counts (a record from before 1.2, with no side, only sets a lowest number). Packages saved in any other folder are not seen. Packages already sent
+are never renamed. The package folder is deleted
+once the zip is written (kept if zipping fails, or with `EXPORT_KEEP_FOLDER=1`).
+
+**Report location.** The report is kept out of `log/` on purpose, so that a
+cleanup of old logs (by age and size) never removes it. If `script_outputs/` cannot be written, the report goes
+into the unpacked folder, and that folder is then kept.
+
+**Backup.** An import makes one before it overwrites a `.translated.indd` that
+exists on disk: in a later round (in-place update), and when an import from the
+original replaces an existing translated copy (before 1.2, only the later
+round did). The copy is written, read back and compared
+by size and SHA-256 before the file is overwritten; any failure stops the save
+(fail closed). The backup is a safety copy for you only; the scripts never read
+it back.
+
+<a id="a-change-is-planned-here"></a>**A planned change: archive instead of
+backup.** The backup exists because an import overwrites the
+`.translated.indd`, and an overwrite has to be protected: if the copy fails, the
+write must be blocked. The intended design moves the previous version into
+`script_outputs/versions/` first, so the name is free and the import creates a
+new file instead of overwriting one. With no overwrite there is no gate that can
+fail. This is decided but not built, and has no date yet; until it is, the
+backup described on this page is what happens.
+
+<a id="retired-convention"></a>**Retired convention.** An older, manual
+convention used stage-numbered folders: `01_input/`, `02_source/`,
+`03_working/`, `04_review/`, `05_delivery/`, `logs/`. It is retired. It predates
+the export and import packages, and the scripts do not write it. The delivery
+side (what `04_review/` and `05_delivery/` were for) is not automated; if you
+need it, set it up separately rather than reviving the numbered folders.
+
+---
+
+<!-- page: reference/changelog.md -->
+# Changelog
+
+Source: https://zxa24.github.io/creative-script-installer/reference/changelog
+
+Summary: What each released version of the toolkit and its installer contains, newest first. The version is the one the installer reports and the one written into each installed folder.
+
+# Changelog
+
+The version is the payload version: the number the installer prints, and the
+one it writes into every installed folder. One number covers both the InDesign
+and the Illustrator sets; they are released together.
+
+## 1.2.0 (2026-10-22)
+
+**After an import, a window shows what to fix.**
+
+When an import finishes with something to fix, a window lists each place with
+its page, grouped by problem. **Show** takes you to it, and **How to fix** gives
+the steps ([more](/folio/export-import#end-window)). An import with nothing to
+fix still ends without a window.
+
+**Importing into the original asks before it replaces your translated copy.**
+
+If a `.translated.indd` already exists, the import now asks first and saves a
+backup of it before replacing it. If that copy is open with unsaved changes,
+the import stops and changes nothing
+([more](/folio/export-import#replace-translated-copy)).
+
+**Later rounds keep your hand formatting.**
+
+When you update a `.translated.indd`, only the words the translator changed are
+rewritten; the rest of a changed paragraph keeps any formatting you fixed by
+hand. When the translator adds, changes or removes bold or italic, the layout
+follows.
+
+**2.2 Apply CJK Styles leaves your line breaks alone.**
+
+Running 2.2 again only tidies the text the import wrote, so line breaks you
+added by hand stay. Its language list now starts at the language the document
+was translated into.
+
+**Bold and italic in your design's weights.**
+
+In the font panel you can draw a line from one pairing to the pairing its bold
+or italic should use, for example Regular to Bold or Light to Medium. Text the
+translator marked bold or italic then comes out in those weights
+([more](/folio/fonts#emphasis-lines)).
+
+**The font panel collects what needs your decision.**
+
+Notices now sit under **Notifications**. When something is still undecided,
+**Done** offers to continue with the recommended choice.
+
+**Package numbers go up only when the package changes hands.**
+
+Exporting again from the same side keeps the number; it goes up by one when the
+package goes from designer to translator or back. Each document and each
+target language keeps its own count, so a new document starts at V01. Packages
+already sent are not renamed.
+
+**Import fixes.**
+
+- When the translator joins lines from two different paragraphs, the second
+  original paragraph no longer stays on the page.
+- When an earlier translated copy is open and cannot be closed, the import
+  stops and says so, instead of saving its result under another name.
+
+## 1.1.1 (2026-10-13)
+
+**After installing, the link points to what you need.**
+
+When an install finishes, the installer now links to the "What next" part of the
+install page, which leads on to Folio, More tools and All scripts, instead of
+always to the Folio walkthrough. Useful if you only use the Illustrator tools.
+
+## 1.1.0 (2026-10-12)
+
+**A new home for the documentation: Creative Script Kit.**
+
+The site is rebuilt around what you are doing rather than script numbers. Folio
+is laid out stage by stage for designers, with its own page for translators;
+every problem the site mentions links to how to fix it; and there is a full
+Chinese edition.
+
+**Translation packages are numbered and live next to the document.**
+
+1.1 Export Translation Package now saves to a **packages** folder next to your
+document, and each package is numbered: V01D, V02D and so on for the designer's
+exports, V…T for the zips translators save back. You can see at a glance which
+round a file belongs to.
+
+**2.2 Apply CJK Styles sets the rules for each language.**
+
+Line breaking and punctuation spacing are now set for the language you choose:
+Traditional Chinese (Hong Kong and Taiwan), Japanese and Korean as well as
+Simplified Chinese. The script checks the settings were actually written and
+says so if they were not.
+
+**Clearer dialogs.**
+
+The export dialog has its own window for advanced options, and closing it with
+the window's close button no longer leaves InDesign waiting. The import and
+reorganize-styles dialogs share one tidy layout and size themselves to their
+content.
+
+**Import fixes.**
+
+- Anchored objects inside translated text are no longer deleted.
+- When one paragraph's translation is longer, the paragraph before it no longer
+  spills its style into it.
+- Bold or italic left over from an earlier import is cleared on paragraphs that
+  are rewritten.
+- Numbered lists keep the numbering they had in the source.
+- Underline offset and weight that were never set stay on Auto instead of
+  becoming zero.
+- Import waits for InDesign to finish its background work before saving, so it
+  no longer fails with a message about open transactions.
+- InDesign's live preflight is paused during an import and turned back on
+  afterwards.
+- **Import** inside the font pairing panel no longer stops halfway with an error.
+
+**Illustrator: Unembed All Images keeps the image as it was.**
+
+Images are exported at their own resolution, hidden or locked items are no
+longer shown or unlocked along the way, and each relink is checked.
+
+## 1.0.3 (2026-09-10)
+
+**Fixed: dragging a weight onto the italic button turned the whole panel black.**
+
+Letting go of a dragged weight on top of the small italic button did two things at
+once: it committed the reorder *and* pressed the button, creating an italic copy
+nobody asked for. That second act sent the panel into a loop it could not leave,
+and the window went black; the only way out was to close and reopen it. The panel
+now leaves that button out of the way for the length of a drag, and the loop
+itself is gone.
+
+**Dragging a weight is easier to aim.**
+
+The weight you are dragging now follows the pointer instead of staying put, and it
+stays under the exact spot you grabbed it by. The place it came from is left as an
+empty outline, so you can see where it will fall back to. A short line under the
+pointer says what letting go will do: reorder, or merge with the weight underneath.
+Dropping just above or just below where the weight already sits is no longer offered,
+because it would not move anything. The narrow gap between two weights now counts as
+a drop position rather than a dead strip.
+
+**Fixed: one weight went dark whenever you hovered another.**
+
+It was always the same kind of weight (one present in the font but not used in the
+document), and it looked arbitrary because it was: the panel meant to dim everything
+*unrelated* to what you hover, but that dimming had never worked on ordinary weights.
+It now dims only when the weight you hover is actually paired with something, which
+is the only time the dimming tells you anything.
+
+**Renamed: the two folders inside the download.**
+
+`toolkit/` and `illustrator/` are now `indesign-toolkit/` and `illustrator-toolkit/`,
+so each says which application it is for. Nothing about installing changes.
+
+## 1.0.2 (2026-09-08)
+
+**Fixed: an import could take hours when a font was missing.**
+
+If the document used a font face this machine did not have installed, the import
+searched the whole font catalogue to be sure, and that search took **eight
+minutes**, once for every stretch of Latin text inside a Chinese paragraph. On a
+real job that added up to nearly five hours, with InDesign responsive the whole
+time and nothing on screen to say why. The same import now finishes in about
+seventy seconds; the search that took eight minutes takes half a second, and is
+remembered for the rest of the run rather than repeated.
+
+Nothing about the answer changed: a face that isn't installed is still reported
+and skipped, never quietly substituted. Only the cost of finding that out.
+
+**Fixed: a speed-up for manual runs that had never actually run.**
+
+Running a script from InDesign's Scripts panel is slower than driving it
+automatically, because InDesign keeps re-laying-out the page you are looking at
+after every change. There has been a remedy for this in the code for some time
+(park the window on a page nothing is being edited on), and it turns out it never
+executed once: it asked InDesign for the window using a name InDesign does not
+have, got nothing back, and skipped itself in silence. It now works. You will see
+the document jump to its last page during the import and return to where you were
+when it finishes.
+
+**Fixed: the report the import points you at no longer deletes itself.**
+
+Every run ends by printing the location of a JSON report. On a successful run that
+file sat inside the temporary folder the same run then cleaned up, so the path led
+nowhere. The report is now written beside the log, under `script_outputs/`, and
+survives. The import also refuses to clean up a folder that happens to hold this
+run's own log or report.
+
+**Changed: one line in the log was renamed, because it was lying.**
+
+A counter labelled `readbackFailures` was really a list of *everything the emphasis
+step wanted to mention*, including cases where the text was styled correctly and
+an existing annotation or hyperlink was correctly left alone. It is now called
+`surfaced`, and prints a breakdown by reason instead of a single number.
+
+## 1.0.1 (2026-09-08)
+
+**Fixed: an import that looked frozen.**
+
+The emphasis settle pass (the step that applies emphasis once the layout has
+settled, and widens a frame whose text oversets) wrote **one log line, at the
+end**. A real import spent more than eight minutes inside it at full CPU with
+nothing between two log lines, and from outside that is indistinguishable from
+a crash.
+
+The cause was one missing hand-off: the logging channel reached the pipeline
+but was not passed down to the code doing this work, so it had nothing to write
+with. It does now, and the phase reports as it goes:
+
+- when it starts, and how many sites it has to visit;
+- every 25 sites, and **any single site that takes over a second**;
+- one line per widened frame, naming the frame and how hard it tried.
+
+That last line also answers a question the old log could not: a frame whose
+text oversets *vertically* can never be fixed by making it wider, so the search
+spends its whole budget and reverts. It now says so, instead of looking like a
+hang.
+
+Nothing about what the scripts *do* changed in this release.
+
+## 1.0.0 (2026-09-08)
+
+First public release.
+
+**Installer**
+
+- One pasted command installs and updates, on Windows (`irm … | iex`) and macOS
+  (`curl … | bash`); the same command run again updates. Everything is
+  downloaded and checksum-verified before anything is written.
+- An interactive menu when run in a terminal (Install, Update, Repair,
+  Uninstall), offering only the choices that apply.
+- Illustrator support with the single administrator step it needs, done in the
+  session: a password on macOS, the Windows prompt on Windows, asked only when
+  actually needed, and skipped with an explanation when Illustrator has never
+  been launched.
+- No log file unless asked for (`--log` / `CSI_LOG=1`); when asked, one file on
+  the Desktop per run.
+- `install-update.bat` / `.command` for machines without a terminal; they
+  install the copy they sit in.
+
+**InDesign: 15 scripts in four groups**
+
+- `1.x` Workflow: Export Translation Package, Import Translation Package.
+- `2.x` Type and Styles: Apply Font Pairing, Apply CJK Styles, Set Selection
+  Weight, Reorganize Styles, Repair Cluster GREP, Convert Underline to Rule.
+- `3.x` Check and Repair: Snapshot Before Apply, Repair After Apply, Relink
+  Missing Links, Highlight Translation Changes, Save and Reveal.
+- `4.x` Brand Presets: Export Brand Preset, Apply Brand Preset.
+
+**Illustrator: 5 tools**
+
+- Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts,
+  CJK Composer and Mojikumi.
+
+**Documentation**
+
+- This site, in English, with a machine-readable copy (`llms.txt`,
+  `llms-full.txt`) so an AI assistant can be handed the address and asked.

@@ -1,0 +1,263 @@
+---
+title: Changelog
+description: What each released version of the toolkit and its installer contains, newest first. The version is the one the installer reports and the one written into each installed folder.
+---
+
+# Changelog
+
+The version is the payload version: the number the installer prints, and the
+one it writes into every installed folder. One number covers both the InDesign
+and the Illustrator sets; they are released together.
+
+## 1.2.0 (2026-10-22)
+
+**After an import, a window shows what to fix.**
+
+When an import finishes with something to fix, a window lists each place with
+its page, grouped by problem. **Show** takes you to it, and **How to fix** gives
+the steps ([more](/folio/export-import#end-window)). An import with nothing to
+fix still ends without a window.
+
+**Importing into the original asks before it replaces your translated copy.**
+
+If a `.translated.indd` already exists, the import now asks first and saves a
+backup of it before replacing it. If that copy is open with unsaved changes,
+the import stops and changes nothing
+([more](/folio/export-import#replace-translated-copy)).
+
+**Later rounds keep your hand formatting.**
+
+When you update a `.translated.indd`, only the words the translator changed are
+rewritten; the rest of a changed paragraph keeps any formatting you fixed by
+hand. When the translator adds, changes or removes bold or italic, the layout
+follows.
+
+**2.2 Apply CJK Styles leaves your line breaks alone.**
+
+Running 2.2 again only tidies the text the import wrote, so line breaks you
+added by hand stay. Its language list now starts at the language the document
+was translated into.
+
+**Bold and italic in your design's weights.**
+
+In the font panel you can draw a line from one pairing to the pairing its bold
+or italic should use, for example Regular to Bold or Light to Medium. Text the
+translator marked bold or italic then comes out in those weights
+([more](/folio/fonts#emphasis-lines)).
+
+**The font panel collects what needs your decision.**
+
+Notices now sit under **Notifications**. When something is still undecided,
+**Done** offers to continue with the recommended choice.
+
+**Package numbers go up only when the package changes hands.**
+
+Exporting again from the same side keeps the number; it goes up by one when the
+package goes from designer to translator or back. Each document and each
+target language keeps its own count, so a new document starts at V01. Packages
+already sent are not renamed.
+
+**Import fixes.**
+
+- When the translator joins lines from two different paragraphs, the second
+  original paragraph no longer stays on the page.
+- When an earlier translated copy is open and cannot be closed, the import
+  stops and says so, instead of saving its result under another name.
+
+## 1.1.1 (2026-10-13)
+
+**After installing, the link points to what you need.**
+
+When an install finishes, the installer now links to the "What next" part of the
+install page, which leads on to Folio, More tools and All scripts, instead of
+always to the Folio walkthrough. Useful if you only use the Illustrator tools.
+
+## 1.1.0 (2026-10-12)
+
+**A new home for the documentation: Creative Script Kit.**
+
+The site is rebuilt around what you are doing rather than script numbers. Folio
+is laid out stage by stage for designers, with its own page for translators;
+every problem the site mentions links to how to fix it; and there is a full
+Chinese edition.
+
+**Translation packages are numbered and live next to the document.**
+
+1.1 Export Translation Package now saves to a **packages** folder next to your
+document, and each package is numbered: V01D, V02D and so on for the designer's
+exports, V…T for the zips translators save back. You can see at a glance which
+round a file belongs to.
+
+**2.2 Apply CJK Styles sets the rules for each language.**
+
+Line breaking and punctuation spacing are now set for the language you choose:
+Traditional Chinese (Hong Kong and Taiwan), Japanese and Korean as well as
+Simplified Chinese. The script checks the settings were actually written and
+says so if they were not.
+
+**Clearer dialogs.**
+
+The export dialog has its own window for advanced options, and closing it with
+the window's close button no longer leaves InDesign waiting. The import and
+reorganize-styles dialogs share one tidy layout and size themselves to their
+content.
+
+**Import fixes.**
+
+- Anchored objects inside translated text are no longer deleted.
+- When one paragraph's translation is longer, the paragraph before it no longer
+  spills its style into it.
+- Bold or italic left over from an earlier import is cleared on paragraphs that
+  are rewritten.
+- Numbered lists keep the numbering they had in the source.
+- Underline offset and weight that were never set stay on Auto instead of
+  becoming zero.
+- Import waits for InDesign to finish its background work before saving, so it
+  no longer fails with a message about open transactions.
+- InDesign's live preflight is paused during an import and turned back on
+  afterwards.
+- **Import** inside the font pairing panel no longer stops halfway with an error.
+
+**Illustrator: Unembed All Images keeps the image as it was.**
+
+Images are exported at their own resolution, hidden or locked items are no
+longer shown or unlocked along the way, and each relink is checked.
+
+## 1.0.3 (2026-09-10)
+
+**Fixed: dragging a weight onto the italic button turned the whole panel black.**
+
+Letting go of a dragged weight on top of the small italic button did two things at
+once: it committed the reorder *and* pressed the button, creating an italic copy
+nobody asked for. That second act sent the panel into a loop it could not leave,
+and the window went black; the only way out was to close and reopen it. The panel
+now leaves that button out of the way for the length of a drag, and the loop
+itself is gone.
+
+**Dragging a weight is easier to aim.**
+
+The weight you are dragging now follows the pointer instead of staying put, and it
+stays under the exact spot you grabbed it by. The place it came from is left as an
+empty outline, so you can see where it will fall back to. A short line under the
+pointer says what letting go will do: reorder, or merge with the weight underneath.
+Dropping just above or just below where the weight already sits is no longer offered,
+because it would not move anything. The narrow gap between two weights now counts as
+a drop position rather than a dead strip.
+
+**Fixed: one weight went dark whenever you hovered another.**
+
+It was always the same kind of weight (one present in the font but not used in the
+document), and it looked arbitrary because it was: the panel meant to dim everything
+*unrelated* to what you hover, but that dimming had never worked on ordinary weights.
+It now dims only when the weight you hover is actually paired with something, which
+is the only time the dimming tells you anything.
+
+**Renamed: the two folders inside the download.**
+
+`toolkit/` and `illustrator/` are now `indesign-toolkit/` and `illustrator-toolkit/`,
+so each says which application it is for. Nothing about installing changes.
+
+## 1.0.2 (2026-09-08)
+
+**Fixed: an import could take hours when a font was missing.**
+
+If the document used a font face this machine did not have installed, the import
+searched the whole font catalogue to be sure, and that search took **eight
+minutes**, once for every stretch of Latin text inside a Chinese paragraph. On a
+real job that added up to nearly five hours, with InDesign responsive the whole
+time and nothing on screen to say why. The same import now finishes in about
+seventy seconds; the search that took eight minutes takes half a second, and is
+remembered for the rest of the run rather than repeated.
+
+Nothing about the answer changed: a face that isn't installed is still reported
+and skipped, never quietly substituted. Only the cost of finding that out.
+
+**Fixed: a speed-up for manual runs that had never actually run.**
+
+Running a script from InDesign's Scripts panel is slower than driving it
+automatically, because InDesign keeps re-laying-out the page you are looking at
+after every change. There has been a remedy for this in the code for some time
+(park the window on a page nothing is being edited on), and it turns out it never
+executed once: it asked InDesign for the window using a name InDesign does not
+have, got nothing back, and skipped itself in silence. It now works. You will see
+the document jump to its last page during the import and return to where you were
+when it finishes.
+
+**Fixed: the report the import points you at no longer deletes itself.**
+
+Every run ends by printing the location of a JSON report. On a successful run that
+file sat inside the temporary folder the same run then cleaned up, so the path led
+nowhere. The report is now written beside the log, under `script_outputs/`, and
+survives. The import also refuses to clean up a folder that happens to hold this
+run's own log or report.
+
+**Changed: one line in the log was renamed, because it was lying.**
+
+A counter labelled `readbackFailures` was really a list of *everything the emphasis
+step wanted to mention*, including cases where the text was styled correctly and
+an existing annotation or hyperlink was correctly left alone. It is now called
+`surfaced`, and prints a breakdown by reason instead of a single number.
+
+## 1.0.1 (2026-09-08)
+
+**Fixed: an import that looked frozen.**
+
+The emphasis settle pass (the step that applies emphasis once the layout has
+settled, and widens a frame whose text oversets) wrote **one log line, at the
+end**. A real import spent more than eight minutes inside it at full CPU with
+nothing between two log lines, and from outside that is indistinguishable from
+a crash.
+
+The cause was one missing hand-off: the logging channel reached the pipeline
+but was not passed down to the code doing this work, so it had nothing to write
+with. It does now, and the phase reports as it goes:
+
+- when it starts, and how many sites it has to visit;
+- every 25 sites, and **any single site that takes over a second**;
+- one line per widened frame, naming the frame and how hard it tried.
+
+That last line also answers a question the old log could not: a frame whose
+text oversets *vertically* can never be fixed by making it wider, so the search
+spends its whole budget and reverts. It now says so, instead of looking like a
+hang.
+
+Nothing about what the scripts *do* changed in this release.
+
+## 1.0.0 (2026-09-08)
+
+First public release.
+
+**Installer**
+
+- One pasted command installs and updates, on Windows (`irm … | iex`) and macOS
+  (`curl … | bash`); the same command run again updates. Everything is
+  downloaded and checksum-verified before anything is written.
+- An interactive menu when run in a terminal (Install, Update, Repair,
+  Uninstall), offering only the choices that apply.
+- Illustrator support with the single administrator step it needs, done in the
+  session: a password on macOS, the Windows prompt on Windows, asked only when
+  actually needed, and skipped with an explanation when Illustrator has never
+  been launched.
+- No log file unless asked for (`--log` / `CSI_LOG=1`); when asked, one file on
+  the Desktop per run.
+- `install-update.bat` / `.command` for machines without a terminal; they
+  install the copy they sit in.
+
+**InDesign: 15 scripts in four groups**
+
+- `1.x` Workflow: Export Translation Package, Import Translation Package.
+- `2.x` Type and Styles: Apply Font Pairing, Apply CJK Styles, Set Selection
+  Weight, Reorganize Styles, Repair Cluster GREP, Convert Underline to Rule.
+- `3.x` Check and Repair: Snapshot Before Apply, Repair After Apply, Relink
+  Missing Links, Highlight Translation Changes, Save and Reveal.
+- `4.x` Brand Presets: Export Brand Preset, Apply Brand Preset.
+
+**Illustrator: 5 tools**
+
+- Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts,
+  CJK Composer and Mojikumi.
+
+**Documentation**
+
+- This site, in English, with a machine-readable copy (`llms.txt`,
+  `llms-full.txt`) so an AI assistant can be handed the address and asked.

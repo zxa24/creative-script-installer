@@ -1,0 +1,28 @@
+/* eyecheck.css — the eye-check overlay. Loaded ONLY when an eye-check round is on (the launcher appends it to the panel CSS).
+   Rules this file keeps (UXP dialog, CLAUDE.md #4 #13 #38): literal colours (no var() / calc()), longhand left/top (no inset),
+   no opacity, no transition / animation, no flex gap, no stroke-dasharray, no position:fixed, no <button>. */
+.eyecheck-layer{position:absolute;left:0;top:0;width:0;height:0;z-index:3000;}
+.eyecheck-dim{position:absolute;background-color:rgba(4,6,9,0.74);}
+.eyecheck-frame{position:absolute;pointer-events:none;box-sizing:border-box;border:3px solid #ffb02e;background-color:rgba(255,176,46,0.13);border-radius:6px;}
+.eyecheck-badge{position:absolute;pointer-events:none;width:26px;height:26px;line-height:26px;border-radius:13px;text-align:center;font-size:14px;font-weight:700;background-color:#ffb02e;color:#1a1204;}
+.eyecheck-card{position:absolute;box-sizing:border-box;padding:12px 14px;border-radius:10px;border:2px solid #ffb02e;background-color:#12151b;color:#e8ecf3;font-size:12px;line-height:1.5;}
+.eyecheck-head{display:flex;align-items:baseline;justify-content:space-between;color:#ffb02e;margin-bottom:4px;}
+.eyecheck-count{color:#9aa3b2;font-size:11px;}
+.eyecheck-title{font-size:14px;font-weight:700;margin-bottom:6px;}
+.eyecheck-sec{margin-bottom:6px;}
+.eyecheck-label{font-size:10px;letter-spacing:.08em;color:#ffb02e;}
+.eyecheck-text{white-space:pre-line;}
+.eyecheck-status{margin:4px 0 6px;padding:3px 6px;border-radius:4px;background-color:#2a2418;color:#f0dfb8;font-size:11px;}
+.eyecheck-verdicts{display:flex;margin:6px 0 6px;}
+.eyecheck-btn{display:inline-block;padding:4px 12px;margin-right:6px;border-radius:6px;border:1px solid #3d4f6e;background-color:#1a1d24;color:#d6deeb;cursor:pointer;font-size:12px;}
+.eyecheck-btn.is-primary{border-color:#ffb02e;color:#ffdca0;}
+.eyecheck-btn.is-off{border-color:#2a2f38;color:#5a6270;cursor:default;}
+.eyecheck-ok.is-on{background-color:#1f5a34;border-color:#46c47a;color:#eaffee;}
+.eyecheck-problem.is-on{background-color:#6a2326;border-color:#ff6b6e;color:#ffecec;}
+.eyecheck-maskswitch{margin-left:auto;margin-right:0;color:#9aa3b2;}
+.eyecheck-choices{margin:6px 0;}
+.eyecheck-choice{padding:5px 8px;margin-bottom:5px;border-radius:6px;border:1px solid #3d4f6e;background-color:#1a1d24;color:#d6deeb;cursor:pointer;}
+.eyecheck-choice.is-on{background-color:#4a3a16;border-color:#ffb02e;color:#ffeccb;}
+.eyecheck-note{width:100%;box-sizing:border-box;margin:0 0 6px;padding:4px 6px;border-radius:5px;border:1px solid #3d4f6e;background-color:#0b0d11;color:#e8ecf3;font-size:12px;}
+.eyecheck-nav{display:flex;}
+.eyecheck-foot{margin-top:6px;font-size:10px;color:#7d8696;word-break:break-all;}

@@ -1,0 +1,123 @@
+{
+  "round": "144",
+  "title": "字体面板第二轮眼验（#144）",
+  "fixture": {
+    "config": "dev/font_apply_panel/eyecheck/fixtures/144_config.json",
+    "report": "dev/font_apply_panel/eyecheck/fixtures/144_report.json"
+  },
+  "items": [
+    {
+      "id": "import",
+      "title": "载入测试配置",
+      "do": "点顶栏的 Import，选 dev/font_apply_panel/eyecheck/fixtures/144_config.json。",
+      "expect": "面板里出现六个语言列和一列权重名卡片，右侧出现通知区。",
+      "why": "测试配置要先载入，后面几项才出现。",
+      "targets": [
+        "import"
+      ],
+      "testSteps": [
+        {
+          "click": "import"
+        }
+      ]
+    },
+    {
+      "id": "ff-notice-readable",
+      "title": "「Set up a bold for …」通知",
+      "do": "只读，不要点选项。读这条通知：标题、说明句、最多三处文字（按页码排）、两个选项各落成的字体和是否已装。",
+      "expect": "读完能说出：哪些字、在哪一页、选哪个会变成什么字体、那个字体装没装。看不懂或不敢选，就点「有问题」，备注里写卡在哪一句。",
+      "why": "第一次接触 Folio 的设计师最容易卡在这里。浏览器只能验字出现了，验不了读的人看不看得懂、会不会选错。",
+      "targets": [
+        "notice-ff"
+      ]
+    },
+    {
+      "id": "ff-own-lands",
+      "title": "选「Use its own font」之后的落点",
+      "do": "点「Use its own font」。",
+      "expect": "English 列里对应字重的真节点（Dax Pro Bold）上出现 needed 标记，这条通知从「待决定」移到「核对」。",
+      "why": "选择要能在画布上看到落点，否则用户不知道选了之后要去哪里配置。",
+      "targets": [
+        "ff-option-own",
+        "needed-node"
+      ],
+      "testSteps": [
+        {
+          "click": "ff-option-own"
+        }
+      ]
+    },
+    {
+      "id": "usage-jump",
+      "title": "用量按钮、列表、跳转换页",
+      "do": "点节点上的「× 数字」，在弹出的列表里点任意一行。看完后点列表外面任意处，把列表关掉。",
+      "expect": "列表按页码列出用到这个字体的地方。点一行后，InDesign 跳到那一页那处文字。",
+      "why": "跳转只在宿主里成立，Chromium 验不了。",
+      "targets": [
+        "usage-chip#0",
+        "usage-list"
+      ],
+      "testSteps": [
+        {
+          "click": "usage-chip#0"
+        },
+        {
+          "click": "usage-row#0"
+        },
+        {
+          "clickAt": {
+            "hook": "usage-overlay",
+            "fx": 0.97,
+            "fy": 0.97
+          }
+        }
+      ],
+      "passThrough": [
+        "usage-overlay"
+      ]
+    },
+    {
+      "id": "waiting-place",
+      "title": "等待区的占位和琥珀线",
+      "do": "看 English 列顶部的等待区和从它出发的琥珀线，然后点「Place on a node」。",
+      "expect": "等待区里有 Quokka 的占位，一条琥珀线连着它。点了之后它变成真节点，那条线变成和别的线一样的实线。",
+      "why": "UXP 不画虚线，琥珀色是占位线唯一的区分，只能人眼确认看得出。",
+      "targets": [
+        "waiting-area#0",
+        "ghost-wire",
+        "ghost-action#0"
+      ],
+      "testSteps": [
+        {
+          "click": "ghost-action#0"
+        }
+      ]
+    },
+    {
+      "id": "pan-wires",
+      "title": "拖动画布，连线跟不跟着走",
+      "do": "按住画布空白处，左右拖动几次，看连线；最后把画布拖回原位（左边是标签卡，English 列在屏幕里）。",
+      "expect": "所有连线（成员线、标签线）都跟着节点一起走，不乱跑，不消失，松手后不留在原位。",
+      "why": "平移时连线的问题只在 UXP 里出现过，Chromium 复现不出。",
+      "targets": [
+        "canvas"
+      ],
+      "testSteps": [
+        {
+          "drag": {
+            "hook": "canvas",
+            "dx": -300,
+            "dy": 0
+          }
+        },
+        {
+          "drag": {
+            "hook": "canvas",
+            "dx": 300,
+            "dy": 0
+          }
+        }
+      ]
+    }
+  ]
+}

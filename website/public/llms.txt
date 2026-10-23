@@ -1,0 +1,39 @@
+# Creative Script Kit
+
+> Free scripts for Adobe InDesign and Illustrator, installed and updated with one line. Folio takes a finished InDesign layout to a translator and brings the translation back into the same layout; a set of InDesign tools fixes what a new language changes; five Illustrator tools handle everyday chores.
+
+Source repository: https://github.com/zxa24/creative-script-installer
+
+Three products installed by one command. Folio: InDesign scripts 1.1 (export a translation package as a zip) and 1.2 (import the translated zip into a copy of the layout), with a browser web app in between where a translator works. The designer's work is five stages in order (before you export, export and import, make the new language look right, later rounds, sister documents); each numbered InDesign script is documented on the stage page where it is used. More tools: InDesign 3.5 Save and Reveal and five standalone Illustrator scripts, outside the translation workflow. The All scripts page indexes every script of both apps.
+
+The complete text of every page below is available as a single file: [llms-full.txt](https://zxa24.github.io/creative-script-installer/llms-full.txt)
+
+## Get started
+
+- [Creative Script Kit](https://zxa24.github.io/creative-script-installer/): The toolbox: Folio, InDesign tools and Illustrator tools, and the one line that installs them.
+- [Install and update](https://zxa24.github.io/creative-script-installer/guide/install): Paste one line into a terminal on a Mac or Windows PC, restart InDesign and Illustrator, find the scripts. Common problems and the installer's technical behaviour are folded below the steps.
+
+## Folio
+
+- [Folio: translate a layout](https://zxa24.github.io/creative-script-installer/folio/): What Folio is: the designer exports a zip, a translator translates it in a web page, the designer imports it into a copy of the same layout. Pick your part: designer or translator.
+- [Translate in the web app: for translators](https://zxa24.github.io/creative-script-installer/folio/translator): Open the zip in the Folio web app, translate and mark formatting, save the zip and send it back. Nothing to install.
+- [Translate a layout: for designers](https://zxa24.github.io/creative-script-installer/folio/designer): The designer's five stages in work order, one line each with a link to its page, and the warning not to import a later round into the original.
+- [Before you export](https://zxa24.github.io/creative-script-installer/folio/before-export): Stage 1. Get a document ready before 1.1: 3.3 Relink Missing Links and 2.4 Reorganize Styles.
+- [Export and import](https://zxa24.github.io/creative-script-installer/folio/export-import): Stage 2. Export the text as a zip with 1.1 Export Translation Package, send it to the translator, get it back, import it into a copy of the original with 1.2 Import Translation Package, and check the result, with the window that lists places to fix. Common problems of export and import (including the question before replacing a translated copy), and the technical details of 1.1 and 1.2.
+- [3 Make the new language look right](https://zxa24.github.io/creative-script-installer/folio/fonts): Stage 3. Fix what the new language changed after 1.2: 2.1 Apply Font Pairing, 2.2 Apply CJK Styles, 2.3 Set Selection Weight, 2.5 Repair Cluster GREP, 2.6 Convert Underline to Rule, and 3.1 Snapshot Before Apply with 3.2 Repair After Apply to protect the layout during big changes.
+- [Later rounds](https://zxa24.github.io/creative-script-installer/folio/rounds): Stage 4. When the translation changes after you adjusted the layout: update the .translated.indd you adjusted (never the original), and mark every changed character with 3.4 Highlight Translation Changes.
+- [Sister documents](https://zxa24.github.io/creative-script-installer/folio/sister-documents): Stage 5. 4.1 Export Brand Preset and 4.2 Apply Brand Preset: copy tuned paragraph-style settings to a sister document. Fonts are never changed.
+
+## More tools
+
+- [More tools](https://zxa24.github.io/creative-script-installer/tools/): General-purpose tools, not part of the translation workflow: InDesign 3.5 Save and Reveal, and the five Illustrator tools (Unembed All Images, Export Artboard PDFs, Export Small PDF, Replace Fonts, CJK Composer and Mojikumi).
+
+## All scripts
+
+- [All scripts](https://zxa24.github.io/creative-script-installer/scripts/): Every script of both apps: the numbered InDesign scripts (1.1 to 4.2) in Scripts panel order and the five Illustrator scripts, each with one line on what it is for and where it is explained.
+
+## Reference
+
+- [Advanced install options](https://zxa24.github.io/creative-script-installer/reference/advanced): For IT, scripted and offline installs: installer flags and exit codes, installing from a local copy, the TOOLKIT_* overrides, collecting a log, and how the distribution bundle is built.
+- [Files and folders](https://zxa24.github.io/creative-script-installer/guide/folders): What the scripts put next to your document (packages/ for the exported zips; script_outputs/ for logs, import reports, 3.4 baselines and the backup an import makes before it overwrites the translated copy) and where the previous translated version is.
+- [Changelog](https://zxa24.github.io/creative-script-installer/reference/changelog): What each released version contains, newest first.

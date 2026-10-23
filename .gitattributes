@@ -1,0 +1,9 @@
+# The payload's bytes are checksummed in toolkit.manifest.json, and the
+# installer refuses anything that does not match. git line-ending normalisation
+# would rewrite those bytes in transit and break every checksum, so nothing in
+# this repository is treated as text to be converted.
+#
+# This is not a style preference. Without it the online update path fails on
+# every file with "the downloaded files failed verification" — which is what it
+# did the first time it was tried for real.
+* -text

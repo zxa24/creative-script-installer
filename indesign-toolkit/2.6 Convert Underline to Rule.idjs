@@ -1,0 +1,272 @@
+/*
+ * convert_underline_to_rule.idjs
+ *
+ * Post-processing tool for the translation import pipeline.
+ *
+ * Scans every paragraph in every story of the active document and looks
+ * for paragraphs where 100% of the visible characters carry char-level
+ * `underline=true`. For each such paragraph, replaces the char-level
+ * underline with a paragraph-level `ruleBelow` (0.5pt, TEXT_WIDTH,
+ * color picked from the underlined chars' fillColor majority).
+ *
+ * Why this exists:
+ *   Char-level underline tracks each glyph's own baseline. CJK glyphs
+ *   hide the underline under their body while Latin / digit glyphs
+ *   expose it. The result is the "半边下划线" asymmetry the user saw
+ *   on "10 年期债券" links — Latin/digit gets a visible line, CJK
+ *   doesn't. A paragraph-level rule sits at the paragraph baseline,
+ *   so the line is continuous across both scripts.
+ *
+ *   Lives outside import_translations_v2.idjs (was previously
+ *   `#BRIDGE-42` inside v2_pipeline.js) so the import stays format-
+ *   neutral and the operator decides when to run the visual upgrade.
+ *
+ * Usage:
+ *   Run from Scripts Panel (or via the bridge). Operates on
+ *   app.activeDocument. Idempotent — paragraphs already converted
+ *   (ruleBelow=true + no char-level underline) are skipped. Writes a
+ *   log to `<docDir>/convert_underline_to_rule_<timestamp>.log`.
+ */
+
+(async () => {
+    if (typeof app === "undefined" || !app) {
+        try { console.error("convert_underline_to_rule: no app — aborting"); } catch (e) {}
+        return;
+    }
+    if (!app.documents || app.documents.length === 0) {
+        try { app.alert("Open a document first."); } catch (e) {}
+        return;
+    }
+
+    var indesign = require("indesign");
+    var RuleWidth = indesign && indesign.RuleWidth;
+    var UndoModes = indesign && indesign.UndoModes;
+    var ScriptLanguage = indesign && indesign.ScriptLanguage;
+
+    var doc = app.activeDocument;
+    var logLines = [];
+    function plog(msg) {
+        logLines.push("[" + new Date().toISOString() + "] " + msg);
+    }
+    plog("convert_underline_to_rule begin · doc=" + (doc.name || "?"));
+
+    var stats = {
+        paragraphsScanned: 0,
+        candidatesFound: 0,
+        converted: 0,
+        skippedAlreadyConverted: 0,
+        skippedNoUnderline: 0,
+        skippedPartialUnderline: 0,
+        skippedEmpty: 0,
+        errors: []
+    };
+
+    // Walk every paragraph in every story in document order.
+    // Tables: paragraphs nested in story.tables[].cells[].paragraphs.
+    var scanParagraphs = function (paras) {
+        var n = 0;
+        try { n = paras.length; } catch (e) { return; }
+        for (var i = 0; i < n; i++) {
+            stats.paragraphsScanned++;
+            var pp = null;
+            try { pp = paras.item(i); } catch (e) { continue; }
+            if (!pp) continue;
+
+            // Read paragraph contents to know length + detect trailing \r.
+            var raw = "";
+            try { raw = String(pp.contents || ""); } catch (e) { stats.skippedEmpty++; continue; }
+            var n2 = 0;
+            try { n2 = pp.characters.length; } catch (e) { stats.skippedEmpty++; continue; }
+            if (n2 === 0) { stats.skippedEmpty++; continue; }
+            // Exclude trailing \r (cr at end). Last visible char index = n2 - 2 if cr else n2 - 1.
+            var lastVis = (raw.length > 0 && raw.charCodeAt(raw.length - 1) === 13) ? n2 - 2 : n2 - 1;
+            if (lastVis < 0) { stats.skippedEmpty++; continue; }
+
+            // Skip if paragraph already has ruleBelow + no char underline (idempotent).
+            var alreadyRule = false;
+            try { alreadyRule = !!pp.ruleBelow; } catch (e) {}
+
+            // Sample underline state of every visible char. Use textStyleRanges
+            // for efficiency — group runs of same underline value rather than
+            // poking each character.
+            var tsr = null;
+            try { tsr = pp.textStyleRanges; } catch (e) { continue; }
+            var rN = 0;
+            try { rN = tsr.length; } catch (e) {}
+            if (rN === 0) { stats.skippedEmpty++; continue; }
+
+            // Track: does every visible char have underline=true? Also track
+            // the fillColor of the underlined ranges (for rule color picking).
+            var allUlTrue = true;
+            var anyUlTrue = false;
+            var colorVotes = {}; // colorName → total visible-char count
+            for (var ri = 0; ri < rN; ri++) {
+                var rr = null;
+                try { rr = tsr.item(ri); } catch (e) {}
+                if (!rr) continue;
+                var rOff = -1;
+                try { rOff = rr.characters.item(0).index - pp.characters.item(0).index; } catch (e) {}
+                var rLen = 0;
+                try { rLen = rr.characters.length; } catch (e) {}
+                if (rOff < 0 || rLen <= 0) continue;
+                var rEnd = rOff + rLen - 1;
+                // Skip ranges that lie entirely past lastVis (trailing \r only).
+                if (rOff > lastVis) continue;
+                var clampedEnd = Math.min(rEnd, lastVis);
+                var clampedLen = clampedEnd - rOff + 1;
+                if (clampedLen <= 0) continue;
+
+                var ul = false;
+                try { ul = !!rr.underline; } catch (e) {}
+                if (ul) {
+                    anyUlTrue = true;
+                    var fcName = "Black";
+                    try { fcName = (rr.fillColor && rr.fillColor.name) || "Black"; } catch (e) {}
+                    colorVotes[fcName] = (colorVotes[fcName] || 0) + clampedLen;
+                } else {
+                    allUlTrue = false;
+                }
+            }
+
+            if (!anyUlTrue) {
+                if (alreadyRule) stats.skippedAlreadyConverted++;
+                else stats.skippedNoUnderline++;
+                continue;
+            }
+            if (!allUlTrue) {
+                stats.skippedPartialUnderline++;
+                continue;
+            }
+
+            // 100% covered → candidate for upgrade.
+            stats.candidatesFound++;
+
+            // Pick majority color for the rule.
+            var winnerName = "";
+            var winnerCount = 0;
+            for (var k in colorVotes) {
+                if (colorVotes[k] > winnerCount) {
+                    winnerCount = colorVotes[k];
+                    winnerName = k;
+                }
+            }
+            var ruleSwatch = null;
+            if (winnerName) {
+                try { ruleSwatch = doc.swatches.itemByName(winnerName); } catch (e) {}
+                if (!ruleSwatch || !ruleSwatch.isValid) {
+                    try { ruleSwatch = doc.colors.itemByName(winnerName); } catch (e) {}
+                }
+                if (!ruleSwatch || !ruleSwatch.isValid) ruleSwatch = null;
+            }
+
+            try {
+                pp.ruleBelow = true;
+                if (ruleSwatch) {
+                    try { pp.ruleBelowColor = ruleSwatch; } catch (eRC) {}
+                }
+                try { pp.ruleBelowLineWeight = 0.5; } catch (eRW) {}
+                if (RuleWidth && RuleWidth.TEXT_WIDTH) {
+                    try { pp.ruleBelowWidth = RuleWidth.TEXT_WIDTH; } catch (eRWt) {}
+                }
+                // Strip char-level underline across all visible chars.
+                try {
+                    var allR = pp.characters.itemByRange(0, lastVis);
+                    allR.underline = false;
+                } catch (eUR) {
+                    stats.errors.push({ paraSample: raw.slice(0, 40), reason: "strip_underline_failed: " + eUR.message });
+                }
+                stats.converted++;
+            } catch (eUpgrade) {
+                stats.errors.push({ paraSample: raw.slice(0, 40), reason: "upgrade_failed: " + eUpgrade.message });
+            }
+        }
+    };
+
+    var scanStory = function (story) {
+        try { scanParagraphs(story.paragraphs); } catch (eSP) {}
+        // Table cells live in story.tables[].cells[].paragraphs.
+        var tbls = null;
+        try { tbls = story.tables; } catch (e) { return; }
+        var nT = 0;
+        try { nT = tbls.length; } catch (e) {}
+        for (var ti = 0; ti < nT; ti++) {
+            var tbl = null;
+            try { tbl = tbls.item(ti); } catch (e) {}
+            if (!tbl) continue;
+            var cells = null;
+            try { cells = tbl.cells; } catch (e) {}
+            var nC = 0;
+            try { nC = cells.length; } catch (e) {}
+            for (var ci = 0; ci < nC; ci++) {
+                var cell = null;
+                try { cell = cells.item(ci); } catch (e) {}
+                if (!cell) continue;
+                try { scanParagraphs(cell.paragraphs); } catch (eCP) {}
+            }
+        }
+    };
+
+    // Run inside ENTIRE_SCRIPT undo block so the operator can Cmd+Z
+    // back to the pre-conversion state in one step.
+    var runCore = function () {
+        var stories = null;
+        try { stories = doc.stories; } catch (e) { return; }
+        var nS = 0;
+        try { nS = stories.length; } catch (e) {}
+        for (var si = 0; si < nS; si++) {
+            var st = null;
+            try { st = stories.item(si); } catch (e) {}
+            if (!st) continue;
+            try { scanStory(st); } catch (eSS) {
+                stats.errors.push({ paraSample: "<story " + si + ">", reason: "scanStory_failed: " + eSS.message });
+            }
+        }
+    };
+
+    try {
+        if (UndoModes && ScriptLanguage) {
+            app.doScript(runCore, ScriptLanguage.JAVASCRIPT, undefined,
+                UndoModes.ENTIRE_SCRIPT, "Convert Underline → Rule");
+        } else {
+            runCore();
+        }
+    } catch (eDS) {
+        stats.errors.push({ paraSample: "<wrapper>", reason: "doScript_failed: " + eDS.message });
+        // Fallback to direct call so we still get the conversion attempt.
+        try { runCore(); } catch (eRC) {}
+    }
+
+    plog("paragraphs scanned: " + stats.paragraphsScanned);
+    plog("candidates (full underline): " + stats.candidatesFound);
+    plog("converted: " + stats.converted);
+    plog("skipped — already rule: " + stats.skippedAlreadyConverted);
+    plog("skipped — no underline: " + stats.skippedNoUnderline);
+    plog("skipped — partial underline: " + stats.skippedPartialUnderline);
+    plog("skipped — empty: " + stats.skippedEmpty);
+    plog("errors: " + stats.errors.length);
+    for (var ei = 0; ei < stats.errors.length && ei < 20; ei++) {
+        plog("  err[" + ei + "] " + stats.errors[ei].paraSample + " → " + stats.errors[ei].reason);
+    }
+
+    // Best-effort log write next to the doc.
+    try {
+        var fs = require("fs");
+        var ts = (new Date()).toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+        var sep = doc.fullName.toString().indexOf("\\") >= 0 ? "\\" : "/";
+        var docPath = String(doc.fullName);
+        var dirEnd = docPath.lastIndexOf(sep);
+        var docDir = dirEnd > 0 ? docPath.substring(0, dirEnd) : ".";
+        var logPath = docDir + sep + "convert_underline_to_rule_" + ts + ".log";
+        try { fs.writeFileSync(logPath, logLines.join("\n") + "\n", "utf-8"); } catch (eFW) {}
+        plog("log written: " + logPath);
+    } catch (eFS) {}
+
+    var summary = "Convert Underline → Rule\n\n"
+        + "Paragraphs scanned: " + stats.paragraphsScanned + "\n"
+        + "Candidates (100% underline): " + stats.candidatesFound + "\n"
+        + "Converted: " + stats.converted + "\n"
+        + "Skipped (already ruleBelow): " + stats.skippedAlreadyConverted + "\n"
+        + "Skipped (partial underline): " + stats.skippedPartialUnderline + "\n"
+        + "Errors: " + stats.errors.length;
+    try { app.alert(summary); } catch (eA) {}
+})();

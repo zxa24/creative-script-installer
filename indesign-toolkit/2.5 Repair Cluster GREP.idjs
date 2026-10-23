@@ -1,0 +1,172 @@
+"use strict";
+
+// repair_cluster_grep.idjs — operator tool: migrate existing docs' cluster
+// paragraph styles to the context-aware neutral-punct GREP.
+//
+// Fixes the bilingual-doc bug where French curly punctuation (apostrophe U+2019
+// etc.) placed into a Chinese-cluster doc orphaned full-width in the CJK psFont:
+// the OLD `_T_Latin_` nested GREP excluded neutral punct. This rewrites the
+// `grepExpression` of every managed `_T_p_*` style's `_T_Latin_*` / `_T_CJK_*`
+// nested-GREP rule to the new GREP_LATIN_PATTERN / GREP_CJK_PATTERN, then
+// recompose() re-routes already-orphaned marks. Forward fix (new imports) is in
+// lib/style_sheet_builder.js; this repairs docs already built with the old GREP.
+//
+// Contract: single app.doScript(ENTIRE_SCRIPT) undo; idempotent (a re-run
+// rewrites nothing — decideRule returns "current"); bridge (automationOptions)
+// + manual (double-click) entries; logs via lib/script_log_paths.js.
+
+var RuntimePaths = require("./lib/runtime_paths.js");
+var indesign = require("indesign");
+var app = indesign.app;
+var ScriptLanguage = indesign.ScriptLanguage;
+var UndoModes = indesign.UndoModes;
+var AutomationBridge = require("./lib/automation_bridge.js");
+var ScriptLogPaths = require("./lib/script_log_paths.js");
+var Repair = require("./lib/cluster_grep_repair.js");
+var SSB = require("./lib/style_sheet_builder.js");
+var Enforcer = require("./lib/script_font_enforcer.js"); // _isLatinLetter + isCJKFontFamily (single-source classifiers)
+
+var SCRIPT_ID = "repair_cluster_grep";
+
+function _famName(f) {
+    try {
+        if (!f) return "";
+        if (typeof f === "string") return f.split("\t")[0];
+        var n = String(f.name);
+        return n.split("\t")[0];
+    } catch (e) { return ""; }
+}
+// Count ORPHANS: a neutral punct that is a Latin LETTER on BOTH immediate sides
+// yet still renders on a CJK font (the exact thing this repair fixes). A
+// CJK-flanked / space-flanked neutral mark on a CJK font is CORRECT (that is
+// what GREP_CJK_PATTERN keeps full-width) → NOT an orphan; counting it would
+// false-report residuals on a real bilingual doc (impl-audit n1/xhigh). Reuses
+// the enforcer's single-source classifiers. Read-only; searches footnotes /
+// masters / hidden layers so the metric isn't blind to them (n1 P4).
+function countOrphans(doc) {
+    var out = { orphans: 0, fixedLatin: 0, total: 0 };
+    try { app.findGrepPreferences = null; } catch (e) {}
+    // GREP SCOPE flags live on app.findChangeGrepOptions, NOT findGrepPreferences
+    // (verified against existing call sites) — set on the wrong object they are
+    // silently ignored and the metric stays blind to footnotes/masters.
+    try { app.findChangeGrepOptions.includeFootnotes = true; } catch (e) {}
+    try { app.findChangeGrepOptions.includeMasterPages = true; } catch (e) {}
+    try { app.findChangeGrepOptions.includeHiddenLayers = true; } catch (e) {}
+    try {
+        app.findGrepPreferences.findWhat = SSB.NEUTRAL_PUNCT_CLASS; // one neutral char per hit
+        var hits = doc.findGrep();
+        for (var i = 0; i < hits.length; i++) {
+            out.total++;
+            var ch = hits[i].characters.item(0);
+            var idx = -1, story = null;
+            try { idx = ch.index; } catch (e) {}        // char offset within parent story
+            try { story = ch.parentStory; } catch (e) {}
+            if (!story || idx < 1) continue;            // need both immediate neighbors
+            var leftCh = null, rightCh = null;
+            try { leftCh = story.characters.item(idx - 1); } catch (e) {}
+            try { rightCh = story.characters.item(idx + 1); } catch (e) {}
+            var leftLetter = false, rightLetter = false;
+            try { leftLetter = Enforcer._isLatinLetter(String(leftCh.contents)); } catch (e) {}
+            try { rightLetter = Enforcer._isLatinLetter(String(rightCh.contents)); } catch (e) {}
+            if (!(leftLetter && rightLetter)) continue; // not a "should be Latin" mark → ignore
+            // Orphan = the mark's font differs from the Latin LETTER it sits
+            // against — i.e. it's NOT on the same font as its own word. This is
+            // font-name-AGNOSTIC (no CJK-family enumeration, which proved
+            // ping-pong-prone: over-matched "Founders Grotesk", under-matched
+            // Sarasa/TBUD). The GREP routes the letters to the Latin font, so a
+            // mark still on the CJK psFont differs from its neighbors = orphan.
+            var punctFam = _famName(ch.appliedFont);
+            var leftFam = ""; try { leftFam = _famName(leftCh.appliedFont); } catch (e) {}
+            if (punctFam && leftFam && punctFam !== leftFam) out.orphans++;
+            else out.fixedLatin++;
+        }
+    } catch (e) {}
+    try { app.findGrepPreferences = null; } catch (e) {}
+    return out;
+}
+
+// The migration itself — runs inside doScript (single undo). Walks managed
+// paragraph styles, rewrites _T_Latin_/_T_CJK_ nested-GREP expressions, recompose.
+function migrateDoc(doc, tally) {
+    var styles = doc.allParagraphStyles; // JS Array (grouped-inclusive) — iterate [i], NOT .item(i)
+    var n = 0; try { n = styles.length; } catch (e) { n = 0; }
+    for (var i = 0; i < n; i++) {
+        var ps = styles[i];
+        if (!ps) continue;
+        tally.stylesScanned++;
+        var greps = null; try { greps = ps.nestedGrepStyles; } catch (e) { continue; }
+        var gn = 0; try { gn = greps.length; } catch (e) { gn = 0; }
+        for (var g = 0; g < gn; g++) {
+            var rule = greps.item(g);
+            var csName = ""; try { csName = String(rule.appliedCharacterStyle.name); } catch (e) { csName = ""; }
+            var curExpr = ""; try { curExpr = String(rule.grepExpression); } catch (e) { curExpr = ""; }
+            var decision = Repair.decideRule(csName, curExpr);
+            Repair.applyDecisionToTally(tally, decision);
+            if (decision.action === "migrate") {
+                try { rule.grepExpression = decision.target; }
+                catch (eSet) { tally.rulesMigrated--; tally.rulesFailed++; /* keep rulesScanned; surface the failure */ }
+            }
+        }
+    }
+    try { doc.recompose(); } catch (e) {}
+}
+
+async function _resolveDocDir(doc) {
+    try {
+        var fn = await doc.fullName;           // gate#3: Promise
+        if (fn && fn.nativePath) {
+            var p = String(fn.nativePath);
+            var sep = p.indexOf("\\") >= 0 ? "\\" : "/";
+            return p.substring(0, p.lastIndexOf(sep));
+        }
+    } catch (e) {}
+    return null; // ScriptLogPaths falls back to a temp dir
+}
+
+async function main() {
+    var doc = null;
+    try { doc = app.activeDocument; } catch (e) {}
+    if (!doc) { try { console.log("[repair_cluster_grep] no active document"); } catch (e) {} return; }
+
+    var autoOpts = null;
+    try { autoOpts = await AutomationBridge.readAutomationOptions(SCRIPT_ID); } catch (e) {}
+    var dryRun = !!(autoOpts && autoOpts.dryRun === true);
+
+    var tally = Repair.newTally();
+    var before = countOrphans(doc);
+
+    if (!dryRun) {
+        app.doScript(function () { migrateDoc(doc, tally); },
+            ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, "Repair cluster GREP (neutral punct)");
+    }
+
+    var after = countOrphans(doc);
+    tally.orphansBefore = before.orphans;
+    tally.orphansAfter = after.orphans;
+    tally.reroutedToLatin = Math.max(0, before.orphans - after.orphans);
+
+    // Fail-closed: CLEAN iff no residual Latin-letter-flanked orphan AND no failed write.
+    var ok = Repair.isRepairClean(after.orphans, tally);
+    var summary = "[repair_cluster_grep] " + (dryRun ? "DRY-RUN " : "")
+        + "styles=" + tally.stylesScanned
+        + " rules(scanned/migrated/current/failed)=" + tally.rulesScanned + "/" + tally.rulesMigrated + "/" + tally.rulesAlreadyCurrent + "/" + tally.rulesFailed
+        + " unmanaged=" + tally.rulesSkippedUnmanaged
+        + " | latin-flanked orphans before/after=" + before.orphans + "/" + after.orphans
+        + " rerouted→Latin=" + tally.reroutedToLatin
+        + (ok ? " | CLEAN" : " | ⚠ NOT-CLEAN (residual=" + after.orphans + " failed=" + tally.rulesFailed + ")")
+        + " | totalNeutralScanned=" + after.total;
+
+    // Log (best-effort; never fatal).
+    try {
+        var docDir = await _resolveDocDir(doc);
+        await ScriptLogPaths.ensureLogDirAsync(docDir);
+        var logPath = ScriptLogPaths.resolveLogPath(docDir, SCRIPT_ID);
+        var fs = require("fs");
+        fs.writeFileSync(logPath, summary + "\n" + JSON.stringify(tally, null, 1) + "\n");
+    } catch (eLog) {}
+
+    try { console.log(summary); } catch (e) {}
+    return { ok: ok, summary: summary, tally: tally, before: before, after: after };
+}
+
+await main();

@@ -1,0 +1,31 @@
+"use strict";
+
+/**
+ * reorganize_styles_inplace.idjs — thin double-click / bridge launcher.
+ *
+ * The full implementation lives in lib/reorganize_inplace_core.js
+ * (8D-ext-D M3 split, probe 20260609_01). Why the split: in-process
+ * callers (font_apply_panel M3 path) need to require + await main(opts),
+ * but BOTH the bridge bundle resolver (synthRequire) and native UXP
+ * require eval required modules as CommonJS factories — where a
+ * top-level `await main()` is a PARSE error ("await is only valid in
+ * async functions"). A globalThis self-execution guard cannot fix a
+ * parse-time failure, so the implementation moved to a lib (libs never
+ * self-execute) and this entry keeps the only top-level await.
+ *
+ * Double-click UX is unchanged: same filename, same dialog flow.
+ * Bridge automation contract unchanged: automationOptions preseed is
+ * consumed inside core's main() via AutomationBridge (scriptId is still
+ * "reorganize_styles_inplace" — readAutomationOptions key derives from
+ * the ENTRY filename, which this file preserves).
+ *
+ * In-process callers do NOT use this file:
+ *   var ReorganizeCore = require("./lib/reorganize_inplace_core.js");
+ *   var result = await ReorganizeCore.main(opts);   // opts → M3 byPair etc.
+ */
+
+var app = require("indesign").app;   // gate-4: explicit require (bridge
+                                     // injects `app`; double-click doesn't)
+var ReorganizeCore = require("./lib/reorganize_inplace_core.js");
+
+await ReorganizeCore.main();

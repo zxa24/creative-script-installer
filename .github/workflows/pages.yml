@@ -1,0 +1,86 @@
+# Publishes the documentation site to GitHub Pages.
+#
+# This file belongs to the PUBLIC distribution repo (creative-script-installer),
+# not to the development repo. It is kept here under repo-scaffold/ and copied
+# into the distribution by make_dist.mjs, so the workflow and the site it builds
+# have one source and cannot drift apart.
+#
+# Enable once in the repo: Settings > Pages > Source = "GitHub Actions".
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it — a half-applied Pages
+# deployment is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - run: npm ci
+
+      # `npm run build` runs gen-llms first, and gen-llms exits non-zero if a
+      # page exists on disk that the site config does not list. That is
+      # deliberate: it makes an unlisted page fail the deploy instead of
+      # shipping a machine-readable copy that silently omits it.
+      - name: Build
+        env:
+          SITE_ORIGIN: https://${{ github.repository_owner }}.github.io
+          SITE_BASE: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      # The published URL is derived from the repo above rather than hardcoded,
+      # so renaming the repo cannot leave every absolute link in llms.txt
+      # pointing at an address that no longer exists. Assert it landed, because
+      # a wrong base produces a site that builds cleanly and 404s on every link.
+      - name: Verify the built links carry the real base
+        run: |
+          set -euo pipefail
+          expected="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          if ! grep -q "$expected" .vitepress/dist/llms.txt; then
+            echo "llms.txt does not contain the expected base: $expected"
+            echo "--- first lines of llms.txt ---"
+            head -20 .vitepress/dist/llms.txt
+            exit 1
+          fi
+          n=$(grep -c "^- \[" .vitepress/dist/llms.txt || true)
+          echo "llms.txt lists $n pages, all under $expected"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
